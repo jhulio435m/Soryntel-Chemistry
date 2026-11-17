@@ -3623,7 +3623,6 @@ dependencies = [
  "soryntel-application",
  "soryntel-core",
  "soryntel-db",
- "soryntel-thermo",
 ]
 
 [[package]]
