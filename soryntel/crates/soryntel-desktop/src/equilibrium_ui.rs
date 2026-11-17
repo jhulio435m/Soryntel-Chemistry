@@ -43,14 +43,17 @@ fn col_name(idx: usize) -> String {
 }
 use eframe::egui;
 use egui_plot::{Legend, Line, Plot, PlotPoints};
-use soryntel_db::ThermoDatabase;
+use soryntel_application::ports::SpeciesCatalogPort;
+use soryntel_application::use_cases::{CatalogUseCases, EquilibriumUseCases};
+// Tipos de modelo de thermo usados como estado de la UI (pendiente de mover a DTOs).
+// `collect_cp_warnings` aún no tiene caso de uso en `EquilibriumUseCases`.
 use soryntel_thermo::equilibrium::{
-    collect_cp_warnings, solve_equilibrium_sweep, AxisRange, CalculationMode,
+    collect_cp_warnings, AxisRange, CalculationMode,
     EquilibriumAmountUnit, EquilibriumParams, EquilibriumPhase, EquilibriumSpeciesInput,
     EquilibriumSweepResult, EquilibriumSystem, EquilibriumWorkbookFile, ExtrapolationWarning,
     SolutionModel, StepMode, SweepVariable, TargetSpec, ThermodynamicMode,
 };
-use soryntel_thermo::{Phase, SpeciesRepository};
+use soryntel_thermo::Phase;
 use std::collections::{BTreeMap, BTreeSet};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1016,7 +1019,7 @@ impl EquilibriumUiState {
         self.chart_3d_cache = None;
     }
 
-    fn update_species_from_db(&mut self, db: &ThermoDatabase) {
+    fn update_species_from_db<C: SpeciesCatalogPort>(&mut self, db: &C) {
         for phase in &mut self.system.phases {
             for sp in &mut phase.species {
                 if let Some(rec) = db.get_species(sp.formula.trim()) {
@@ -1027,7 +1030,7 @@ impl EquilibriumUiState {
         self.file_status_msg = Some("Updated species records from database.".to_string());
     }
 
-    pub fn ui(&mut self, ctx: &egui::Context, db: &ThermoDatabase) {
+    pub fn ui<C: SpeciesCatalogPort>(&mut self, ctx: &egui::Context, db: &C) {
         // Consistent Top Menu Bar (matching Modules 1, 2, and 3)
         egui::TopBottomPanel::top("equil_menu_bar").show(ctx, |ui| {
             egui::menu::bar(ui, |ui| {
@@ -1357,7 +1360,7 @@ impl EquilibriumUiState {
         self.render_modals(ctx, db);
     }
 
-    fn request_calculate(&mut self, db: &ThermoDatabase) {
+    fn request_calculate<C: SpeciesCatalogPort>(&mut self, db: &C) {
         if !self.dont_show_warnings {
             let ws = collect_cp_warnings(&self.system, &self.params, db);
             if !ws.is_empty() {
@@ -1370,9 +1373,9 @@ impl EquilibriumUiState {
         self.run_calculate(db);
     }
 
-    fn run_calculate(&mut self, db: &ThermoDatabase) {
+    fn run_calculate<C: SpeciesCatalogPort>(&mut self, db: &C) {
         self.last_error = None;
-        match solve_equilibrium_sweep(&self.system, &self.params, db) {
+        match EquilibriumUseCases::solve_equilibrium_sweep(db, &self.system, &self.params) {
             Ok(res) => {
                 let (xs, zs) = collect_distinct_axes(&res, false);
                 self.chart_is_3d =
@@ -1393,7 +1396,7 @@ impl EquilibriumUiState {
         }
     }
 
-    fn render_toolbar_and_formula_bar(&mut self, ui: &mut egui::Ui, db: &ThermoDatabase) {
+    fn render_toolbar_and_formula_bar<C: SpeciesCatalogPort>(&mut self, ui: &mut egui::Ui, db: &C) {
         ui.horizontal_wrapped(|ui| {
             if ui.button("From Elements").clicked() {
                 self.show_from_elements = true;
@@ -1502,7 +1505,7 @@ impl EquilibriumUiState {
         });
     }
 
-    fn sort_phases(&mut self, db: &ThermoDatabase) {
+    fn sort_phases<C: SpeciesCatalogPort>(&mut self, db: &C) {
         let mut gas = Vec::new();
         let mut aqua = Vec::new();
         let mut liq = Vec::new();
@@ -2186,7 +2189,7 @@ impl EquilibriumUiState {
         });
     }
 
-    fn render_parameters_panel(&mut self, ui: &mut egui::Ui, db: &ThermoDatabase) {
+    fn render_parameters_panel<C: SpeciesCatalogPort>(&mut self, ui: &mut egui::Ui, db: &C) {
         egui::ScrollArea::vertical().show(ui, |ui| {
             ui.heading("Parameters");
             ui.separator();
@@ -2696,7 +2699,7 @@ impl EquilibriumUiState {
         }
     }
 
-    fn render_modals(&mut self, ctx: &egui::Context, db: &ThermoDatabase) {
+    fn render_modals<C: SpeciesCatalogPort>(&mut self, ctx: &egui::Context, db: &C) {
         // From Elements Modal (Figs. 3-5)
         if self.show_from_elements {
             let mut open = true;
@@ -2731,7 +2734,8 @@ impl EquilibriumUiState {
                         .map(|s| s.trim().to_string())
                         .filter(|s| !s.is_empty())
                         .collect();
-                    let matches = db.search_by_elements(
+                    let matches = CatalogUseCases::search_species_by_elements(
+                        db,
                         &elems,
                         self.elem_gas,
                         self.elem_liquid,
@@ -4445,6 +4449,7 @@ fn render_3d_surface_chart(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use soryntel_db::ThermoDatabase;
 
     #[test]
     fn test_pchip_monotone_no_overshoot_on_plateaus() {

@@ -6,7 +6,10 @@ use crate::excel_grid::{
 };
 use eframe::egui;
 use soryntel_core::TemperatureUnit;
-use soryntel_db::ThermoDatabase;
+use soryntel_application::ports::SpeciesCatalogPort;
+use soryntel_application::use_cases::CatalogUseCases;
+// Tipos de modelo de thermo usados como estado de la UI. `ExergyWorkbook::calculate` aún no
+// tiene caso de uso (falta p. ej. `MiscUseCases::calculate_exergy`).
 use soryntel_thermo::exergy::{ExergySide, ExergyStreamKind, ExergyWorkbook};
 use soryntel_thermo::Phase;
 
@@ -86,7 +89,7 @@ pub struct ExergyModuleState {
 }
 
 impl ExergyModuleState {
-    pub fn new(db: &ThermoDatabase) -> Self {
+    pub fn new(db: &dyn SpeciesCatalogPort) -> Self {
         let mut wb = ExergyWorkbook::new_default();
         wb.calculate(db);
         let n = wb.streams.len();
@@ -147,7 +150,7 @@ impl ExergyModuleState {
         }
     }
 
-    pub fn ui(&mut self, ctx: &egui::Context, db: &ThermoDatabase) {
+    pub fn ui(&mut self, ctx: &egui::Context, db: &dyn SpeciesCatalogPort) {
         self.sync_input_buffers();
 
         // Top Menu Bar: File | Edit | Units | Help
@@ -561,7 +564,7 @@ impl ExergyModuleState {
         }
     }
 
-    fn render_spreadsheet(&mut self, ui: &mut egui::Ui, db: &ThermoDatabase) {
+    fn render_spreadsheet(&mut self, ui: &mut egui::Ui, db: &dyn SpeciesCatalogPort) {
         let col_widths = [
             165.0, // A: Streams and species
             66.0,  // B: Mass (kg)
@@ -1219,7 +1222,7 @@ impl ExergyModuleState {
         }
     }
 
-    fn render_db_picker(&mut self, ctx: &egui::Context, db: &ThermoDatabase) {
+    fn render_db_picker(&mut self, ctx: &egui::Context, db: &dyn SpeciesCatalogPort) {
         let mut open = self.show_db_picker;
         let mut insert_formula: Option<String> = None;
 
@@ -1234,8 +1237,7 @@ impl ExergyModuleState {
                 });
                 ui.separator();
 
-                let matches: Vec<_> = db
-                    .search(self.db_search.trim(), 200)
+                let matches: Vec<_> = CatalogUseCases::search_species(db, self.db_search.trim(), 200)
                     .into_iter()
                     .filter(|sp| !self.db_gas_only || sp.phase == Phase::Gas)
                     .take(150)
