@@ -3,8 +3,16 @@
 //! Adapters such as the HSC database implement these traits; the domain and
 //! application layers depend only on them.
 
+use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
+
 use thiserror::Error;
 
+use crate::catalog::{
+    DatabaseStatusSummary, DbMergeConflict, DbSource, ElementSearchMode, KeywordSearchField,
+    MainDbPrecedence, MergeConflictDecision, PhaseFilterFlags, ReferenceEntry,
+    SpeciesCatalogEntry, SpeciesDataset,
+};
 use crate::species::{ChemicalSpecies, SpeciesMetadata};
 
 /// Read-only lookup of chemical species by formula.
@@ -72,11 +80,174 @@ pub trait SpeciesCatalogPort: SpeciesRepository {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Output ports for database administration, browsing and editing.
+//
+// Conventions:
+// - Mutating methods take `&mut self`; sharing across threads is the caller's
+//   concern (e.g. `RwLock<Box<dyn Port + Send + Sync>>`), never the port's.
+// - Operations with I/O return `Result<_, CatalogError>`; I/O and file-format
+//   failures are reported as `CatalogError::Backend`.
+// ---------------------------------------------------------------------------
+
+/// Management of the `MainDB` / `OwnDB` layers and their `.HSC` / `.CAT` files.
+pub trait SpeciesDatabaseAdminPort {
+    /// Loads `MainDB` from `path` with the given precedence over built-in species.
+    /// Returns `(unique species, binary records)`.
+    fn load_main_db(
+        &mut self,
+        path: &Path,
+        precedence: MainDbPrecedence,
+    ) -> Result<(usize, usize), CatalogError>;
+
+    /// Loads `OwnDB` from `path`, replacing in-memory `OwnDB` edits.
+    /// Returns `(unique species, binary records)`.
+    fn load_own_db(&mut self, path: &Path) -> Result<(usize, usize), CatalogError>;
+
+    /// Writes `OwnDB` to `path` (plus `.CAT`) and makes it the active `OwnDB` file.
+    /// Returns the number of datasets written.
+    fn save_own_db(&mut self, path: &Path) -> Result<usize, CatalogError>;
+
+    /// Creates an empty `OwnDB` file at `path` and clears the in-memory `OwnDB`.
+    fn create_empty_own_db(&mut self, path: &Path) -> Result<(), CatalogError>;
+
+    /// Writes a copy of `MainDB` to `path`. Returns the number of datasets written.
+    fn save_main_db_copy(&self, path: &Path) -> Result<usize, CatalogError>;
+
+    /// Rewrites the `.CAT` index next to the active file of `source`.
+    fn refresh_catalogue(&self, source: DbSource) -> Result<PathBuf, CatalogError>;
+
+    /// Sorts the entries of `source` in HSC order.
+    fn sort_layer(&mut self, source: DbSource);
+
+    /// Summary statistics and active file paths.
+    fn status(&self) -> DatabaseStatusSummary;
+}
+
+/// Species browser queries (per layer, with filters and alternative datasets).
+pub trait SpeciesBrowserPort {
+    /// Keyword search on `field`, restricted to `source` (`None` = resolved view).
+    fn search_keyword(
+        &self,
+        query: &str,
+        field: KeywordSearchField,
+        source: Option<DbSource>,
+        filters: &PhaseFilterFlags,
+        limit: usize,
+    ) -> Vec<SpeciesCatalogEntry>;
+
+    /// Element search (`Some` = subset of `elements`, `All` = contains all).
+    fn search_elements(
+        &self,
+        elements: &[String],
+        mode: ElementSearchMode,
+        source: Option<DbSource>,
+        filters: &PhaseFilterFlags,
+        limit: usize,
+    ) -> Vec<SpeciesCatalogEntry>;
+
+    /// Stoichiometric search; fails if `pattern` is not a valid formula.
+    fn search_stoichiometry(
+        &self,
+        pattern: &str,
+        fix_ratio: bool,
+        source: Option<DbSource>,
+        filters: &PhaseFilterFlags,
+        limit: usize,
+    ) -> Result<Vec<SpeciesCatalogEntry>, CatalogError>;
+
+    /// Number of entries listed for `source` (`None` = resolved view).
+    fn entry_count(&self, source: Option<DbSource>) -> usize;
+
+    /// Enumerates every entry of `source` in catalog order, without filters or limits.
+    fn iter_species(
+        &self,
+        source: Option<DbSource>,
+    ) -> Box<dyn Iterator<Item = SpeciesCatalogEntry> + '_>;
+
+    /// Page of at most `limit` entries of `source`, starting at `offset`.
+    fn species_page(
+        &self,
+        source: Option<DbSource>,
+        offset: usize,
+        limit: usize,
+    ) -> Vec<SpeciesCatalogEntry> {
+        self.iter_species(source).skip(offset).take(limit).collect()
+    }
+
+    /// All datasets stored for `formula` in `source`.
+    fn datasets_for(&self, source: DbSource, formula: &str) -> Vec<SpeciesDataset>;
+
+    /// Selects dataset `index` of `formula` in `source` as active. Returns `false`
+    /// if the index is invalid.
+    fn select_dataset(&mut self, source: DbSource, formula: &str, index: usize) -> bool;
+
+    /// Layer currently resolved for `formula`.
+    fn resolved_source_of(&self, formula: &str) -> Option<DbSource>;
+}
+
+/// Editing of the `OwnDB` layer and CSV/JSON exchange.
+pub trait OwnDbEditorPort {
+    /// Inserts or replaces the primary `OwnDB` dataset for `species.formula`.
+    fn upsert_own(&mut self, species: ChemicalSpecies, metadata: SpeciesMetadata, raw_phase_code: String);
+
+    /// Removes `formula` from `OwnDB`. Returns whether it existed.
+    fn delete_own(&mut self, formula: &str) -> bool;
+
+    /// Imports CSV rows into `OwnDB`. Returns the number of datasets imported.
+    fn import_csv_into_own(&mut self, csv: &str) -> Result<usize, CatalogError>;
+
+    /// Exports `source` (`None` = resolved view) as CSV.
+    fn export_csv(&self, source: Option<DbSource>) -> String;
+
+    /// Exports `source` (`None` = resolved view) as pretty-printed JSON.
+    fn export_json(&self, source: Option<DbSource>) -> Result<String, CatalogError>;
+}
+
+/// Bibliographic dictionary (`MainDB6.REF`).
+pub trait ReferenceLibraryPort {
+    /// Loads the dictionary from `path`, replacing the current one. Returns the entry count.
+    fn load_references(&mut self, path: &Path) -> Result<usize, CatalogError>;
+
+    /// Citations referenced by a comma/semicolon-separated `Reference` field.
+    fn citations_for(&self, ref_field: &str) -> Vec<ReferenceEntry>;
+
+    /// Searches keys and citation text, returning at most `limit` entries.
+    fn search_references(&self, query: &str, limit: usize) -> Vec<ReferenceEntry>;
+}
+
+/// Stateless `.HSC` file tools.
+pub trait HscFileToolsPort {
+    /// Merges `src` into `dst`. Duplicates are resolved by `decisions` (keyed by
+    /// formula); with `inspect_only` nothing is written. Returns
+    /// `(merged datasets, conflicts)`.
+    fn merge_hsc_files(
+        &self,
+        src: &Path,
+        dst: &Path,
+        decisions: &BTreeMap<String, MergeConflictDecision>,
+        inspect_only: bool,
+    ) -> Result<(usize, Vec<DbMergeConflict>), CatalogError>;
+
+    /// Converts a legacy HSC 2–5 `.HSC` or CSV file to HSC 6 at `dst`.
+    /// Returns the number of datasets written.
+    fn convert_legacy_to_hsc6(&self, src: &Path, dst: &Path) -> Result<usize, CatalogError>;
+}
+
+/// Location of the default database files.
+pub trait DatabaseLocatorPort {
+    /// Default `MainDB` file, if one is available.
+    fn default_main_db(&self) -> Option<PathBuf>;
+
+    /// Default `OwnDB` file, if one is available.
+    fn default_own_db(&self) -> Option<PathBuf>;
+}
+
 /// Errors for future fallible catalog operations.
 ///
-/// Not yet returned by any method of [`SpeciesRepository`] or
-/// [`SpeciesCatalogPort`]; see the latter's documentation for the planned
-/// migration.
+/// Returned by the administration, browser, editor, reference and file-tool
+/// ports. Not yet returned by [`SpeciesRepository`] or [`SpeciesCatalogPort`];
+/// see the latter's documentation for the planned migration.
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum CatalogError {
     /// No species with the given formula exists in the catalog.

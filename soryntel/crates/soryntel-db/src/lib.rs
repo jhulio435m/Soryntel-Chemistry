@@ -1,6 +1,7 @@
 //! Soryntel DB: Layered thermodynamic species repository (`OwnDB > MainDB > OpenDefault`),
 //! full `.HSC` / `.REF` / `.CAT` codecs, and stoichiometric / elemental / keyword search.
 
+pub mod adapters;
 pub mod hsc_binary;
 
 use hsc_binary::{
@@ -18,19 +19,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fs;
 use std::path::{Path, PathBuf};
 
-/// Summary statistics for the active databases (`OwnDB`, `MainDB`, `MainDB6.REF`).
-#[derive(Debug, Clone, Default)]
-pub struct DatabaseStatusSummary {
-    pub main_path: Option<PathBuf>,
-    pub own_path: Option<PathBuf>,
-    pub ref_path: Option<PathBuf>,
-    pub main_unique_species: usize,
-    pub main_binary_records: usize,
-    pub own_unique_species: usize,
-    pub own_binary_records: usize,
-    pub resolved_total_species: usize,
-    pub references_count: usize,
-}
+pub use soryntel_core::catalog::DatabaseStatusSummary;
 
 /// In-memory layered thermodynamic database implementing `SpeciesRepository` & `SpeciesCatalogPort`.
 ///
@@ -704,6 +693,17 @@ impl ThermoDatabase {
             Some(DbSource::Main) => &self.main_order,
             Some(DbSource::Own) => &self.own_order,
         }
+    }
+
+    /// Every listable entry of `source_filter` in catalog order (same order and
+    /// entries as an unfiltered, unlimited `search_advanced("")`).
+    pub(crate) fn iter_entries(
+        &self,
+        source_filter: Option<DbSource>,
+    ) -> impl Iterator<Item = SpeciesCatalogEntry> + '_ {
+        self.formula_list_for_layer(source_filter)
+            .iter()
+            .filter_map(move |f| self.make_entry_for(f, source_filter))
     }
 
     /// `CU-03` / `CU-04`: List & search by keyword across `Formula`, `StructuralFormula`, `ChemicalName`,
