@@ -8,15 +8,11 @@ use hsc_binary::{
     group_records_to_datasets, import_datasets_csv, parse_hsc_binary_records, parse_ref_binary,
     serialize_datasets_to_hsc, upgrade_legacy_datasets, write_catalogue_file, ReferenceEntry,
 };
-use soryntel_core::{SoryntelError, CAL_TO_JOULE};
+use soryntel_core::{ChemicalSpecies, KelleyCoefficients, Phase, SpeciesCatalogPort, SpeciesMetadata, SpeciesRepository, SpeciesThermoInterval, SoryntelError, CAL_TO_JOULE};
 use soryntel_thermo::species::{
     formula_sort_key, parse_hsc_formula_elements, stoichiometry_matches, DbMergeConflict, DbSource,
     ElementSearchMode, KeywordSearchField, MergeConflictDecision, PhaseFilterFlags,
     SpeciesCatalogEntry, SpeciesDataset,
-};
-use soryntel_thermo::{
-    ChemicalSpecies, KelleyCoefficients, Phase, SpeciesMetadata, SpeciesRepository,
-    SpeciesThermoInterval,
 };
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fs;
@@ -944,7 +940,7 @@ impl SpeciesRepository for ThermoDatabase {
     }
 }
 
-impl soryntel_thermo::SpeciesCatalogPort for ThermoDatabase {
+impl SpeciesCatalogPort for ThermoDatabase {
     fn search_species(&self, query: &str, limit: usize) -> Vec<ChemicalSpecies> {
         self.search(query, limit)
     }
