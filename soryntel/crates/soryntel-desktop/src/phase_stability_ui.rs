@@ -426,7 +426,7 @@ impl PhaseStabilityModuleState {
             });
 
             // Right: Select Species
-            cols[1].label("Select Species");
+            cols[1].label(crate::i18n::text("common.083"));
             egui::Frame::group(cols[1].style())
                 .fill(egui::Color32::WHITE)
                 .inner_margin(egui::Margin::same(4.0))

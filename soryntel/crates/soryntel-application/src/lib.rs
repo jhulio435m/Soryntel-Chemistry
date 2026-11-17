@@ -726,6 +726,14 @@ impl SoryntelApplication {
         WaterUseCases::calculate_water(catalog, req)
     }
 
+    /// Checked entry point for interactive and external requests.
+    pub fn try_calculate_water(
+        catalog: &dyn SpeciesCatalogPort,
+        req: &WaterCalcRequest,
+    ) -> Result<WaterCalcResult, SoryntelError> {
+        WaterUseCases::try_calculate_water(catalog, req)
+    }
+
     pub fn water_phase_curves() -> WaterDiagramCurves {
         WaterUseCases::water_phase_curves()
     }

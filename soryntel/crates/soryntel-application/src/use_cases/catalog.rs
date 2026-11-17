@@ -35,6 +35,20 @@ impl CatalogUseCases {
         catalog.species_count()
     }
 
+    /// Primer juego de datos de `formula` en la capa `source` (OwnDB o MainDB), sin aplicar
+    /// la precedencia OwnDB > MainDB > OpenDefault de `get_species`.
+    pub fn species_in_layer(
+        browser: &dyn soryntel_core::SpeciesBrowserPort,
+        source: soryntel_core::catalog::DbSource,
+        formula: &str,
+    ) -> Option<ChemicalSpecies> {
+        browser
+            .datasets_for(source, formula)
+            .into_iter()
+            .next()
+            .map(|d| d.species)
+    }
+
     pub fn species_compute_mw(
         formula: &str,
     ) -> Result<(f64, std::collections::BTreeMap<String, f64>, i32), SoryntelError> {

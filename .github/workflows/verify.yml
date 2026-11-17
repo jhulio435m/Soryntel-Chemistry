@@ -34,8 +34,15 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: soryntel
+      - name: Auditoría de documentación y textos
+        run: |
+          python3 scripts/audit-repository.py
+          python3 scripts/audit-architecture.py
+          python3 scripts/audit-ui-texts.py
       - name: Tests
         run: cargo test --workspace --locked
+      - name: Build desktop
+        run: cargo build --locked --release -p soryntel-desktop
 
   web:
     name: Web (lint y build estático)
