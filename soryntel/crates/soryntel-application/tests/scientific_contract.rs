@@ -1,8 +1,8 @@
-// Contrato científico contra la fachada `SoryntelApplication` (deprecada): sus métodos
-// delegan en `use_cases`, así que estas pruebas cubren también los casos de uso.
-#![allow(deprecated)]
+//! Contrato científico de los casos de uso de aplicación.
 
-use soryntel_application::SoryntelApplication as App;
+use soryntel_application::use_cases::{
+    EquilibriumUseCases, HeatLossUseCases, MiscUseCases, ReactionUseCases, WaterUseCases,
+};
 use soryntel_core::{EnergyUnit, ResultFormat, SoryntelError, TemperatureUnit};
 use soryntel_db::ThermoDatabase;
 use soryntel_thermo::{
@@ -36,7 +36,7 @@ fn reaction_rejects_nonfinite_and_excessive_grids() {
                 _ => req.t_step = value,
             }
             assert!(matches!(
-                App::calculate_reaction(&db, &req),
+                ReactionUseCases::calculate_reaction(&db, &req),
                 Err(SoryntelError::InvalidRange { .. })
             ));
         }
@@ -45,7 +45,7 @@ fn reaction_rejects_nonfinite_and_excessive_grids() {
     req.t_to = 1000.0;
     req.t_step = 1e-300;
     assert!(matches!(
-        App::calculate_reaction(&db, &req),
+        ReactionUseCases::calculate_reaction(&db, &req),
         Err(SoryntelError::InvalidRange { .. })
     ));
 }
@@ -62,13 +62,13 @@ fn equilibrium_rejects_invalid_temperature_and_pressure_before_solving() {
         params.num_indep_vars = 0;
         params.pressure_range.initial = value;
         assert!(matches!(
-            App::solve_equilibrium_sweep(&db, &sys, &params),
+            EquilibriumUseCases::solve_equilibrium_sweep(&db, &sys, &params),
             Err(SoryntelError::InvalidPressure(_))
         ));
         params.pressure_range.initial = 1.0;
         params.temp_range.initial = value - 273.15;
         assert!(matches!(
-            App::solve_equilibrium_sweep(&db, &sys, &params),
+            EquilibriumUseCases::solve_equilibrium_sweep(&db, &sys, &params),
             Err(SoryntelError::InvalidTemperature(_))
         ));
     }
@@ -78,11 +78,11 @@ fn equilibrium_rejects_invalid_temperature_and_pressure_before_solving() {
 fn species_gibbs_identity_and_temperature_units_are_consistent() {
     let db = ThermoDatabase::with_open_defaults();
     let mut req = request();
-    let c = App::calculate_reaction(&db, &req).unwrap();
+    let c = ReactionUseCases::calculate_reaction(&db, &req).unwrap();
     req.temp_unit = TemperatureUnit::Kelvin;
     req.t_from = 298.15;
     req.t_to = 298.15;
-    let k = App::calculate_reaction(&db, &req).unwrap();
+    let k = ReactionUseCases::calculate_reaction(&db, &req).unwrap();
     let a = &c.substance_rows[0];
     let b = &k.substance_rows[0];
     assert!((a.h - b.h).abs() < 1e-10);
@@ -107,7 +107,7 @@ fn heat_loss_rejects_corrupt_gas_property_tables() {
         column.hr_fixed = false;
         column.iterative_gas_eps_table = table;
         assert!(matches!(
-            App::solve_heat_loss_workbook(&wb),
+            HeatLossUseCases::solve_heat_loss_workbook(&wb),
             Err(SoryntelError::HeatLossError(_))
         ));
     }
@@ -117,19 +117,19 @@ fn heat_loss_rejects_corrupt_gas_property_tables() {
 fn water_rejects_invalid_requests_at_application_boundary() {
     let db = ThermoDatabase::with_open_defaults();
     for value in [f64::NAN, f64::INFINITY, -1.0] {
-        let mut req = App::default_water_request();
+        let mut req = WaterUseCases::default_water_request();
         req.amount = value;
-        assert!(App::try_calculate_water(&db, &req).is_err());
+        assert!(WaterUseCases::try_calculate_water(&db, &req).is_err());
         req.amount = 1.0;
         req.point1.pressure = value;
-        assert!(App::try_calculate_water(&db, &req).is_err());
+        assert!(WaterUseCases::try_calculate_water(&db, &req).is_err());
     }
-    let mut req = App::default_water_request();
+    let mut req = WaterUseCases::default_water_request();
     req.point1.temp = -300.0;
-    assert!(App::try_calculate_water(&db, &req).is_err());
+    assert!(WaterUseCases::try_calculate_water(&db, &req).is_err());
     req.point1.temp = 25.0;
     req.point2.mixture_pct = 101.0;
-    assert!(App::try_calculate_water(&db, &req).is_err());
+    assert!(WaterUseCases::try_calculate_water(&db, &req).is_err());
 }
 
 #[test]
@@ -139,10 +139,10 @@ fn saturation_pressure_matches_nist_table_1() {
     use soryntel_thermo::water::WaterPhaseMode;
     let db = ThermoDatabase::with_open_defaults();
     for (temp_c, pressure_mpa) in [(10.0, 0.0012282), (25.0, 0.0031699), (50.0, 0.012352)] {
-        let mut req = App::default_water_request();
+        let mut req = WaterUseCases::default_water_request();
         req.point1.temp = temp_c;
         req.point1.phase = WaterPhaseMode::SatGasLiquid;
-        let res = App::try_calculate_water(&db, &req).unwrap();
+        let res = WaterUseCases::try_calculate_water(&db, &req).unwrap();
         let actual_mpa = res.point1.pressure_bar / 10.0;
         assert!((actual_mpa / pressure_mpa - 1.0).abs() < 5e-4, "T={temp_c}: {actual_mpa}");
     }
@@ -182,7 +182,7 @@ fn equilibrium_matches_analytic_mass_action_and_element_conservation() {
     params.temp_range.initial = 25.0;
     for pressure in [0.1, 1.0, 10.0] {
         params.pressure_range.initial = pressure;
-        let res = App::solve_equilibrium_sweep(&db, &synthetic_equilibrium("1.0"), &params).unwrap();
+        let res = EquilibriumUseCases::solve_equilibrium_sweep(&db, &synthetic_equilibrium("1.0"), &params).unwrap();
         let pt = &res.points[0];
         assert!(pt.converged);
         let a = pt.species[0].equil_amount_mol;
@@ -200,10 +200,10 @@ fn nonideal_equilibrium_does_not_claim_convergence_before_activity_iteration() {
     params.temp_range.initial = 25.0;
     params.ac_steps = 1;
     let sys = synthetic_equilibrium("2.0");
-    let first = App::solve_equilibrium_sweep(&db, &sys, &params).unwrap();
+    let first = EquilibriumUseCases::solve_equilibrium_sweep(&db, &sys, &params).unwrap();
     assert!(!first.points[0].converged);
     params.ac_steps = 40;
-    let res = App::solve_equilibrium_sweep(&db, &sys, &params).unwrap();
+    let res = EquilibriumUseCases::solve_equilibrium_sweep(&db, &sys, &params).unwrap();
     let pt = &res.points[0];
     assert!(pt.converged);
     assert!((pt.species[1].equil_amount_mol / pt.species[0].equil_amount_mol - 0.25).abs() < 1e-7);
@@ -212,11 +212,11 @@ fn nonideal_equilibrium_does_not_claim_convergence_before_activity_iteration() {
 #[test]
 fn benson_rejects_unknown_groups_instead_of_fabricating_properties() {
     let db = ThermoDatabase::with_open_defaults();
-    let molecule = App::parse_benson_smiles("C").unwrap();
+    let molecule = MiscUseCases::parse_benson_smiles("C").unwrap();
     let groups = vec![("grupo-sin-parametros".into(), 1)];
-    let error = App::estimate_benson_properties(&db, &molecule, Some(&groups), None).unwrap_err();
+    let error = MiscUseCases::estimate_benson_properties(&db, &molecule, Some(&groups), None).unwrap_err();
     assert!(error.contains("grupo-sin-parametros"));
-    assert!(App::estimate_benson_properties(&db, &molecule, None, None).is_ok());
+    assert!(MiscUseCases::estimate_benson_properties(&db, &molecule, None, None).is_ok());
 }
 
 #[test]
@@ -226,20 +226,20 @@ fn equilibrium_rejects_invalid_and_oversized_sweeps_before_allocation() {
     let sys = synthetic_equilibrium("1.0");
     let mut params = EquilibriumParams::default();
     params.temp_range.steps = usize::MAX;
-    assert!(App::solve_equilibrium_sweep(&db, &sys, &params).is_err());
+    assert!(EquilibriumUseCases::solve_equilibrium_sweep(&db, &sys, &params).is_err());
     params.temp_range.steps = 1000;
     params.num_indep_vars = 2;
     params.secondary_var = Some(SweepVariable::PressureBar);
     params.pressure_range.steps = 1000;
-    assert!(App::solve_equilibrium_sweep(&db, &sys, &params).is_err());
+    assert!(EquilibriumUseCases::solve_equilibrium_sweep(&db, &sys, &params).is_err());
     params.num_indep_vars = 1;
     params.temp_range.steps = 2;
     params.temp_range.log_scale = true;
     params.temp_range.initial = 0.0;
-    assert!(App::solve_equilibrium_sweep(&db, &sys, &params).is_err());
+    assert!(EquilibriumUseCases::solve_equilibrium_sweep(&db, &sys, &params).is_err());
     params.temp_range.log_scale = false;
     params.temp_range.initial = f64::NAN;
-    assert!(App::solve_equilibrium_sweep(&db, &sys, &params).is_err());
+    assert!(EquilibriumUseCases::solve_equilibrium_sweep(&db, &sys, &params).is_err());
 }
 
 fn synthetic_hydrogen(formula: &str, h: f64, entropy: f64, cp: f64) -> soryntel_thermo::ChemicalSpecies {
@@ -269,7 +269,7 @@ fn module1_reaction_matches_analytic_h_s_g_and_log_k_in_both_energy_systems() {
     let expected_g = expected_h - 500.0 * expected_s;
     for unit in [EnergyUnit::Kilojoules, EnergyUnit::Kilocalories] {
         req.energy_unit = unit;
-        let response = App::calculate_reaction(&db, &req).unwrap();
+        let response = ReactionUseCases::calculate_reaction(&db, &req).unwrap();
         let row = &response.reaction_rows[0];
         assert!((row.delta_h - expected_h * unit.from_joules_factor()).abs() < 1e-9);
         assert!((row.delta_s - expected_s * unit.entropy_from_joules_factor()).abs() < 1e-9);
@@ -291,7 +291,7 @@ fn module1_integrates_up_down_and_across_phase_transition() {
     for t in [200.0, 298.15, 600.0] {
         let mut req = request(); req.input = "H2(g)".into(); req.temp_unit = TemperatureUnit::Kelvin;
         req.t_from = t; req.t_to = t;
-        let result = App::calculate_reaction(&db, &req).unwrap();
+        let result = ReactionUseCases::calculate_reaction(&db, &req).unwrap();
         let row = &result.substance_rows[0];
         let h = if t < 500.0 {30.0 * (t - 298.15)} else {30.0 * (500.0-298.15) + 6000.0 + 40.0 * (t-500.0)};
         assert!((row.h * 1000.0 - h).abs() < 1e-8);
@@ -303,7 +303,7 @@ fn module1_delta_requires_reference_element_instead_of_returning_partial_formati
     let mut db = ThermoDatabase::with_open_defaults();
     db.insert_species(synthetic_hydrogen("Xe2(g)", 0.0, 100.0, 30.0));
     let mut req = request(); req.input = "Xe2(g)".into(); req.result_format = ResultFormat::Delta;
-    let error = App::calculate_reaction(&db, &req).unwrap_err();
+    let error = ReactionUseCases::calculate_reaction(&db, &req).unwrap_err();
     assert!(matches!(error, SoryntelError::SpeciesNotFound(_)));
 }
 
@@ -312,7 +312,7 @@ fn module1_co_reference_agrees_with_nist_codate_and_chase() {
     // NIST WebBook CO, https://webbook.nist.gov/cgi/cbook.cgi?ID=C630080&Mask=1
     // Published Hf = -110.53 +/- 0.17 kJ/mol; S(1 bar) = 197.660 +/- 0.004 J/(mol K).
     let db = ThermoDatabase::with_open_defaults();
-    let response = App::calculate_reaction(&db, &request()).unwrap();
+    let response = ReactionUseCases::calculate_reaction(&db, &request()).unwrap();
     let row = &response.substance_rows[0];
     assert!((row.h + 110.53).abs() <= 0.17);
     assert!((row.s - 197.660).abs() <= 0.004);
