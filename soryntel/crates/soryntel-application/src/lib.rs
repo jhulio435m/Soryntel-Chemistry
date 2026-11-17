@@ -154,6 +154,7 @@ use soryntel_thermo::{
 
 /// Inbound Application Service orchestrating all 20 thermodynamic modules over an outbound
 /// `SpeciesCatalogPort` adapter.
+pub mod models;
 pub mod ports;
 pub mod testing;
 pub mod use_cases;
