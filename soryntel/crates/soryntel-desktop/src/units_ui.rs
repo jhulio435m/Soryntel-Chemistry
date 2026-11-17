@@ -12,7 +12,7 @@
 
 use eframe::egui;
 use egui_plot::{Legend, Line, Plot, PlotPoints};
-use soryntel_application::SoryntelApplication;
+use soryntel_application::use_cases::MiscUseCases;
 use soryntel_thermo::units::{
     AirHumidityGrid, AirHumidityPoint, ConvertRow, SiPrefix, UnitsWorkbook, STD_ATM_BAR,
 };
@@ -129,11 +129,11 @@ pub struct UnitsModuleState {
 
 impl Default for UnitsModuleState {
     fn default() -> Self {
-        let workbook = SoryntelApplication::default_units_workbook();
-        let air_grid_desc = SoryntelApplication::air_humidity_grid_descending();
-        let air_grid_3d = SoryntelApplication::air_humidity_3d_surface();
+        let workbook = MiscUseCases::default_units_workbook();
+        let air_grid_desc = MiscUseCases::air_humidity_grid_descending();
+        let air_grid_3d = MiscUseCases::air_humidity_3d_surface();
         let air_calc_res =
-            SoryntelApplication::compute_air_humidity_point(20.0, 60.0, STD_ATM_BAR).ok();
+            MiscUseCases::compute_air_humidity_point(20.0, 60.0, STD_ATM_BAR).ok();
 
         let selected_qty = workbook.find_quantity_index("Energy, work").unwrap_or(0);
         let unit1 = workbook.find_unit_index(selected_qty, "J").unwrap_or(0);
@@ -290,7 +290,7 @@ impl UnitsModuleState {
         };
         let (lbl1, lbl2) = self.current_unit_labels();
         let res = match side {
-            ConvertColSide::Data1 => SoryntelApplication::convert_unit_value(
+            ConvertColSide::Data1 => MiscUseCases::convert_unit_value(
                 &self.workbook,
                 self.selected_qty,
                 self.unit1,
@@ -300,7 +300,7 @@ impl UnitsModuleState {
                 val,
                 self.delta_temp_mode,
             ),
-            ConvertColSide::Data2 => SoryntelApplication::convert_unit_value(
+            ConvertColSide::Data2 => MiscUseCases::convert_unit_value(
                 &self.workbook,
                 self.selected_qty,
                 self.unit2,
@@ -1773,7 +1773,7 @@ impl UnitsModuleState {
                             self.air_calc_p_buf.trim().parse::<f64>(),
                         ) {
                             self.air_calc_res =
-                                SoryntelApplication::compute_air_humidity_point(t, rh, p).ok();
+                                MiscUseCases::compute_air_humidity_point(t, rh, p).ok();
                         }
                     }
                     if let Some(res) = self.air_calc_res {
@@ -1983,7 +1983,7 @@ impl UnitsModuleState {
                     });
                     ui.separator();
                     let val = parse_decimal_input(&self.sampler_val_buf).unwrap_or(1.0);
-                    let rows = SoryntelApplication::convert_unit_all_equivalents(
+                    let rows = MiscUseCases::convert_unit_all_equivalents(
                         &self.workbook,
                         self.selected_qty,
                         self.unit1,
@@ -2043,7 +2043,7 @@ impl UnitsModuleState {
                                 let pts: PlotPoints = (-40..=100)
                                     .step_by(2)
                                     .filter_map(|tc| {
-                                        SoryntelApplication::compute_air_humidity_point(
+                                        MiscUseCases::compute_air_humidity_point(
                                             tc as f64,
                                             rh,
                                             STD_ATM_BAR,

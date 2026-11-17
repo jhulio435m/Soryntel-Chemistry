@@ -6,16 +6,16 @@
 //! the exact same thermodynamic engine and active `AddInUnits`.
 
 use serde_json::{json, Value};
-use soryntel_application::SoryntelApplication;
-use soryntel_db::ThermoDatabase;
+use soryntel_application::use_cases::AddinsUseCases;
+use soryntel_core::SpeciesCatalogPort;
 use soryntel_thermo::excel_addins::{
-    AddInOrigin, AddInUnits, ArgValue, CellEvalValue, ADDIN_FUNCTION_CATALOG,
+    AddInOrigin, AddInUnits, ArgValue, CellEvalValue,
 };
 use std::collections::BTreeMap;
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, RwLock};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
@@ -54,8 +54,8 @@ pub struct BridgeHandle {
 
 impl BridgeHandle {
     /// Start the HTTP bridge on `127.0.0.1:<port>` in a dedicated background thread.
-    pub fn start(
-        db: Arc<ThermoDatabase>,
+    pub fn start<C: SpeciesCatalogPort + Send + Sync + 'static>(
+        db: Arc<RwLock<C>>,
         units: Arc<Mutex<AddInUnits>>,
         port: u16,
     ) -> Result<Self, String> {
@@ -119,8 +119,8 @@ impl Drop for BridgeHandle {
 }
 
 /// Run the HTTP Bridge synchronously in the current thread (`--addin-bridge` headless CLI mode).
-pub fn run_bridge_blocking(
-    db: Arc<ThermoDatabase>,
+pub fn run_bridge_blocking<C: SpeciesCatalogPort + Send + Sync + 'static>(
+    db: Arc<RwLock<C>>,
     units: Arc<Mutex<AddInUnits>>,
     port: u16,
 ) -> std::io::Result<()> {
@@ -132,8 +132,8 @@ pub fn run_bridge_blocking(
     let stats = Arc::new(BridgeStats::default());
     eprintln!(
         "Soryntel HSC Excel Add-In HTTP Bridge listening on http://127.0.0.1:{bound_port} ({} species, {} functions)",
-        db.len(),
-        ADDIN_FUNCTION_CATALOG
+        db.read().unwrap_or_else(|e| e.into_inner()).species_count(),
+        AddinsUseCases::addin_catalog()
             .iter()
             .filter(|m| m.origin != AddInOrigin::HscSimOnly)
             .count()
@@ -142,9 +142,9 @@ pub fn run_bridge_blocking(
     Ok(())
 }
 
-fn run_accept_loop(
+fn run_accept_loop<C: SpeciesCatalogPort + Send + Sync + 'static>(
     listener: TcpListener,
-    db: Arc<ThermoDatabase>,
+    db: Arc<RwLock<C>>,
     units: Arc<Mutex<AddInUnits>>,
     stop_flag: Arc<AtomicBool>,
     stats: Arc<BridgeStats>,
@@ -171,9 +171,9 @@ fn run_accept_loop(
     }
 }
 
-fn handle_client_stream(
+fn handle_client_stream<C: SpeciesCatalogPort + Send + Sync + 'static>(
     stream: &mut TcpStream,
-    db: &ThermoDatabase,
+    db: &RwLock<C>,
     units: &Arc<Mutex<AddInUnits>>,
     stats: &BridgeStats,
     port: u16,
@@ -193,7 +193,10 @@ fn handle_client_stream(
         }
     };
 
-    let (resp, summary) = handle_bridge_request(&req, db, units, port);
+    let (resp, summary) = {
+        let catalog = db.read().unwrap_or_else(|e| e.into_inner());
+        handle_bridge_request(&req, &*catalog, units, port)
+    };
     if !summary.is_empty() {
         stats.record_call(summary);
     }
@@ -451,37 +454,6 @@ fn units_json(u: &AddInUnits) -> Value {
     })
 }
 
-fn is_range_slot(fn_upper: &str, arg_idx: usize) -> bool {
-    if fn_upper.starts_with("STREAM") || fn_upper.starts_with("FLOW") || fn_upper == "DENSITYA" {
-        arg_idx <= 1 && !matches!(fn_upper, "STREAMX" | "STREAMMASS" | "STREAMVOL")
-    } else {
-        matches!(fn_upper, "SUM" | "AVERAGE" | "MIN" | "MAX")
-    }
-}
-
-fn parse_bridge_arg(fn_upper: &str, arg_idx: usize, raw: &str) -> ArgValue {
-    let t = raw.trim();
-    if t.contains('|') {
-        let items = t.split('|').map(|s| s.trim().to_string()).collect();
-        return ArgValue::Range(items);
-    }
-    if is_range_slot(fn_upper, arg_idx) {
-        let sep = if t.contains(';') {
-            ';'
-        } else if t.contains(',') {
-            ','
-        } else {
-            '\0'
-        };
-        if sep != '\0' {
-            let items = t.split(sep).map(|s| s.trim().to_string()).collect();
-            return ArgValue::Range(items);
-        }
-        return ArgValue::Range(vec![t.to_string()]);
-    }
-    ArgValue::Scalar(t.to_string())
-}
-
 fn json_val_to_arg(fn_upper: &str, arg_idx: usize, v: &Value) -> ArgValue {
     match v {
         Value::Array(items) => ArgValue::Range(
@@ -496,7 +468,7 @@ fn json_val_to_arg(fn_upper: &str, arg_idx: usize, v: &Value) -> ArgValue {
                 })
                 .collect(),
         ),
-        Value::String(s) => parse_bridge_arg(fn_upper, arg_idx, s),
+        Value::String(s) => AddinsUseCases::parse_text_argument(fn_upper, arg_idx, s),
         Value::Number(n) => ArgValue::Scalar(n.to_string()),
         Value::Bool(b) => ArgValue::Scalar(b.to_string()),
         Value::Null => ArgValue::Scalar(String::new()),
@@ -594,7 +566,7 @@ fn cell_value_to_json(
 
 fn eval_query_params(
     params: &BTreeMap<String, String>,
-    db: &ThermoDatabase,
+    db: &dyn SpeciesCatalogPort,
     units_lock: &Arc<Mutex<AddInUnits>>,
 ) -> (String, CellEvalValue, AddInUnits, usize) {
     let mut decimals = params
@@ -618,7 +590,7 @@ fn eval_query_params(
     let active_units = if has_override { &mut local_units } else { &mut *guard };
 
     if let Some(formula) = params.get("formula").filter(|s| !s.trim().is_empty()) {
-        let val = SoryntelApplication::eval_addin_formula(db, active_units, formula, |_, _| {
+        let val = AddinsUseCases::eval_addin_formula(db, active_units, formula, |_, _| {
             String::new()
         });
         if matches!(val, CellEvalValue::Array(_)) && !params.contains_key("decimals") {
@@ -634,9 +606,9 @@ fn eval_query_params(
     let args: Vec<ArgValue> = raw_args
         .iter()
         .enumerate()
-        .map(|(i, s)| parse_bridge_arg(&fn_upper, i, s))
+        .map(|(i, s)| AddinsUseCases::parse_text_argument(&fn_upper, i, s))
         .collect();
-    let val = SoryntelApplication::eval_addin_call(db, active_units, &fn_name, &args);
+    let val = AddinsUseCases::eval_addin_call(db, active_units, &fn_name, &args);
     if (fn_upper == "STREAMEQ" || matches!(val, CellEvalValue::Array(_)))
         && !params.contains_key("decimals")
     {
@@ -650,7 +622,7 @@ fn eval_query_params(
 /// Pure HTTP request router shared by the background server, CLI bridge, and unit tests.
 pub fn handle_bridge_request(
     req: &HttpRequest,
-    db: &ThermoDatabase,
+    db: &dyn SpeciesCatalogPort,
     units: &Arc<Mutex<AddInUnits>>,
     port: u16,
 ) -> (HttpResponse, String) {
@@ -661,7 +633,7 @@ pub fn handle_bridge_request(
     match (req.method.as_str(), req.path.as_str()) {
         ("GET", "/health") | ("GET", "/") => {
             let guard = units.lock().unwrap_or_else(|e| e.into_inner());
-            let active_count = ADDIN_FUNCTION_CATALOG
+            let active_count = AddinsUseCases::addin_catalog()
                 .iter()
                 .filter(|m| m.origin != AddInOrigin::HscSimOnly)
                 .count();
@@ -672,7 +644,7 @@ pub fn handle_bridge_request(
                     "service": "soryntel-hsc-bridge",
                     "version": env!("CARGO_PKG_VERSION"),
                     "port": port,
-                    "species_count": db.len(),
+                    "species_count": db.species_count(),
                     "functions_count": active_count,
                     "units": units_json(&guard)
                 }),
@@ -680,7 +652,7 @@ pub fn handle_bridge_request(
             (resp, "GET /health".into())
         }
         ("GET", "/catalog") => {
-            let items: Vec<Value> = ADDIN_FUNCTION_CATALOG
+            let items: Vec<Value> = AddinsUseCases::addin_catalog()
                 .iter()
                 .map(|m| {
                     json!({
@@ -758,7 +730,7 @@ pub fn handle_bridge_request(
 
 fn handle_post_eval(
     body: &str,
-    db: &ThermoDatabase,
+    db: &dyn SpeciesCatalogPort,
     units_lock: &Arc<Mutex<AddInUnits>>,
 ) -> (HttpResponse, String) {
     let Ok(payload) = serde_json::from_str::<Value>(body) else {
@@ -792,7 +764,7 @@ fn handle_post_eval(
     };
 
     if let Some(formula) = payload.get("formula").and_then(Value::as_str) {
-        let val = SoryntelApplication::eval_addin_formula(db, active_units, formula, |_, _| {
+        let val = AddinsUseCases::eval_addin_formula(db, active_units, formula, |_, _| {
             String::new()
         });
         let dec = if matches!(val, CellEvalValue::Array(_)) { 8 } else { decimals };
@@ -824,7 +796,7 @@ fn handle_post_eval(
         })
         .unwrap_or_default();
 
-    let val = SoryntelApplication::eval_addin_call(db, active_units, &fn_name, &args);
+    let val = AddinsUseCases::eval_addin_call(db, active_units, &fn_name, &args);
     let dec = if fn_upper == "STREAMEQ" || matches!(val, CellEvalValue::Array(_)) {
         8
     } else {
@@ -836,7 +808,7 @@ fn handle_post_eval(
 
 fn handle_post_streameq(
     body: &str,
-    db: &ThermoDatabase,
+    db: &dyn SpeciesCatalogPort,
     units_lock: &Arc<Mutex<AddInUnits>>,
 ) -> (HttpResponse, String) {
     let Ok(payload) = serde_json::from_str::<Value>(body) else {
@@ -889,7 +861,7 @@ fn handle_post_streameq(
     let p_val = payload.get("p").and_then(Value::as_f64).unwrap_or(1.0);
 
     let val = if !species.is_empty() {
-        SoryntelApplication::eval_addin_streameq(db, active_units, &species, &inputs, t_val, p_val)
+        AddinsUseCases::eval_addin_streameq(db, active_units, &species, &inputs, t_val, p_val)
     } else if let Some(args_arr) = payload.get("args").and_then(Value::as_array) {
         let mut u_mut = active_units.clone();
         let args: Vec<ArgValue> = args_arr
@@ -897,7 +869,7 @@ fn handle_post_streameq(
             .enumerate()
             .map(|(i, v)| json_val_to_arg("STREAMEQ", i, v))
             .collect();
-        SoryntelApplication::eval_addin_call(db, &mut u_mut, "StreamEQ", &args)
+        AddinsUseCases::eval_addin_call(db, &mut u_mut, "StreamEQ", &args)
     } else {
         CellEvalValue::Error("#VALUE!".into())
     };
@@ -923,12 +895,13 @@ fn handle_post_streameq(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use soryntel_db::ThermoDatabase;
     use std::io::{Read, Write};
     use std::net::TcpStream;
 
-    fn test_db_and_units() -> (Arc<ThermoDatabase>, Arc<Mutex<AddInUnits>>) {
+    fn test_db_and_units() -> (ThermoDatabase, Arc<Mutex<AddInUnits>>) {
         (
-            Arc::new(ThermoDatabase::with_open_defaults()),
+            ThermoDatabase::with_open_defaults(),
             Arc::new(Mutex::new(AddInUnits::default())),
         )
     }
@@ -1048,9 +1021,40 @@ mod tests {
     }
 
     #[test]
+    fn live_bridge_reads_catalog_updates() {
+        use soryntel_application::testing::InMemorySpeciesCatalog;
+        use soryntel_core::{ChemicalSpecies, Phase};
+
+        let catalog = Arc::new(RwLock::new(InMemorySpeciesCatalog::new()));
+        let units = Arc::new(Mutex::new(AddInUnits::default()));
+        let bridge = BridgeHandle::start(Arc::clone(&catalog), units, 0).unwrap();
+        let species_count = || {
+            let mut stream = TcpStream::connect(("127.0.0.1", bridge.port())).unwrap();
+            stream.set_read_timeout(Some(Duration::from_secs(3))).unwrap();
+            stream.write_all(b"GET /health HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n").unwrap();
+            let mut response = String::new();
+            stream.read_to_string(&mut response).unwrap();
+            assert!(response.starts_with("HTTP/1.1 200"));
+            let (_, body) = response.split_once("\r\n\r\n").unwrap();
+            serde_json::from_str::<Value>(body).unwrap()["species_count"].as_u64().unwrap()
+        };
+        assert_eq!(species_count(), 0);
+        catalog.write().unwrap().insert_or_update_species(ChemicalSpecies {
+            formula: "H2(g)".into(),
+            name: "Hydrogen".into(),
+            phase: Phase::Gas,
+            molecular_weight: 2.016,
+            density_g_cm3: 0.0,
+            charge: 0,
+            intervals: vec![],
+        });
+        assert_eq!(species_count(), 1);
+    }
+
+    #[test]
     fn live_tcp_listener_roundtrip_eval_and_streameq() {
         let (db, units) = test_db_and_units();
-        let mut handle = BridgeHandle::start(db, units, 0).expect("start ephemeral HTTP bridge");
+        let mut handle = BridgeHandle::start(Arc::new(RwLock::new(db)), units, 0).expect("start ephemeral HTTP bridge");
         let port = handle.port();
         assert!(handle.is_running());
 

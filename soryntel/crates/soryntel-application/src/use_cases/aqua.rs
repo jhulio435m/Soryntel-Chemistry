@@ -2,6 +2,18 @@
 use super::super::*;
 pub struct AquaUseCases;
 impl AquaUseCases {
+    pub fn preset_nacl_hcl() -> AquaCaseFile {
+        AquaCaseFile::preset_nacl_hcl()
+    }
+
+    pub fn preset_millero_seawater() -> AquaCaseFile {
+        AquaCaseFile::preset_millero_seawater()
+    }
+
+    pub fn preset_na_s_h2o_fig3() -> AquaCaseFile {
+        AquaCaseFile::preset_na_s_h2o_fig3()
+    }
+
     pub fn aqua_main_pitzer_db() -> PitzerDatabase {
         domain_aqua_main_pitzer_db()
     }

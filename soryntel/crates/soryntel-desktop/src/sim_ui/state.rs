@@ -1,7 +1,6 @@
 use eframe::egui;
-use soryntel_application::SoryntelApplication;
+use soryntel_application::use_cases::SimulationUseCases;
 use soryntel_thermo::sim::model::*;
-use soryntel_thermo::sim::presets::empty_project;
 use soryntel_thermo::sim::reports::SimReportWorkbook;
 use soryntel_thermo::sim::solver::LogFilterLevel;
 
@@ -278,7 +277,7 @@ pub struct SimModuleState {
 
 impl Default for SimModuleState {
     fn default() -> Self {
-        let project = empty_project();
+        let project = SimulationUseCases::empty_project();
         Self {
             project,
             active_preset_name: "Empty Flowsheet (New)".to_string(),
@@ -420,7 +419,7 @@ impl SimModuleState {
         self.multi_selected_streams.clear();
         self.pan_mm = [-14.0, -4.0];
         self.zoom_pct = 100.0;
-        self.reports_cache = Some(SoryntelApplication::sim_generate_reports(&self.project));
+        self.reports_cache = Some(SimulationUseCases::sim_generate_reports(&self.project));
         self.lca_state.sync_from_project(&self.project);
         self.mb_state.sync_from_project(&self.project);
         self.status_banner = format!(
@@ -449,8 +448,8 @@ impl SimModuleState {
         } else {
             None
         };
-        SoryntelApplication::sim_run_static(&mut self.project, sel_ids.as_deref());
-        self.reports_cache = Some(SoryntelApplication::sim_generate_reports(&self.project));
+        SimulationUseCases::sim_run_static(&mut self.project, sel_ids.as_deref());
+        self.reports_cache = Some(SimulationUseCases::sim_generate_reports(&self.project));
         self.lca_state.sync_from_project(&self.project);
         if let Some(last) = self.project.convergence_history.last() {
             self.status_banner = format!(
@@ -469,9 +468,9 @@ impl SimModuleState {
             return;
         }
         self.push_undo();
-        SoryntelApplication::sim_run_controls(&mut self.project, idx);
-        SoryntelApplication::sim_run_static(&mut self.project, None);
-        self.reports_cache = Some(SoryntelApplication::sim_generate_reports(&self.project));
+        SimulationUseCases::sim_run_controls(&mut self.project, idx);
+        SimulationUseCases::sim_run_static(&mut self.project, None);
+        self.reports_cache = Some(SimulationUseCases::sim_generate_reports(&self.project));
         self.lca_state.sync_from_project(&self.project);
         self.status_banner = match idx {
             Some(i) => format!("Executed Control loop #{}", i + 1),
@@ -497,7 +496,7 @@ impl SimModuleState {
     pub fn open_control_monitor(&mut self, ctrl_idx: usize) {
         if ctrl_idx < self.project.controls.len() {
             self.monitor_ctrl_idx = ctrl_idx;
-            self.monitor_sweep_cache = SoryntelApplication::sim_control_sweep(
+            self.monitor_sweep_cache = SimulationUseCases::sim_control_sweep(
                 &self.project,
                 ctrl_idx,
                 self.monitor_sweep_points.max(10),

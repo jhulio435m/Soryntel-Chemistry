@@ -7,10 +7,11 @@ use soryntel_application::use_cases::{
 };
 use soryntel_db::ThermoDatabase;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard};
 
 #[allow(dead_code)]
 pub struct AppServices {
-    catalog: ThermoDatabase,
+    catalog: Arc<RwLock<ThermoDatabase>>,
     reaction: ReactionUseCases,
     catalog_use_cases: CatalogUseCases,
     equilibrium: EquilibriumUseCases,
@@ -63,7 +64,7 @@ impl AppServices {
 
     pub fn from_catalog(catalog: ThermoDatabase) -> Self {
         Self {
-            catalog,
+            catalog: Arc::new(RwLock::new(catalog)),
             reaction: ReactionUseCases,
             catalog_use_cases: CatalogUseCases,
             equilibrium: EquilibriumUseCases,
@@ -77,12 +78,16 @@ impl AppServices {
         }
     }
 
-    pub fn catalog(&self) -> &dyn SpeciesCatalogPort {
-        &self.catalog
+    pub fn shared_catalog(&self) -> Arc<RwLock<ThermoDatabase>> {
+        Arc::clone(&self.catalog)
     }
 
-    pub fn catalog_mut(&mut self) -> &mut dyn SpeciesCatalogPort {
-        &mut self.catalog
+    pub fn with_catalog<T>(&self, f: impl FnOnce(&dyn SpeciesCatalogPort) -> T) -> T {
+        f(&*self.legacy_db())
+    }
+
+    pub fn with_catalog_mut<T>(&self, f: impl FnOnce(&mut dyn SpeciesCatalogPort) -> T) -> T {
+        f(&mut *self.legacy_db_mut())
     }
 
     pub fn reaction(&self) -> &ReactionUseCases {
@@ -126,17 +131,13 @@ impl AppServices {
     }
 
     // TODO(hex): retirar cuando los módulos UI usen puertos
-    pub fn legacy_db(&self) -> &ThermoDatabase {
-        &self.catalog
+    pub fn legacy_db(&self) -> RwLockReadGuard<'_, ThermoDatabase> {
+        self.catalog.read().unwrap_or_else(|e| e.into_inner())
     }
 
     // TODO(hex): retirar cuando los módulos UI usen puertos
-    pub fn legacy_db_mut(&mut self) -> &mut ThermoDatabase {
-        &mut self.catalog
-    }
-
-    pub fn into_catalog(self) -> ThermoDatabase {
-        self.catalog
+    pub fn legacy_db_mut(&self) -> RwLockWriteGuard<'_, ThermoDatabase> {
+        self.catalog.write().unwrap_or_else(|e| e.into_inner())
     }
 }
 

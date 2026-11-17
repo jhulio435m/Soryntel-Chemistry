@@ -2,6 +2,38 @@
 use super::super::*;
 pub struct AddinsUseCases;
 impl AddinsUseCases {
+    fn is_range_slot(fn_upper: &str, arg_idx: usize) -> bool {
+        if fn_upper.starts_with("STREAM") || fn_upper.starts_with("FLOW") || fn_upper == "DENSITYA"
+        {
+            arg_idx <= 1 && !matches!(fn_upper, "STREAMX" | "STREAMMASS" | "STREAMVOL")
+        } else {
+            matches!(fn_upper, "SUM" | "AVERAGE" | "MIN" | "MAX")
+        }
+    }
+
+    pub fn parse_text_argument(fn_upper: &str, arg_idx: usize, raw: &str) -> ArgValue {
+        let t = raw.trim();
+        if t.contains('|') {
+            let items = t.split('|').map(|s| s.trim().to_string()).collect();
+            return ArgValue::Range(items);
+        }
+        if Self::is_range_slot(fn_upper, arg_idx) {
+            let sep = if t.contains(';') {
+                ';'
+            } else if t.contains(',') {
+                ','
+            } else {
+                '\0'
+            };
+            if sep != '\0' {
+                let items = t.split(sep).map(|s| s.trim().to_string()).collect();
+                return ArgValue::Range(items);
+            }
+            return ArgValue::Range(vec![t.to_string()]);
+        }
+        ArgValue::Scalar(t.to_string())
+    }
+
     pub fn addin_catalog() -> &'static [AddInFunctionMeta] {
         ADDIN_FUNCTION_CATALOG
     }

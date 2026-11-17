@@ -1,5 +1,5 @@
 use eframe::egui::{self, Color32, RichText, Stroke, Vec2};
-use soryntel_application::SoryntelApplication;
+use soryntel_application::use_cases::SimulationUseCases;
 use soryntel_thermo::sim::model::*;
 use soryntel_thermo::sim::presets::UNIT_ICON_GALLERY;
 use soryntel_thermo::sim::solver::LogFilterLevel;
@@ -854,7 +854,7 @@ fn render_log_tab(ui: &mut egui::Ui, state: &mut SimModuleState) {
 
     egui::ScrollArea::vertical().id_salt("log_tree_scroll").show(ui, |ui| {
         for entry in &state.project.logs {
-            let show = SoryntelApplication::sim_filter_log(
+            let show = SimulationUseCases::sim_filter_log(
                 &entry.message,
                 entry.severity,
                 state.log_filter_level,

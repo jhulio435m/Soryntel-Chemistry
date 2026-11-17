@@ -14,8 +14,8 @@ use crate::excel_grid::{
     EXCEL_HEADER_BG, EXCEL_SECTION_BG, EXCEL_YELLOW_BG,
 };
 use eframe::egui;
-use soryntel_application::SoryntelApplication;
-use soryntel_db::ThermoDatabase;
+use soryntel_application::use_cases::AddinsUseCases;
+use soryntel_core::SpeciesCatalogPort;
 use soryntel_thermo::excel_addins::{
     format_cell_number, format_temp_unit_display, parse_a1, AddInFunctionMeta, AddInOrigin,
     AddInUnits, ArgValue, CellEvalValue, MineralRecord, ADDIN_FUNCTION_CATALOG,
@@ -24,7 +24,7 @@ use soryntel_thermo::spreadsheet_export::{
     col_to_a1, ExportCell, ExportCellStyle, ExportCellValue, ExportSheet,
 };
 use std::collections::{BTreeMap, HashSet};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, RwLock};
 
 const EXCEL_GREEN: egui::Color32 = egui::Color32::from_rgb(33, 115, 70);
 const EXCEL_GREEN_DARK: egui::Color32 = egui::Color32::from_rgb(24, 90, 54);
@@ -360,7 +360,7 @@ impl Default for ExcelAddInsModuleState {
 
         let mut min_cells = BTreeMap::new();
         let (min_max_row, min_max_col) =
-            load_export_sheet_into_cells(&SoryntelApplication::addin_minerals_sheet(), &mut min_cells);
+            load_export_sheet_into_cells(&AddinsUseCases::addin_minerals_sheet(), &mut min_cells);
 
         let mut state = Self {
             ribbon_tab: AddInRibbonTab::AddIns,
@@ -413,7 +413,7 @@ impl Default for ExcelAddInsModuleState {
             min_focus_inline: false,
             min_paste_values: false,
             min_search_query: "Py".into(),
-            min_selected: SoryntelApplication::lookup_addin_mineral("Py"),
+            min_selected: AddinsUseCases::lookup_addin_mineral("Py"),
 
             sample_cells: BTreeMap::new(),
             sample_max_row: 0,
@@ -460,7 +460,7 @@ impl Default for ExcelAddInsModuleState {
             migrator_output: String::new(),
             migrator_warnings: Vec::new(),
         };
-        let (mo, mw) = SoryntelApplication::migrate_addin_formula(&state.migrator_input);
+        let (mo, mw) = AddinsUseCases::migrate_addin_formula(&state.migrator_input);
         state.migrator_output = mo;
         state.migrator_warnings = mw;
         state
@@ -680,13 +680,13 @@ fn temp_c_to_unit_value(units: &AddInUnits, t_c: f64) -> f64 {
     }
 }
 
-fn has_all_species(db: &ThermoDatabase, formulas: &[&str]) -> bool {
-    use soryntel_thermo::SpeciesRepository;
+fn has_all_species(db: &dyn SpeciesCatalogPort, formulas: &[&str]) -> bool {
+
     formulas.iter().all(|f| db.get_species(f).is_some())
 }
 
-fn pick_existing_species(db: &ThermoDatabase, candidates: &[&str]) -> String {
-    use soryntel_thermo::SpeciesRepository;
+fn pick_existing_species(db: &dyn SpeciesCatalogPort, candidates: &[&str]) -> String {
+
     for &c in candidates {
         if db.get_species(c).is_some() {
             return c.to_string();
@@ -821,10 +821,10 @@ fn paint_streameq_inline_formula(
 }
 
 impl ExcelAddInsModuleState {
-    pub fn ensure_initialized(&mut self, db: &ThermoDatabase) {
+    pub fn ensure_initialized(&mut self, db: &dyn SpeciesCatalogPort) {
         if !self.initialized_db_sheets {
             self.initialized_db_sheets = true;
-            let sample = SoryntelApplication::addin_sample_sheet(db, &self.units);
+            let sample = AddinsUseCases::addin_sample_sheet(db, &self.units);
             let (mr, mc) = load_export_sheet_into_cells(&sample, &mut self.sample_cells);
             self.sample_max_row = mr;
             self.sample_max_col = mc;
@@ -978,7 +978,7 @@ impl ExcelAddInsModuleState {
 
     pub fn eval_sheet_formula<F>(
         &mut self,
-        db: &ThermoDatabase,
+        db: &dyn SpeciesCatalogPort,
         raw_formula: &str,
         lookup: F,
     ) -> CellEvalValue
@@ -989,10 +989,10 @@ impl ExcelAddInsModuleState {
             return err;
         }
         let expanded = self.resolve_cross_sheet_refs(raw_formula);
-        SoryntelApplication::eval_addin_formula(db, &mut self.units, &expanded, lookup)
+        AddinsUseCases::eval_addin_formula(db, &mut self.units, &expanded, lookup)
     }
 
-    pub fn recalculate_all(&mut self, db: &ThermoDatabase) {
+    pub fn recalculate_all(&mut self, db: &dyn SpeciesCatalogPort) {
         self.push_units_to_bridge();
         self.recalculate_streameq(db);
         self.recalculate_minerals(db);
@@ -1008,7 +1008,7 @@ impl ExcelAddInsModuleState {
         }
     }
 
-    fn pull_units_from_bridge_if_changed(&mut self, db: &ThermoDatabase) {
+    fn pull_units_from_bridge_if_changed(&mut self, db: &dyn SpeciesCatalogPort) {
         let external = self
             .shared_units
             .lock()
@@ -1039,11 +1039,11 @@ impl ExcelAddInsModuleState {
             .unwrap_or(false)
     }
 
-    pub fn start_bridge(&mut self, db: &ThermoDatabase) {
+    fn start_bridge<C: SpeciesCatalogPort + Send + Sync + 'static>(&mut self, shared: &Arc<RwLock<C>>) {
         self.stop_bridge();
         self.push_units_to_bridge();
         match BridgeHandle::start(
-            Arc::new(db.clone()),
+            Arc::clone(shared),
             Arc::clone(&self.shared_units),
             self.bridge_port,
         ) {
@@ -1070,7 +1070,7 @@ impl ExcelAddInsModuleState {
         }
     }
 
-    pub fn recalculate_worksheet(&mut self, db: &ThermoDatabase) {
+    pub fn recalculate_worksheet(&mut self, db: &dyn SpeciesCatalogPort) {
         // 1) Reiniciar celdas no derramadas y parsear literales base primero
         for r in 0..WS_ROWS {
             for c in 0..WS_COLS {
@@ -1145,7 +1145,7 @@ impl ExcelAddInsModuleState {
         }
     }
 
-    pub fn recalculate_streameq(&mut self, db: &ThermoDatabase) {
+    pub fn recalculate_streameq(&mut self, db: &dyn SpeciesCatalogPort) {
         if !self.is_pack_enabled(AddInOrigin::Hsc6Xll) {
             self.eq_outputs = vec![CellEvalValue::Error("#NAME?".into()); self.eq_species.len()];
             self.eq_balance.clear();
@@ -1166,7 +1166,7 @@ impl ExcelAddInsModuleState {
             }
         };
 
-        let res = SoryntelApplication::eval_addin_streameq(
+        let res = AddinsUseCases::eval_addin_streameq(
             db,
             &self.units,
             &self.eq_species,
@@ -1177,7 +1177,7 @@ impl ExcelAddInsModuleState {
         match res {
             CellEvalValue::Array(arr) => {
                 self.eq_outputs = arr;
-                self.eq_balance = SoryntelApplication::addin_streameq_balance(
+                self.eq_balance = AddinsUseCases::addin_streameq_balance(
                     &self.eq_species,
                     &self.eq_inputs,
                     &self.eq_outputs,
@@ -1204,7 +1204,7 @@ impl ExcelAddInsModuleState {
         }
     }
 
-    pub fn recalculate_minerals(&mut self, db: &ThermoDatabase) {
+    pub fn recalculate_minerals(&mut self, db: &dyn SpeciesCatalogPort) {
         if self.min_paste_values {
             return;
         }
@@ -1235,9 +1235,9 @@ impl ExcelAddInsModuleState {
         }
     }
 
-    pub fn recalculate_sample_sheet(&mut self, db: &ThermoDatabase) {
+    pub fn recalculate_sample_sheet(&mut self, db: &dyn SpeciesCatalogPort) {
         if self.sample_cells.is_empty() {
-            let sample = SoryntelApplication::addin_sample_sheet(db, &self.units);
+            let sample = AddinsUseCases::addin_sample_sheet(db, &self.units);
             let (mr, mc) = load_export_sheet_into_cells(&sample, &mut self.sample_cells);
             self.sample_max_row = mr;
             self.sample_max_col = mc;
@@ -1288,7 +1288,7 @@ impl ExcelAddInsModuleState {
         }
     }
 
-    fn sync_sample_d2_e2_from_units(&mut self, db: &ThermoDatabase) {
+    fn sync_sample_d2_e2_from_units(&mut self, db: &dyn SpeciesCatalogPort) {
         if let Some(c) = self.sample_cells.get_mut(&(1, 3)) {
             c.raw = self.units.temp_unit.clone();
             c.eval = CellEvalValue::Text(self.units.temp_unit.clone());
@@ -1300,7 +1300,7 @@ impl ExcelAddInsModuleState {
         self.recalculate_sample_sheet(db);
     }
 
-    pub fn recalculate_scratch_rows(&mut self, db: &ThermoDatabase) {
+    pub fn recalculate_scratch_rows(&mut self, db: &dyn SpeciesCatalogPort) {
         let eq_sp = self.eq_species.clone();
         let eq_in = self.eq_inputs.clone();
         let eq_t = self.eq_temp_raw.clone();
@@ -1313,7 +1313,7 @@ impl ExcelAddInsModuleState {
             let res = if let Some(err) = self.check_formula_pack_access(&expanded) {
                 err
             } else {
-                SoryntelApplication::eval_addin_formula(db, &mut self.units, &expanded, |r, c| {
+                AddinsUseCases::eval_addin_formula(db, &mut self.units, &expanded, |r, c| {
                     if let Some(cell) = sample_snap.get(&(r, c)) {
                         return format_cell_for_lookup(&cell.eval, &cell.raw);
                     }
@@ -1416,7 +1416,7 @@ impl ExcelAddInsModuleState {
         }
     }
 
-    pub fn recalculate_tester(&mut self, db: &ThermoDatabase) {
+    pub fn recalculate_tester(&mut self, db: &dyn SpeciesCatalogPort) {
         let Some(meta) = ADDIN_FUNCTION_CATALOG.get(self.selected_fn_idx).copied() else {
             return;
         };
@@ -1458,10 +1458,10 @@ impl ExcelAddInsModuleState {
             })
             .collect();
         self.formula_preview = format!("={}({})", meta.name, non_empty.join(&sep.to_string()));
-        self.test_result = SoryntelApplication::eval_addin_call(db, &mut self.units, meta.name, &args);
+        self.test_result = AddinsUseCases::eval_addin_call(db, &mut self.units, meta.name, &args);
     }
 
-    pub fn populate_tester_from_example(&mut self, meta: AddInFunctionMeta, db: &ThermoDatabase) {
+    pub fn populate_tester_from_example(&mut self, meta: AddInFunctionMeta, db: &dyn SpeciesCatalogPort) {
         self.test_args = Default::default();
         let upper = meta.name.to_ascii_uppercase();
         let t25 = format_cell_number(temp_c_to_unit_value(&self.units, 25.0), 4);
@@ -1477,7 +1477,7 @@ impl ExcelAddInsModuleState {
         let sp_oxide = pick_existing_species(db, &["Fe2O3", "Al2O3", "TiO2"]);
         let sp_gas = pick_existing_species(db, &["CO2(g)", "CO(g)", "O2(g)"]);
         let sp_cond = pick_existing_species(db, &["H2O(l)", "H2O", "Al2O3", "CO(g)"]);
-        let reac_eq = if !db.search("CO2(g)", 1).is_empty() && !db.search("C", 1).is_empty() {
+        let reac_eq = if !db.search_species("CO2(g)", 1).is_empty() && !db.search_species("C", 1).is_empty() {
             "C + O2(g) = CO2(g)"
         } else {
             "Mg = Mg(g)"
@@ -1521,7 +1521,7 @@ impl ExcelAddInsModuleState {
             } else {
                 sp_solid.clone()
             };
-            let target = SoryntelApplication::eval_addin_call(
+            let target = AddinsUseCases::eval_addin_call(
                 db,
                 &mut u_tmp,
                 fwd,
@@ -1535,7 +1535,7 @@ impl ExcelAddInsModuleState {
             self.test_args[3] = t_max;
         } else if let Some(rest) = upper.strip_prefix("STREAMT") {
             let fwd = format!("Stream{rest}");
-            let target = SoryntelApplication::eval_addin_call(
+            let target = AddinsUseCases::eval_addin_call(
                 db,
                 &mut u_tmp,
                 &fwd,
@@ -1554,7 +1554,7 @@ impl ExcelAddInsModuleState {
             self.test_args[4] = t1000;
         } else if let Some(rest) = upper.strip_prefix("FLOWT") {
             let fwd = format!("Flow{rest}");
-            let target = SoryntelApplication::eval_addin_call(
+            let target = AddinsUseCases::eval_addin_call(
                 db,
                 &mut u_tmp,
                 &fwd,
@@ -1595,7 +1595,7 @@ impl ExcelAddInsModuleState {
                 t25
             };
         } else if upper == "PROPT" {
-            let target = SoryntelApplication::eval_addin_call(
+            let target = AddinsUseCases::eval_addin_call(
                 db,
                 &mut u_tmp,
                 "H",
@@ -1678,7 +1678,7 @@ impl ExcelAddInsModuleState {
         self.formula_bar_text = raw_text;
     }
 
-    pub fn apply_formula_bar(&mut self, db: &ThermoDatabase) {
+    pub fn apply_formula_bar(&mut self, db: &dyn SpeciesCatalogPort) {
         let cell_ref = self.active_cell_ref.trim().to_ascii_uppercase();
         let val = self.formula_bar_text.clone();
         self.active_cell_ref = cell_ref.clone();
@@ -1826,7 +1826,7 @@ impl ExcelAddInsModuleState {
         }
     }
 
-    pub fn insert_formula_into_worksheet(&mut self, db: &ThermoDatabase, formula: String) {
+    pub fn insert_formula_into_worksheet(&mut self, db: &dyn SpeciesCatalogPort, formula: String) {
         let (r, c) = parse_a1(&self.active_cell_ref)
             .filter(|&(r, c)| r < WS_ROWS && c < WS_COLS)
             .unwrap_or((1, 2));
@@ -1885,7 +1885,7 @@ impl ExcelAddInsModuleState {
         }
     }
 
-    fn export_all_workbook(&self, db: &ThermoDatabase, format_ext: &str) -> Result<String, String> {
+    fn export_all_workbook(&self, db: &dyn SpeciesCatalogPort, format_ext: &str) -> Result<String, String> {
         let dir = std::path::Path::new(self.export_dir.trim());
         std::fs::create_dir_all(dir).map_err(|e| format!("No se pudo crear directorio: {e}"))?;
         let fname = format!("{}.{}", self.export_filename.trim(), format_ext);
@@ -1895,7 +1895,7 @@ impl ExcelAddInsModuleState {
         let p_val = self.eq_press_raw.trim().parse::<f64>().unwrap_or(1.0);
         let sheets = vec![
             self.build_worksheet_export_sheet(),
-            SoryntelApplication::addin_streameq_sheet(
+            AddinsUseCases::addin_streameq_sheet(
                 db,
                 &self.units,
                 &self.eq_species,
@@ -1903,13 +1903,13 @@ impl ExcelAddInsModuleState {
                 t_val,
                 p_val,
             ),
-            SoryntelApplication::addin_minerals_sheet(),
-            SoryntelApplication::addin_sample_sheet(db, &self.units),
+            AddinsUseCases::addin_minerals_sheet(),
+            AddinsUseCases::addin_sample_sheet(db, &self.units),
         ];
 
         let bytes = match format_ext {
-            "xlsx" => SoryntelApplication::export_workbook_xlsx(&sheets),
-            "ods" => SoryntelApplication::export_workbook_ods(&sheets),
+            "xlsx" => AddinsUseCases::export_workbook_xlsx(&sheets),
+            "ods" => AddinsUseCases::export_workbook_ods(&sheets),
             _ => return Err("Formato no soportado".into()),
         };
         crate::storage::write_atomic(&full_path, bytes).map_err(|e| format!("Error al escribir archivo: {e}"))?;
@@ -1922,15 +1922,15 @@ impl ExcelAddInsModuleState {
         let (fname, bytes): (&str, Vec<u8>) = match kind {
             "oxt" => (
                 "SoryntelHSC_Calc.oxt",
-                SoryntelApplication::export_libreoffice_oxt(self.bridge_port),
+                AddinsUseCases::export_libreoffice_oxt(self.bridge_port),
             ),
             "onlyoffice" => (
                 "SoryntelHSC_ONLYOFFICE.zip",
-                SoryntelApplication::export_onlyoffice_plugin(self.bridge_port),
+                AddinsUseCases::export_onlyoffice_plugin(self.bridge_port),
             ),
             "bas" => (
                 "SoryntelHSC.bas",
-                SoryntelApplication::export_excel_wps_vba(self.bridge_port).into_bytes(),
+                AddinsUseCases::export_excel_wps_vba(self.bridge_port).into_bytes(),
             ),
             _ => return Err("Conector de suite no reconocido".into()),
         };
@@ -1965,7 +1965,9 @@ impl ExcelAddInsModuleState {
         Ok(full_path.to_string_lossy().to_string())
     }
 
-    pub fn ui(&mut self, ctx: &egui::Context, db: &ThermoDatabase) {
+    pub fn ui<C: SpeciesCatalogPort + Send + Sync + 'static>(&mut self, ctx: &egui::Context, shared: Arc<RwLock<C>>) {
+        let catalog = shared.read().unwrap_or_else(|e| e.into_inner());
+        let db = &*catalog;
         self.ensure_initialized(db);
         if self.is_bridge_running() {
             self.pull_units_from_bridge_if_changed(db);
@@ -2008,11 +2010,11 @@ impl ExcelAddInsModuleState {
             self.render_addins_go_dialog(ctx, db);
         }
         if self.show_browse_dialog {
-            self.render_browse_xll_dialog(ctx, db);
+            self.render_browse_xll_dialog(ctx, db, &shared);
         }
 
         if self.show_file_backstage {
-            self.render_file_backstage(ctx, db);
+            self.render_file_backstage(ctx, db, &shared);
             return;
         }
 
@@ -2020,7 +2022,7 @@ impl ExcelAddInsModuleState {
         egui::TopBottomPanel::top("excel_addins_ribbon")
             .frame(egui::Frame::none().fill(EXCEL_RIBBON_BG))
             .show(ctx, |ui| {
-                self.render_title_and_ribbon(ui, db);
+                self.render_title_and_ribbon(ui, db, &shared);
                 self.render_formula_bar(ui, db);
             });
 
@@ -2048,7 +2050,7 @@ impl ExcelAddInsModuleState {
             });
     }
 
-    fn render_title_and_ribbon(&mut self, ui: &mut egui::Ui, db: &ThermoDatabase) {
+    fn render_title_and_ribbon<C: SpeciesCatalogPort + Send + Sync + 'static>(&mut self, ui: &mut egui::Ui, db: &dyn SpeciesCatalogPort, shared: &Arc<RwLock<C>>) {
         // Banda verde título + pestañas Excel 2013 (FILE / HOME / INSERT / PAGE LAYOUT / FORMULAS / ADD-INS)
         egui::Frame::none()
             .fill(EXCEL_GREEN)
@@ -2147,7 +2149,7 @@ impl ExcelAddInsModuleState {
                             if bridge_on {
                                 self.stop_bridge();
                             } else {
-                                self.start_bridge(db);
+                                self.start_bridge(shared);
                             }
                         }
 
@@ -2157,7 +2159,7 @@ impl ExcelAddInsModuleState {
                                 format_temp_unit_display(&self.units.temp_unit),
                                 self.units.energy_unit,
                                 self.units.pressure_unit,
-                                db.len()
+                                db.species_count()
                             ))
                             .size(11.0)
                             .color(egui::Color32::from_rgb(225, 245, 232)),
@@ -2403,7 +2405,7 @@ impl ExcelAddInsModuleState {
             });
     }
 
-    fn render_formula_bar(&mut self, ui: &mut egui::Ui, db: &ThermoDatabase) {
+    fn render_formula_bar(&mut self, ui: &mut egui::Ui, db: &dyn SpeciesCatalogPort) {
         egui::Frame::none()
             .fill(egui::Color32::WHITE)
             .stroke(egui::Stroke::new(1.0, EXCEL_BORDER))
@@ -2485,7 +2487,7 @@ impl ExcelAddInsModuleState {
         };
     }
 
-    fn render_sheet_tabs_and_status(&mut self, ui: &mut egui::Ui, db: &ThermoDatabase) {
+    fn render_sheet_tabs_and_status(&mut self, ui: &mut egui::Ui, db: &dyn SpeciesCatalogPort) {
         ui.horizontal(|ui| {
             let sheets = [
                 (AddInSheetTab::Worksheet, "Worksheet (A1:H24)"),
@@ -2544,7 +2546,7 @@ impl ExcelAddInsModuleState {
     // -------------------------------------------------------------------------
     // Hoja 1: Worksheet Editable (24x8 = A1:H24)
     // -------------------------------------------------------------------------
-    fn render_worksheet(&mut self, ui: &mut egui::Ui, db: &ThermoDatabase) {
+    fn render_worksheet(&mut self, ui: &mut egui::Ui, db: &dyn SpeciesCatalogPort) {
         egui::ScrollArea::both().show(ui, |ui| {
             ui.add_space(6.0);
             ui.horizontal(|ui| {
@@ -2686,7 +2688,7 @@ impl ExcelAddInsModuleState {
     // -------------------------------------------------------------------------
     // Hoja 2: StreamEQ (Cap. 30 Fig. 4-6)
     // -------------------------------------------------------------------------
-    fn render_streameq_sheet(&mut self, ui: &mut egui::Ui, db: &ThermoDatabase) {
+    fn render_streameq_sheet(&mut self, ui: &mut egui::Ui, db: &dyn SpeciesCatalogPort) {
         egui::ScrollArea::both().show(ui, |ui| {
             ui.add_space(8.0);
             ui.horizontal(|ui| {
@@ -3147,7 +3149,7 @@ impl ExcelAddInsModuleState {
     // -------------------------------------------------------------------------
     fn apply_grid_inline_commit(
         &mut self,
-        db: &ThermoDatabase,
+        db: &dyn SpeciesCatalogPort,
         row: usize,
         col: usize,
         val: String,
@@ -3187,7 +3189,7 @@ impl ExcelAddInsModuleState {
             self.min_paste_values = false;
             self.recalculate_minerals(db);
             if !is_f {
-                self.min_selected = SoryntelApplication::lookup_addin_mineral(&val)
+                self.min_selected = AddinsUseCases::lookup_addin_mineral(&val)
                     .or_else(|| self.min_selected.clone());
             }
             self.status_msg = format!("Minerals {cname} actualizado y recalculado.");
@@ -3203,7 +3205,7 @@ impl ExcelAddInsModuleState {
         self.select_cell(&cname, val);
     }
 
-    fn render_minerals_sheet(&mut self, ui: &mut egui::Ui, db: &ThermoDatabase) {
+    fn render_minerals_sheet(&mut self, ui: &mut egui::Ui, db: &dyn SpeciesCatalogPort) {
         const CMD_DOCS: &[(&str, &str, &str)] = &[
             (
                 "=MineralCode(B4)",
@@ -3275,7 +3277,7 @@ impl ExcelAddInsModuleState {
                         ui.label("Buscar mineral (3,812):");
                         if ui.text_edit_singleline(&mut self.min_search_query).changed() {
                             self.min_selected =
-                                SoryntelApplication::lookup_addin_mineral(&self.min_search_query);
+                                AddinsUseCases::lookup_addin_mineral(&self.min_search_query);
                         }
                         if ui.button("Recalcular").clicked() {
                             self.min_paste_values = false;
@@ -3424,7 +3426,7 @@ impl ExcelAddInsModuleState {
     // -------------------------------------------------------------------------
     // Hoja 4: AddInSample (con coordenadas A..I y filas reales)
     // -------------------------------------------------------------------------
-    fn render_sample_sheet(&mut self, ui: &mut egui::Ui, db: &ThermoDatabase) {
+    fn render_sample_sheet(&mut self, ui: &mut egui::Ui, db: &dyn SpeciesCatalogPort) {
         egui::ScrollArea::both().show(ui, |ui| {
             ui.add_space(8.0);
             ui.horizontal(|ui| {
@@ -3437,7 +3439,7 @@ impl ExcelAddInsModuleState {
                                 .color(EXCEL_GREEN_DARK),
                         );
                         if ui.button("Restaurar AddInSample").clicked() {
-                            let sample = SoryntelApplication::addin_sample_sheet(db, &self.units);
+                            let sample = AddinsUseCases::addin_sample_sheet(db, &self.units);
                             let (mr, mc) =
                                 load_export_sheet_into_cells(&sample, &mut self.sample_cells);
                             self.sample_max_row = mr;
@@ -3515,7 +3517,7 @@ impl ExcelAddInsModuleState {
     // -------------------------------------------------------------------------
     // Hoja 5: Functions (fx) Catalog & Live Tester (88 funciones)
     // -------------------------------------------------------------------------
-    fn render_functions_catalog(&mut self, ui: &mut egui::Ui, db: &ThermoDatabase) {
+    fn render_functions_catalog(&mut self, ui: &mut egui::Ui, db: &dyn SpeciesCatalogPort) {
         let mut selected_clicked: Option<(usize, AddInFunctionMeta)> = None;
 
         ui.horizontal_top(|ui| {
@@ -3688,7 +3690,7 @@ impl ExcelAddInsModuleState {
     // -------------------------------------------------------------------------
     // Modal: Elegir especie desde la Base de Datos Activa
     // -------------------------------------------------------------------------
-    fn render_species_picker_window(&mut self, ctx: &egui::Context, db: &ThermoDatabase) {
+    fn render_species_picker_window(&mut self, ctx: &egui::Context, db: &dyn SpeciesCatalogPort) {
         let mut open = self.show_species_picker;
         let mut picked: Option<String> = None;
         egui::Window::new("Elegir Especie de la Base de Datos")
@@ -3700,7 +3702,7 @@ impl ExcelAddInsModuleState {
                     ui.text_edit_singleline(&mut self.picker_query);
                 });
                 ui.separator();
-                let hits = db.search(&self.picker_query, 40);
+                let hits = db.search_species(&self.picker_query, 40);
                 egui::ScrollArea::vertical().max_height(260.0).show(ui, |ui| {
                     for sp in hits {
                         let lbl = format!("{}  ({:?}, M={:.3})", sp.formula, sp.phase, sp.molecular_weight);
@@ -3739,7 +3741,7 @@ impl ExcelAddInsModuleState {
     // -------------------------------------------------------------------------
     // Modal: Change measurement units... (Cap. 30 Sección 30.7)
     // -------------------------------------------------------------------------
-    fn render_units_modal_dialog(&mut self, ctx: &egui::Context, db: &ThermoDatabase) {
+    fn render_units_modal_dialog(&mut self, ctx: &egui::Context, db: &dyn SpeciesCatalogPort) {
         let mut open = self.show_units_dialog;
         let mut apply = false;
         let mut cancel = false;
@@ -3858,7 +3860,7 @@ impl ExcelAddInsModuleState {
     // -------------------------------------------------------------------------
     // Modal: Excel Add-Ins Go... (Cap. 30 Fig. 3)
     // -------------------------------------------------------------------------
-    fn render_addins_go_dialog(&mut self, ctx: &egui::Context, db: &ThermoDatabase) {
+    fn render_addins_go_dialog(&mut self, ctx: &egui::Context, db: &dyn SpeciesCatalogPort) {
         let mut open = self.show_addins_go_dialog;
         let mut changed = false;
         let mut close_ok = false;
@@ -3937,7 +3939,7 @@ impl ExcelAddInsModuleState {
     // -------------------------------------------------------------------------
     // Modal: Browse HSC-Excel.xll / Cross-Suite Connectors (Cap. 30 Fig. 3)
     // -------------------------------------------------------------------------
-    fn render_browse_xll_dialog(&mut self, ctx: &egui::Context, db: &ThermoDatabase) {
+    fn render_browse_xll_dialog<C: SpeciesCatalogPort + Send + Sync + 'static>(&mut self, ctx: &egui::Context, db: &dyn SpeciesCatalogPort, shared: &Arc<RwLock<C>>) {
         const FILES: &[(&str, &str, &str, &str)] = &[
             (
                 "HSC10-Excel.xll",
@@ -4070,7 +4072,7 @@ impl ExcelAddInsModuleState {
                 );
             } else {
                 if !self.is_bridge_running() {
-                    self.start_bridge(db);
+                    self.start_bridge(shared);
                 }
                 match self.export_suite_connector(kind) {
                     Ok(path) => {
@@ -4094,7 +4096,7 @@ impl ExcelAddInsModuleState {
     // -------------------------------------------------------------------------
     // FILE Backstage (Options Fig. 1-3, Open/Samples, Cross-Suite Bridge & Export)
     // -------------------------------------------------------------------------
-    fn render_file_backstage(&mut self, ctx: &egui::Context, db: &ThermoDatabase) {
+    fn render_file_backstage<C: SpeciesCatalogPort + Send + Sync + 'static>(&mut self, ctx: &egui::Context, db: &dyn SpeciesCatalogPort, shared: &Arc<RwLock<C>>) {
         egui::SidePanel::left("file_backstage_nav")
             .exact_width(195.0)
             .frame(egui::Frame::none().fill(EXCEL_GREEN).inner_margin(10.0))
@@ -4141,7 +4143,7 @@ impl ExcelAddInsModuleState {
                     ui.heading("HSC Excel Add-Ins — Arquitectura Híbrida (Standalone + Cross-Suite)");
                     ui.separator();
                     ui.label("• Modo Standalone: 83 funciones activas + 5 HSC-Sim ejecutándose en Rust dentro de Soryntel sin dependencias externas.");
-                    ui.label(format!("• Base de datos activa: {} especies cargadas.", db.len()));
+                    ui.label(format!("• Base de datos activa: {} especies cargadas.", db.species_count()));
                     ui.label("• Minerales integrados: 3,812 registros (Cap. 30 Fig. 7 editable inline).");
                     ui.label("• Compatibilidad externa opcional: Microsoft Excel, LibreOffice Calc (.ods / .oxt), ONLYOFFICE (.zip) y WPS Office (.bas / =WEBSERVICE).");
                     ui.add_space(8.0);
@@ -4241,7 +4243,7 @@ impl ExcelAddInsModuleState {
                                 )
                                 .clicked()
                             {
-                                self.start_bridge(db);
+                                self.start_bridge(shared);
                             }
                             ui.label(format!(
                                 "Unidades activas: {} / {} / {}",
@@ -4343,7 +4345,7 @@ impl ExcelAddInsModuleState {
                         } else {
                             vec![self.webservice_a.trim(), self.webservice_b.trim()]
                         };
-                        let ws_formula = SoryntelApplication::addin_webservice_formula(
+                        let ws_formula = AddinsUseCases::addin_webservice_formula(
                             self.bridge_port,
                             self.webservice_fn.trim(),
                             &args,
@@ -4637,7 +4639,7 @@ impl ExcelAddInsModuleState {
                             .font(egui::FontId::monospace(12.0)),
                     );
                     if resp.changed() || ui.button("Convertir").clicked() {
-                        let (out, warn) = SoryntelApplication::migrate_addin_formula(&self.migrator_input);
+                        let (out, warn) = AddinsUseCases::migrate_addin_formula(&self.migrator_input);
                         self.migrator_output = out;
                         self.migrator_warnings = warn;
                     }
