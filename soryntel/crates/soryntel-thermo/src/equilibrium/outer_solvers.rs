@@ -79,7 +79,7 @@ fn validate_sweep(params: &EquilibriumParams) -> Result<(), SoryntelError> {
 }
 
 /// Executes a full 0D, 1D, or 2D equilibrium sweep (including `N,H,P`, `N,P,V`, `Target`, and `Cell Mode`).
-pub fn solve_equilibrium_sweep<R: SpeciesRepository>(
+pub fn solve_equilibrium_sweep<R: SpeciesRepository + ?Sized>(
     system: &EquilibriumSystem,
     params: &EquilibriumParams,
     repo: &R,
@@ -229,7 +229,7 @@ pub fn solve_equilibrium_sweep<R: SpeciesRepository>(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn solve_state_point<R: SpeciesRepository>(
+fn solve_state_point<R: SpeciesRepository + ?Sized>(
     system: &EquilibriumSystem,
     params: &EquilibriumParams,
     repo: &R,
@@ -285,7 +285,7 @@ fn solve_state_point<R: SpeciesRepository>(
 /// Solves Adiabatic Equilibrium (`N,H,P`): find `T_eq in [200 K, 20000 K]` such that
 /// `ReactionEnthalpy(T_eq) == target_h_mj` (or `H_eq(T_eq) - H_in == target_h_mj`).
 #[allow(clippy::too_many_arguments)]
-fn solve_adiabatic_nhp<R: SpeciesRepository>(
+fn solve_adiabatic_nhp<R: SpeciesRepository + ?Sized>(
     system: &EquilibriumSystem,
     params: &EquilibriumParams,
     repo: &R,
@@ -349,7 +349,7 @@ fn solve_adiabatic_nhp<R: SpeciesRepository>(
 /// Solves Constant Volume (`N,P,V`): bisection on Pressure (when T is fixed/stepped)
 /// or on Temperature (when P is stepped/fixed and T is the dependent variable).
 #[allow(clippy::too_many_arguments)]
-fn solve_constant_volume_npv<R: SpeciesRepository>(
+fn solve_constant_volume_npv<R: SpeciesRepository + ?Sized>(
     system: &EquilibriumSystem,
     params: &EquilibriumParams,
     repo: &R,
@@ -470,7 +470,7 @@ fn solve_constant_volume_npv<R: SpeciesRepository>(
 }
 
 /// Evaluates a single value `v` of `params.primary_var` for Target Calculations (`13.4.6`).
-fn eval_target_point_at<R: SpeciesRepository>(
+fn eval_target_point_at<R: SpeciesRepository + ?Sized>(
     system: &EquilibriumSystem,
     params: &EquilibriumParams,
     repo: &R,
@@ -517,7 +517,7 @@ fn eval_target_point_at<R: SpeciesRepository>(
 
 /// Solves Target Calculations (`TargetSpec`) by scanning/bisecting `primary_var`
 /// to reach `target_amount_kmol` of `target_species`.
-fn solve_target_calculation<R: SpeciesRepository>(
+fn solve_target_calculation<R: SpeciesRepository + ?Sized>(
     system: &EquilibriumSystem,
     params: &EquilibriumParams,
     repo: &R,
@@ -627,7 +627,7 @@ fn axis_values_for_var(params: &EquilibriumParams, var: SweepVariable) -> Vec<f6
     }
 }
 
-fn build_step_inputs<R: SpeciesRepository>(
+fn build_step_inputs<R: SpeciesRepository + ?Sized>(
     system: &EquilibriumSystem,
     params: &EquilibriumParams,
     repo: &R,
@@ -706,7 +706,7 @@ fn build_step_inputs<R: SpeciesRepository>(
 }
 
 /// Collects Cp extrapolation warnings for the `Warnings` dialog (Figs. 35–38).
-pub fn collect_cp_warnings<R: SpeciesRepository>(
+pub fn collect_cp_warnings<R: SpeciesRepository + ?Sized>(
     system: &EquilibriumSystem,
     params: &EquilibriumParams,
     repo: &R,

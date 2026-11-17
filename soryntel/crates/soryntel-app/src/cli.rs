@@ -1,7 +1,5 @@
-use crate::{
-    composition::{self, CalculationRequest},
-    http,
-};
+use crate::{composition, http};
+use soryntel_application::models::reaction::CalculationRequest;
 use soryntel_application::use_cases::ReactionUseCases;
 use soryntel_core::{EnergyUnit, ResultFormat, TemperatureUnit};
 

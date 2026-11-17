@@ -37,7 +37,7 @@ pub(crate) struct ResolvedSpecies {
 
 /// Solves a single-point isothermal-isobaric (N, T, P) equilibrium problem.
 #[allow(clippy::too_many_arguments)]
-pub fn solve_single_point<R: SpeciesRepository>(
+pub fn solve_single_point<R: SpeciesRepository + ?Sized>(
     system: &EquilibriumSystem,
     params: &EquilibriumParams,
     repo: &R,
@@ -904,7 +904,7 @@ pub fn solve_linear_system(a: &mut [Vec<f64>], b: &mut [f64]) -> Result<Vec<f64>
     Ok(x)
 }
 
-fn resolve_species_data<R: SpeciesRepository>(
+fn resolve_species_data<R: SpeciesRepository + ?Sized>(
     sp_in: &crate::equilibrium::model::EquilibriumSpeciesInput,
     repo: &R,
 ) -> Result<ChemicalSpecies, SoryntelError> {

@@ -7,9 +7,6 @@ use std::{
     sync::Arc,
 };
 
-// Until application exposes this request DTO, wire the domain type here.
-pub(crate) use soryntel_thermo::CalculationRequest;
-
 /// Resuelve OwnDB > MainDB > OpenDefault, igual que el escritorio.
 /// Antes OpenDefault tenía prioridad sobre MainDB en el CLI.
 pub(crate) fn catalog(custom_main: Option<&str>) -> Arc<dyn SpeciesCatalogPort + Send + Sync> {

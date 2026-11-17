@@ -6,7 +6,6 @@ edition.workspace = true
 [dependencies]
 soryntel-core = { path = "../soryntel-core" }
 soryntel-application = { path = "../soryntel-application" }
-soryntel-thermo = { path = "../soryntel-thermo" }
 soryntel-db = { path = "../soryntel-db" }
 serde.workspace = true
 serde_json.workspace = true
