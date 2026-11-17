@@ -1,5 +1,5 @@
 use eframe::egui::{self, Color32, Painter, Pos2, Rect, Stroke, Vec2};
-use soryntel_thermo::sim::model::UnitKind;
+use soryntel_application::models::simulation::UnitKind;
 
 /// Render the 15 schematic equipment icons inside the `Icons` dock gallery and on unit shapes (Fig. 65).
 pub fn draw_equipment_icon(painter: &Painter, rect: Rect, icon_key: &str) {

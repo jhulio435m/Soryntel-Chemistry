@@ -8,7 +8,7 @@
 use serde_json::{json, Value};
 use soryntel_application::use_cases::AddinsUseCases;
 use soryntel_core::SpeciesCatalogPort;
-use soryntel_thermo::excel_addins::{
+use soryntel_application::models::addins::{
     AddInOrigin, AddInUnits, ArgValue, CellEvalValue,
 };
 use std::collections::BTreeMap;

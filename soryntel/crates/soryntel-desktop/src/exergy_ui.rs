@@ -7,11 +7,9 @@ use crate::excel_grid::{
 use eframe::egui;
 use soryntel_core::TemperatureUnit;
 use soryntel_application::ports::SpeciesCatalogPort;
-use soryntel_application::use_cases::CatalogUseCases;
-// Tipos de modelo de thermo usados como estado de la UI. `ExergyWorkbook::calculate` aún no
-// tiene caso de uso (falta p. ej. `MiscUseCases::calculate_exergy`).
-use soryntel_thermo::exergy::{ExergySide, ExergyStreamKind, ExergyWorkbook};
-use soryntel_thermo::Phase;
+use soryntel_application::use_cases::{CatalogUseCases, MiscUseCases};
+use soryntel_application::models::exergy::{ExergySide, ExergyStreamKind, ExergyWorkbook};
+use soryntel_core::Phase;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ExergyEnergyUnit {
@@ -91,7 +89,7 @@ pub struct ExergyModuleState {
 impl ExergyModuleState {
     pub fn new(db: &dyn SpeciesCatalogPort) -> Self {
         let mut wb = ExergyWorkbook::new_default();
-        wb.calculate(db);
+        MiscUseCases::calculate_exergy(db, &mut wb);
         let n = wb.streams.len();
         Self {
             wb,
@@ -166,7 +164,7 @@ impl ExergyModuleState {
                     ui.menu_button(crate::i18n::text("common.001"), |ui| {
                         if ui.button("New (Fig. 1 Default)").clicked() {
                             self.wb = ExergyWorkbook::new_default();
-                            self.wb.calculate(db);
+                            MiscUseCases::calculate_exergy(db, &mut self.wb);
                             self.selected_stream = Some(0);
                             self.selected_species = None;
                             self.sync_input_buffers();
@@ -175,7 +173,7 @@ impl ExergyModuleState {
                         }
                         if ui.button("Load Example (Fig. 2 CuS/FeS)").clicked() {
                             self.wb = ExergyWorkbook::new_fig2_example();
-                            self.wb.calculate(db);
+                            MiscUseCases::calculate_exergy(db, &mut self.wb);
                             self.selected_stream = Some(0);
                             self.selected_species = None;
                             self.sync_input_buffers();
@@ -185,7 +183,7 @@ impl ExergyModuleState {
                         }
                         if ui.button("Load Example (Sulphides Roasting 15-col)").clicked() {
                             self.wb = ExergyWorkbook::new_sulphides_example();
-                            self.wb.calculate(db);
+                            MiscUseCases::calculate_exergy(db, &mut self.wb);
                             self.selected_stream = Some(0);
                             self.selected_species = None;
                             self.sync_input_buffers();
@@ -207,7 +205,7 @@ impl ExergyModuleState {
                                 .and_then(|raw| ExergyWorkbook::from_exe8_str(&raw))
                             {
                                 Ok(mut wb) => {
-                                    wb.calculate(db);
+                                    MiscUseCases::calculate_exergy(db, &mut wb);
                                     self.wb = wb;
                                     self.selected_stream = Some(0);
                                     self.selected_species = None;
@@ -243,7 +241,7 @@ impl ExergyModuleState {
 
                     ui.menu_button(crate::i18n::text("common.006"), |ui| {
                         if ui.button(crate::i18n::text("common.011")).clicked() {
-                            self.wb.calculate(db);
+                            MiscUseCases::calculate_exergy(db, &mut self.wb);
                             self.status_msg = "Balance de exergía recalculado".to_string();
                             ui.close_menu();
                         }
@@ -251,7 +249,7 @@ impl ExergyModuleState {
                             let idx = self.wb.insert_stream(self.insert_side, self.insert_kind);
                             self.selected_stream = Some(idx);
                             self.selected_species = None;
-                            self.wb.calculate(db);
+                            MiscUseCases::calculate_exergy(db, &mut self.wb);
                             self.sync_input_buffers();
                             ui.close_menu();
                         }
@@ -260,7 +258,7 @@ impl ExergyModuleState {
                                 self.wb.delete_stream(s_idx);
                                 self.selected_stream = None;
                                 self.selected_species = None;
-                                self.wb.calculate(db);
+                                MiscUseCases::calculate_exergy(db, &mut self.wb);
                                 self.sync_input_buffers();
                             }
                             ui.close_menu();
@@ -269,7 +267,7 @@ impl ExergyModuleState {
                             if let Some((s_idx, r_idx)) = self.selected_species {
                                 self.wb.delete_species(s_idx, r_idx);
                                 self.selected_species = None;
-                                self.wb.calculate(db);
+                                MiscUseCases::calculate_exergy(db, &mut self.wb);
                             }
                             ui.close_menu();
                         }
@@ -337,7 +335,7 @@ impl ExergyModuleState {
                                     self.wb.insert_stream(self.insert_side, self.insert_kind);
                                 self.selected_stream = Some(idx);
                                 self.selected_species = None;
-                                self.wb.calculate(db);
+                                MiscUseCases::calculate_exergy(db, &mut self.wb);
                                 self.sync_input_buffers();
                             }
                             egui::ComboBox::from_id_salt("exergy_side_combo")
@@ -393,7 +391,7 @@ impl ExergyModuleState {
                                     self.wb.delete_stream(s_idx);
                                     self.selected_stream = None;
                                     self.selected_species = None;
-                                    self.wb.calculate(db);
+                                    MiscUseCases::calculate_exergy(db, &mut self.wb);
                                     self.sync_input_buffers();
                                 }
                             }
@@ -404,14 +402,14 @@ impl ExergyModuleState {
                                 if let Some((s_idx, r_idx)) = self.selected_species {
                                     self.wb.delete_species(s_idx, r_idx);
                                     self.selected_species = None;
-                                    self.wb.calculate(db);
+                                    MiscUseCases::calculate_exergy(db, &mut self.wb);
                                 }
                             }
                             if ui
                                 .add_sized([172.0, 24.0], egui::Button::new("Calculate"))
                                 .clicked()
                             {
-                                self.wb.calculate(db);
+                                MiscUseCases::calculate_exergy(db, &mut self.wb);
                                 self.status_msg = "Cálculo actualizado".to_string();
                             }
                         });
@@ -1218,7 +1216,7 @@ impl ExergyModuleState {
             }
         }
         if recalc_needed {
-            self.wb.calculate(db);
+            MiscUseCases::calculate_exergy(db, &mut self.wb);
         }
     }
 
@@ -1269,7 +1267,7 @@ impl ExergyModuleState {
             if let Err(e) = self.wb.add_species_to_stream(target, &formula, 1.0) {
                 self.status_msg = e;
             } else {
-                self.wb.calculate(db);
+                MiscUseCases::calculate_exergy(db, &mut self.wb);
                 self.status_msg = format!("Insertado '{formula}' desde Maindb6");
             }
         }

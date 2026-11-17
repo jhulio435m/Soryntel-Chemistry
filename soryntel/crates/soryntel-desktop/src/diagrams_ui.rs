@@ -2,17 +2,12 @@ use eframe::egui;
 use serde::{Deserialize, Serialize};
 use soryntel_application::use_cases::{CatalogUseCases, MiscUseCases};
 use soryntel_core::SpeciesWorkspacePort;
-// Tipos de modelo de thermo usados como estado de la UI. `balanced_coeff_for_element`,
-// `species_db_temp_range` y `ellingham_*` son helpers de dominio puros sin caso de uso todavía.
-use soryntel_thermo::{
-    diagrams::{
-        balanced_coeff_for_element, ellingham_po2_isoline_val,
-        ellingham_scales_at, species_db_temp_range, DiagramEnergyUnit, DiagramRequest,
-        DiagramResult, DiagramSeries, DiagramSpeciesInput, DiagramType,
-    },
-    species::DbSource,
-    ChemicalSpecies,
+use soryntel_application::models::diagrams::{
+    DiagramEnergyUnit, DiagramRequest, DiagramResult, DiagramSeries, DiagramSpeciesInput,
+    DiagramType,
 };
+use soryntel_core::catalog::DbSource;
+use soryntel_core::ChemicalSpecies;
 
 
 use crate::excel_grid::{
@@ -135,7 +130,7 @@ impl DiagramRow {
 
     fn refresh_db_range(&mut self, db: &dyn SpeciesWorkspacePort, in_kelvin: bool) {
         if let Some(sp) = self.resolve_species(db) {
-            let (tmin_k, tmax_k) = species_db_temp_range(&sp);
+            let (tmin_k, tmax_k) = MiscUseCases::diagram_species_temp_range(&sp);
             let off = if in_kelvin { 0.0 } else { 273.15 };
             self.t_min_str = format!("{:.2}", tmin_k - off);
             self.t_max_str = format!("{:.2}", tmax_k - off);
@@ -332,7 +327,7 @@ impl DiagramsModuleState {
                 continue;
             }
             if let Some(c) =
-                balanced_coeff_for_element(r.formula.trim(), &self.balance_element, target)
+                MiscUseCases::diagram_balanced_coeff_for_element(r.formula.trim(), &self.balance_element, target)
             {
                 r.coeff_str = format!("{c:.2}");
             }
@@ -1244,8 +1239,8 @@ impl DiagramsModuleState {
             let iso_col = egui::Color32::from_rgba_unmultiplied(120, 130, 150, 125);
             let iso_stroke = egui::Stroke::new(0.85, iso_col);
             for &log_po2 in &[-40.0, -30.0, -20.0, -15.0, -10.0, -5.0, 0.0] {
-                let y0 = ellingham_po2_isoline_val(t_min + off, log_po2, bal_atoms, self.energy_unit);
-                let y1 = ellingham_po2_isoline_val(t_max + off, log_po2, bal_atoms, self.energy_unit);
+                let y0 = MiscUseCases::ellingham_po2_isoline_val(t_min + off, log_po2, bal_atoms, self.energy_unit);
+                let y1 = MiscUseCases::ellingham_po2_isoline_val(t_max + off, log_po2, bal_atoms, self.energy_unit);
                 draw_dashed_line(
                     &clipped,
                     egui::pos2(x_to_px(t_min), y_to_px(y0)),
@@ -1333,7 +1328,7 @@ impl DiagramsModuleState {
                 let y_hov = y_min + fy as f64 * (y_max - y_min);
                 let mut tip = format!("T: {t_hov:.1}\nY: {y_hov:.2} {}", res.y_unit);
                 if res.diagram_type == DiagramType::DeltaGEllingham && !self.per_kg {
-                    let sc = ellingham_scales_at(
+                    let sc = MiscUseCases::ellingham_scales_at(
                         (t_hov + off).max(1.0),
                         y_hov,
                         bal_atoms,
@@ -1483,7 +1478,7 @@ mod tests {
     use super::*;
     use soryntel_db::ThermoDatabase;
     use soryntel_core::CAL_TO_JOULE;
-    use soryntel_thermo::{KelleyCoefficients, Phase, SpeciesThermoInterval};
+    use soryntel_core::{KelleyCoefficients, Phase, SpeciesThermoInterval};
     use std::collections::BTreeSet;
 
     #[test]

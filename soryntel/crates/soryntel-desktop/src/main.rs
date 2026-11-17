@@ -168,7 +168,7 @@ fn main() -> eframe::Result<()> {
     if let Some(port) = bridge_port {
         let db_arc = services.shared_catalog();
         let units_arc = std::sync::Arc::new(std::sync::Mutex::new(
-            soryntel_thermo::excel_addins::AddInUnits::default(),
+            soryntel_application::models::addins::AddInUnits::default(),
         ));
         if let Err(err) = addins_bridge::run_bridge_blocking(db_arc, units_arc, port) {
             eprintln!("Error iniciando HTTP Bridge en puerto {port}: {err}");
@@ -178,7 +178,7 @@ fn main() -> eframe::Result<()> {
     }
 
     if let Some(cli_args) = eval_cli {
-        let mut units = soryntel_thermo::excel_addins::AddInUnits::default();
+        let mut units = soryntel_application::models::addins::AddInUnits::default();
         let target = &cli_args[0];
         let val = if target.trim_start().starts_with('=') {
             AddinsUseCases::eval_addin_formula(&*services.catalog(), &mut units, target, |_, _| {
@@ -186,7 +186,7 @@ fn main() -> eframe::Result<()> {
             })
         } else {
             let fn_upper = target.trim().to_ascii_uppercase();
-            let args_vec: Vec<soryntel_thermo::excel_addins::ArgValue> = cli_args[1..]
+            let args_vec: Vec<soryntel_application::models::addins::ArgValue> = cli_args[1..]
                 .iter()
                 .enumerate()
                 .map(|(idx, s)| {
@@ -205,11 +205,11 @@ fn main() -> eframe::Result<()> {
                         } else {
                             ','
                         };
-                        soryntel_thermo::excel_addins::ArgValue::Range(
+                        soryntel_application::models::addins::ArgValue::Range(
                             s.split(sep).map(|x| x.trim().to_string()).collect(),
                         )
                     } else {
-                        soryntel_thermo::excel_addins::ArgValue::Scalar(s.clone())
+                        soryntel_application::models::addins::ArgValue::Scalar(s.clone())
                     }
                 })
                 .collect();
@@ -470,9 +470,9 @@ struct SoryntelDesktopApp {
     units_state: units_ui::UnitsModuleState,
     excel_addins_state: excel_addins_ui::ExcelAddInsModuleState,
     sim_state: sim_ui::SimModuleState,
-    lca_standalone_project: soryntel_thermo::sim::model::SimProject,
+    lca_standalone_project: soryntel_application::models::simulation::SimProject,
     lca_state: lca_ui::LcaWindowState,
-    mb_standalone_project: soryntel_thermo::sim::model::SimProject,
+    mb_standalone_project: soryntel_application::models::simulation::SimProject,
     mb_state: mass_balance_ui::MassBalanceWindowState,
     species_state: species_ui::SpeciesModuleState,
     launcher_ui_state: launcher_ui::LauncherUiState,

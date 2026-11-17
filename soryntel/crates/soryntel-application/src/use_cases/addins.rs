@@ -2,6 +2,26 @@
 use super::super::*;
 pub struct AddinsUseCases;
 impl AddinsUseCases {
+    /// Formato numérico de celda de los add-ins (`#NUM!` para valores no finitos).
+    pub fn format_cell_number(v: f64, decimals: usize) -> String {
+        soryntel_thermo::excel_addins::format_cell_number(v, decimals)
+    }
+
+    /// Etiqueta de unidad de temperatura para mostrar (p. ej. `°C`, `K`).
+    pub fn format_temp_unit_display(u: &str) -> String {
+        soryntel_thermo::excel_addins::format_temp_unit_display(u)
+    }
+
+    /// Analiza una referencia A1 (admite `$`) como `(fila, columna)` con base 0.
+    pub fn parse_a1(token: &str) -> Option<(usize, usize)> {
+        soryntel_thermo::excel_addins::parse_a1(token)
+    }
+
+    /// Letra(s) de columna A1 para el índice de columna con base 0.
+    pub fn col_to_a1(col: usize) -> String {
+        soryntel_thermo::spreadsheet_export::col_to_a1(col)
+    }
+
     fn is_range_slot(fn_upper: &str, arg_idx: usize) -> bool {
         if fn_upper.starts_with("STREAM") || fn_upper.starts_with("FLOW") || fn_upper == "DENSITYA"
         {

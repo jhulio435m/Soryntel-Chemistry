@@ -14,12 +14,10 @@
 use eframe::egui;
 use soryntel_application::use_cases::MiscUseCases;
 use soryntel_core::SpeciesCatalogPort;
-use soryntel_thermo::{
-    elements::{
-        ElementCategory, ElementWorkbook, PeriodicDiagramData, StandardState, PERIODIC_ELEMENTS,
-    },
-    ChemicalSpecies, Phase,
+use soryntel_application::models::elements::{
+    ElementCategory, ElementWorkbook, PeriodicDiagramData, StandardState, PERIODIC_ELEMENTS,
 };
+use soryntel_core::{ChemicalSpecies, Phase};
 use std::collections::HashMap;
 
 use crate::excel_grid::{

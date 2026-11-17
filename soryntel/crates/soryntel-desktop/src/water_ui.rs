@@ -14,13 +14,10 @@ use eframe::egui;
 use egui_plot::{Legend, Line, Plot, PlotPoints};
 use soryntel_application::use_cases::WaterUseCases;
 use soryntel_core::SpeciesCatalogPort;
-use soryntel_thermo::{
-    balance::{H2O_PC_BAR, H2O_TC_K},
-    water::{
-        WaterAmountUnit, WaterCalcRequest,
-        WaterCalcResult, WaterDensityUnit, WaterDiagramCurves, WaterEnergyUnit, WaterPhaseMode,
-        WaterPressureUnit, WaterTempUnit, H2O_MOL_WEIGHT, H2O_PT_BAR, H2O_TT_K,
-    },
+use soryntel_application::models::water::{
+    WaterAmountUnit, WaterCalcRequest, WaterCalcResult, WaterDensityUnit, WaterDiagramCurves,
+    WaterEnergyUnit, WaterPhaseMode, WaterPressureUnit, WaterTempUnit, H2O_MOL_WEIGHT, H2O_PC_BAR,
+    H2O_PT_BAR, H2O_TC_K, H2O_TT_K,
 };
 
 use crate::excel_grid::{EXCEL_GRID_BORDER, EXCEL_HEADER_BORDER};

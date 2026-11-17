@@ -3,16 +3,9 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use eframe::egui;
 use serde::{Deserialize, Serialize};
 use soryntel_application::ports::SpeciesCatalogPort;
-use soryntel_application::use_cases::{CatalogUseCases, MiscUseCases};
-// Tipos de modelo de thermo usados como estado de la UI. `delta_g_formation_h2o_kcal`,
-// `water_dielectric_constant` y `evaluate_species_si` aún no tienen caso de uso en `MiscUseCases`.
-use soryntel_thermo::{
-    ehph::{
-        delta_g_formation_h2o_kcal, water_dielectric_constant, EhPhRequest,
-        EhPhResult, ElementSpec, PotentialScale,
-    },
-    evaluate_species_si, ChemicalSpecies, Phase,
-};
+use soryntel_application::use_cases::{CatalogUseCases, EquilibriumUseCases, MiscUseCases};
+use soryntel_application::models::ehph::{EhPhRequest, EhPhResult, ElementSpec, PotentialScale};
+use soryntel_core::{ChemicalSpecies, Phase};
 
 use crate::excel_grid::{
     header_cell, row_num_cell, section_cell, text_cell, widget_cell, EXCEL_ALT_ROW_BG,
@@ -309,7 +302,7 @@ impl EhPhModuleState {
             temp_in_kelvin: false,
             elem_mol_bufs: HashMap::new(),
             elem_pres_bufs: HashMap::new(),
-            dielectric_str: format!("{:.3}", water_dielectric_constant(298.15)),
+            dielectric_str: format!("{:.3}", MiscUseCases::ehph_water_dielectric_constant(298.15)),
             delta_g_h2o_str: "-56.678".to_string(),
             use_davies: false,
             ionic_strength_str: "0.000".to_string(),
@@ -388,8 +381,8 @@ impl EhPhModuleState {
 
     fn update_temp_derived(&mut self, db: &dyn SpeciesCatalogPort) {
         let tk = self.t_k();
-        self.dielectric_str = format!("{:.3}", water_dielectric_constant(tk));
-        let dg = delta_g_formation_h2o_kcal(db, tk, self.criss_cobble);
+        self.dielectric_str = format!("{:.3}", MiscUseCases::ehph_water_dielectric_constant(tk));
+        let dg = MiscUseCases::ehph_delta_g_formation_h2o_kcal(db, tk, self.criss_cobble);
         self.delta_g_h2o_str = format!("{dg:.3}");
     }
 
@@ -2382,7 +2375,7 @@ impl EhPhModuleState {
                             stroke,
                         );
                     }
-                    let mut by_pair: BTreeMap<(&str, &str), Vec<&soryntel_thermo::ehph::BoundarySegment>> =
+                    let mut by_pair: BTreeMap<(&str, &str), Vec<&soryntel_application::models::ehph::BoundarySegment>> =
                         BTreeMap::new();
                     for seg in &res.segments {
                         let p1 = egui::pos2(ph_to_x(seg.x1_ph), eh_to_y(seg.y1_v));
@@ -2534,7 +2527,7 @@ impl EhPhModuleState {
                                 );
                                 ui.end_row();
                             }
-                            if let Ok((pt, _)) = evaluate_species_si(&sp, tk, self.criss_cobble, false) {
+                            if let Ok((pt, _)) = MiscUseCases::evaluate_species_point(&sp, tk, self.criss_cobble, false) {
                                 ui.strong(format!("H({:.2} K):", tk));
                                 ui.label(format!("{:.3} kJ/mol", pt.h / 1000.0));
                                 ui.end_row();
@@ -2847,7 +2840,7 @@ fn draw_ehph_plot_frame(
 }
 
 fn is_ehph_organic(formula: &str) -> bool {
-    let Ok(parsed) = soryntel_solver::parse_term(formula) else {
+    let Ok(parsed) = EquilibriumUseCases::parse_species_term(formula) else {
         return false;
     };
     if !(parsed.elements.contains_key("C") && parsed.elements.contains_key("H")) {
@@ -2866,15 +2859,15 @@ fn xml_escape(s: &str) -> String {
         .replace('>', "&gt;")
 }
 
-fn phase_region_color(phase: soryntel_thermo::Phase) -> egui::Color32 {
+fn phase_region_color(phase: soryntel_core::Phase) -> egui::Color32 {
     match phase {
-        soryntel_thermo::Phase::Solid | soryntel_thermo::Phase::Liquid => {
+        soryntel_core::Phase::Solid | soryntel_core::Phase::Liquid => {
             egui::Color32::from_rgb(167, 243, 167)
         }
-        soryntel_thermo::Phase::AqueousIon | soryntel_thermo::Phase::AqueousNeutral => {
+        soryntel_core::Phase::AqueousIon | soryntel_core::Phase::AqueousNeutral => {
             egui::Color32::from_rgb(249, 178, 178)
         }
-        soryntel_thermo::Phase::Gas => egui::Color32::from_rgb(191, 219, 254),
+        soryntel_core::Phase::Gas => egui::Color32::from_rgb(191, 219, 254),
     }
 }
 
@@ -2898,7 +2891,7 @@ mod tests {
     use super::*;
     use soryntel_db::ThermoDatabase as SpeciesDb;
     use soryntel_core::CAL_TO_JOULE;
-    use soryntel_thermo::{KelleyCoefficients, SpeciesThermoInterval};
+    use soryntel_core::{KelleyCoefficients, SpeciesThermoInterval};
 
     fn synth_sp(formula: &str, phase: Phase, charge: i32, dg_kcal: f64) -> ChemicalSpecies {
         ChemicalSpecies {

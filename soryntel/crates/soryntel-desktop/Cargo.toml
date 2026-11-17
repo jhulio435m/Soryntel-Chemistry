@@ -5,8 +5,6 @@ edition.workspace = true
 
 [dependencies]
 soryntel-core = { path = "../soryntel-core" }
-soryntel-solver = { path = "../soryntel-solver" }
-soryntel-thermo = { path = "../soryntel-thermo" }
 soryntel-application = { path = "../soryntel-application" }
 soryntel-db = { path = "../soryntel-db" }
 eframe = "0.29"

@@ -23,7 +23,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use serde::{Deserialize, Serialize};
 use soryntel_solver::parse_term;
 
-use crate::minerals_data::{MineralRawRow, MINERALS_RAW};
+pub use crate::minerals_data::MineralRawRow;
+use crate::minerals_data::MINERALS_RAW;
 use crate::sim::model::SimProject;
 use crate::species_converter::{
     solve_species_conversion, ConversionMethod, ConverterInputEntry, ConverterOutputSpec,

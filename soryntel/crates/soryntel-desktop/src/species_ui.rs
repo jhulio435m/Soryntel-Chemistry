@@ -26,8 +26,8 @@ use soryntel_core::{
     ChemicalSpecies, KelleyCoefficients, Phase, SpeciesMetadata, SpeciesThermoInterval,
     SpeciesWorkspacePort, CAL_TO_JOULE, T_REF_K,
 };
-use soryntel_thermo::elements::PERIODIC_ELEMENTS;
-use soryntel_thermo::species::{
+use soryntel_application::models::elements::PERIODIC_ELEMENTS;
+use soryntel_application::models::species::{
     CpDataPoint, CpFitMask, CpFitResult, ExternalCpTemplate, GibbsCoeffsInput, GibbsConvertOutput,
     HSC_COLOR_PALETTE,
 };

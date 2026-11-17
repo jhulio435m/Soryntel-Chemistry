@@ -6,8 +6,8 @@ pub mod state;
 
 use eframe::egui::{self, Color32, RichText, Stroke, Vec2};
 use soryntel_application::use_cases::SimulationUseCases;
-use soryntel_thermo::sim::model::*;
-use soryntel_thermo::sim::presets::VISUALIZATION_METRICS;
+use soryntel_application::models::simulation::*;
+use soryntel_application::models::simulation::VISUALIZATION_METRICS;
 
 pub use state::SimModuleState;
 use state::*;

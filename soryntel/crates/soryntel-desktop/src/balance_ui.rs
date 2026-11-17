@@ -13,7 +13,7 @@ use eframe::egui;
 use egui_plot::{Legend, Line, Plot, PlotPoints, Points, Text as PlotText};
 use soryntel_application::use_cases::{BalanceUseCases, CatalogUseCases, HeatLossUseCases};
 use soryntel_core::{BalanceEnergyUnit, SpeciesCatalogPort, TemperatureUnit};
-use soryntel_thermo::balance_engine::{
+use soryntel_application::models::balance::{
     BalanceArea, BalanceUserSheet, BalanceWorkbook, DiagramResult, SpeciesRow, StreamGroup,
     TargetRow,
 };

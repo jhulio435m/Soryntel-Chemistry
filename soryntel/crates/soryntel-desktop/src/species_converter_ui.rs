@@ -4,11 +4,9 @@ use eframe::egui;
 use serde::{Deserialize, Serialize};
 use soryntel_application::use_cases::MiscUseCases;
 use soryntel_core::SpeciesCatalogPort;
-use soryntel_thermo::{
-    species_converter::{
-        ConversionMethod, ConverterInputEntry, ConverterOutputSpec, SpeciesConverterRequest,
-        SpeciesConverterResult, SpeciesTypeFilter,
-    },
+use soryntel_application::models::species_converter::{
+    ConversionMethod, ConverterInputEntry, ConverterOutputSpec, SpeciesConverterRequest,
+    SpeciesConverterResult, SpeciesTypeFilter,
 };
 use crate::excel_grid::{
     header_cell, row_num_cell, section_cell, text_cell, EXCEL_ALT_ROW_BG, EXCEL_GRID_BORDER,
@@ -253,7 +251,7 @@ impl SpeciesConverterModuleState {
         match MiscUseCases::initialize_species_converter(&req.inputs) {
             Ok((calc_elems, in_tot)) => {
                 let sheet = &mut self.sheets[self.active_sheet];
-                sheet.result = Some(soryntel_thermo::species_converter::SpeciesConverterResult {
+                sheet.result = Some(soryntel_application::models::species_converter::SpeciesConverterResult {
                     input_total_wt_pct: in_tot,
                     calculated_input_elements: calc_elems,
                     calculated_input_total_wt_pct: in_tot,
@@ -980,7 +978,7 @@ impl SpeciesConverterModuleState {
                     }
                     ui.end_row();
 
-                    let metrics: [(&str, fn(&soryntel_thermo::species_converter::ElementBalanceRow) -> f64); 5] = [
+                    let metrics: [(&str, fn(&soryntel_application::models::species_converter::ElementBalanceRow) -> f64); 5] = [
                         ("Input kg", |r| r.input_kg),
                         ("Output kg", |r| r.output_kg),
                         ("Balance kg", |r| r.balance_kg),

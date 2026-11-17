@@ -9,24 +9,24 @@ use eframe::egui;
 use egui_plot::{Legend, Line, Plot, PlotPoints};
 use soryntel_application::use_cases::{HeatLossPreset, HeatLossUseCases, MiscUseCases};
 use soryntel_core::{HeatFlowUnit, LengthUnit, TemperatureUnit};
-use soryntel_thermo::heat_loss::convection::ConvectionDiagnostics;
-use soryntel_thermo::heat_loss::diagram::{
+use soryntel_application::models::heat_loss::ConvectionDiagnostics;
+use soryntel_application::models::heat_loss::{
     OptimumInsulationPoint, OptimumInsulationSpec, SweepParameter, SweepPoint,
     TemperatureProfileSeries,
 };
-use soryntel_thermo::heat_loss::gas_radiation::{
+use soryntel_application::models::heat_loss::{
     GasRadiationInput, GasRadiationResult, OpticalDepthGeometry,
     ParticleSuspensionDetailedResult, ParticleSuspensionSpec,
 };
-use soryntel_thermo::heat_loss::material_db::{
+use soryntel_application::models::heat_loss::{
     MaterialCompositionRow, MaterialCpRange, MaterialDatabase, MaterialUserProperty,
 };
-use soryntel_thermo::heat_loss::model::{
+use soryntel_application::models::heat_loss::{
     CalculationMode, ColumnType, ConvectionFunctionPreset, ConvectionGeometry, ConvectionRegime,
     FluidPropertyTable, Geometry, HeatLossColumn, HeatLossWorkbook, SolidConductivityData,
     SurfaceEmissivityData, WorkbookResult,
 };
-use soryntel_thermo::heat_loss::target::{TargetGoal, TargetSpec, TargetVariable};
+use soryntel_application::models::heat_loss::{TargetGoal, TargetSpec, TargetVariable};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum DiagramKind {
@@ -203,7 +203,7 @@ impl HeatLossModuleState {
                 pressure_bar: 1.0,
                 optical_depth_m: 0.450,
                 surface_emissivity: 1.0,
-                composition: soryntel_thermo::heat_loss::GasComposition {
+                composition: soryntel_application::models::heat_loss::GasComposition {
                     x_h2o: 0.05,
                     x_co2: 0.10,
                     x_co: 0.0,

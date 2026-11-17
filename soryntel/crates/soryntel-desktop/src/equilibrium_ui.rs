@@ -45,15 +45,12 @@ use eframe::egui;
 use egui_plot::{Legend, Line, Plot, PlotPoints};
 use soryntel_application::ports::{SpeciesCatalogPort, SpeciesRepository};
 use soryntel_application::use_cases::{CatalogUseCases, EquilibriumUseCases};
-// Tipos de modelo de thermo usados como estado de la UI (pendiente de mover a DTOs).
-// `collect_cp_warnings` aún no tiene caso de uso en `EquilibriumUseCases`.
-use soryntel_thermo::equilibrium::{
-    collect_cp_warnings, AxisRange, CalculationMode,
-    EquilibriumAmountUnit, EquilibriumParams, EquilibriumPhase, EquilibriumSpeciesInput,
+use soryntel_application::models::equilibrium::{
+    AxisRange, CalculationMode, EquilibriumAmountUnit, EquilibriumParams, EquilibriumPhase, EquilibriumSpeciesInput,
     EquilibriumSweepResult, EquilibriumSystem, EquilibriumWorkbookFile, ExtrapolationWarning,
     SolutionModel, StepMode, SweepVariable, TargetSpec, ThermodynamicMode,
 };
-use soryntel_thermo::Phase;
+use soryntel_core::Phase;
 use std::collections::{BTreeMap, BTreeSet};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1255,7 +1252,7 @@ impl EquilibriumUiState {
                         ui.close_menu();
                     }
                     if ui.button(crate::i18n::text("review.059")).clicked() {
-                        self.warnings = collect_cp_warnings(&self.system, &self.params, db);
+                        self.warnings = EquilibriumUseCases::collect_cp_warnings(db, &self.system, &self.params);
                         self.warnings_pending_calc = false;
                         self.show_warnings_modal = true;
                         ui.close_menu();
@@ -1390,7 +1387,7 @@ impl EquilibriumUiState {
 
     fn request_calculate<C: SpeciesRepository>(&mut self, db: &C) {
         if !self.dont_show_warnings {
-            let ws = collect_cp_warnings(&self.system, &self.params, db);
+            let ws = EquilibriumUseCases::collect_cp_warnings(db, &self.system, &self.params);
             if !ws.is_empty() {
                 self.warnings = ws;
                 self.warnings_pending_calc = true;
@@ -1466,7 +1463,7 @@ impl EquilibriumUiState {
                 }
             }
             if ui.button(crate::i18n::text("common.125")).clicked() {
-                self.warnings = collect_cp_warnings(&self.system, &self.params, db);
+                self.warnings = EquilibriumUseCases::collect_cp_warnings(db, &self.system, &self.params);
                 self.warnings_pending_calc = false;
                 self.show_warnings_modal = true;
             }
@@ -2687,7 +2684,7 @@ impl EquilibriumUiState {
 
     fn point_x_value(
         &self,
-        p: &soryntel_thermo::equilibrium::EquilibriumPointResult,
+        p: &soryntel_application::models::equilibrium::EquilibriumPointResult,
         scale: f64,
     ) -> f64 {
         match self.chart_x_kind {
@@ -2710,7 +2707,7 @@ impl EquilibriumUiState {
 
     fn point_y_value(
         &self,
-        p: &soryntel_thermo::equilibrium::EquilibriumPointResult,
+        p: &soryntel_application::models::equilibrium::EquilibriumPointResult,
         s_idx: usize,
         scale: f64,
     ) -> f64 {
@@ -3115,7 +3112,7 @@ impl EquilibriumUiState {
                                 let mut elem_list: Vec<String> = Vec::new();
                                 for ph in &self.system.phases {
                                     for sp_in in &ph.species {
-                                        if let Ok(parsed) = soryntel_solver::parse_term(&sp_in.formula) {
+                                        if let Ok(parsed) = EquilibriumUseCases::parse_species_term(&sp_in.formula) {
                                             for el in parsed.elements.keys() {
                                                 if el != "e-" && !elem_list.contains(el) {
                                                     elem_list.push(el.clone());
@@ -3466,7 +3463,7 @@ impl EquilibriumUiState {
                         if let Some(first) = res.points.first() {
                             let scale = self.params.input_scale_to_mol.max(1e-12);
                             let cell_val = |kind: ChartYKind,
-                                            p: &soryntel_thermo::equilibrium::EquilibriumPointResult,
+                                            p: &soryntel_application::models::equilibrium::EquilibriumPointResult,
                                             s_idx: usize|
                              -> f64 {
                                 let sp = &p.species[s_idx];
@@ -3604,7 +3601,7 @@ impl EquilibriumUiState {
 
 fn eval_user_formula(
     expr: &str,
-    pt: &soryntel_thermo::equilibrium::EquilibriumPointResult,
+    pt: &soryntel_application::models::equilibrium::EquilibriumPointResult,
     scale: f64,
 ) -> f64 {
     let cleaned: String = expr
@@ -3620,7 +3617,7 @@ fn eval_user_formula(
     struct UfParser<'a> {
         chars: Vec<char>,
         pos: usize,
-        pt: &'a soryntel_thermo::equilibrium::EquilibriumPointResult,
+        pt: &'a soryntel_application::models::equilibrium::EquilibriumPointResult,
         scale: f64,
     }
     impl<'a> UfParser<'a> {
@@ -3757,7 +3754,7 @@ fn eval_user_formula(
 }
 
 fn species_matches_filters(
-    sp: &soryntel_thermo::equilibrium::SpeciesEquilibriumResult,
+    sp: &soryntel_application::models::equilibrium::SpeciesEquilibriumResult,
     hidden: &BTreeSet<String>,
     phase_filter: Option<usize>,
     elem_filter: &str,
@@ -3998,7 +3995,7 @@ fn rasterize_line_z(
 
 /// Collects distinct X and Z coordinate values across an equilibrium sweep result.
 fn collect_distinct_axes(
-    res: &soryntel_thermo::equilibrium::EquilibriumSweepResult,
+    res: &soryntel_application::models::equilibrium::EquilibriumSweepResult,
     default_missing_z_zero: bool,
 ) -> (Vec<f64>, Vec<f64>) {
     let mut xs: Vec<f64> = Vec::new();
@@ -4512,7 +4509,7 @@ mod tests {
         let pt0 = &res.points[0];
         let pt1000_p1 = &res.points[20];
         let pt1000_p10 = &res.points[21 * 9 + 20];
-        let amt = |pt: &soryntel_thermo::equilibrium::EquilibriumPointResult, f: &str| -> f64 {
+        let amt = |pt: &soryntel_application::models::equilibrium::EquilibriumPointResult, f: &str| -> f64 {
             pt.species
                 .iter()
                 .find(|s| s.formula == f)

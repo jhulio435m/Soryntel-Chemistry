@@ -13,7 +13,7 @@
 use eframe::egui;
 use egui_plot::{Legend, Line, Plot, PlotPoints};
 use soryntel_application::use_cases::MiscUseCases;
-use soryntel_thermo::units::{
+use soryntel_application::models::units::{
     AirHumidityGrid, AirHumidityPoint, ConvertRow, SiPrefix, UnitsWorkbook, STD_ATM_BAR,
 };
 

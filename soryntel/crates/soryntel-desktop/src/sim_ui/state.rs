@@ -1,8 +1,8 @@
 use eframe::egui;
 use soryntel_application::use_cases::SimulationUseCases;
-use soryntel_thermo::sim::model::*;
-use soryntel_thermo::sim::reports::SimReportWorkbook;
-use soryntel_thermo::sim::solver::LogFilterLevel;
+use soryntel_application::models::simulation::*;
+use soryntel_application::models::simulation::SimReportWorkbook;
+use soryntel_application::models::simulation::LogFilterLevel;
 
 pub const SIM_WIN_BG: egui::Color32 = egui::Color32::from_rgb(240, 240, 240);
 pub const SIM_TOOLBAR_BG: egui::Color32 = egui::Color32::from_rgb(236, 238, 243);
