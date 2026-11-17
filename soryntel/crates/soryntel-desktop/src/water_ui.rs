@@ -12,15 +12,15 @@
 
 use eframe::egui;
 use egui_plot::{Legend, Line, Plot, PlotPoints};
-use soryntel_application::SoryntelApplication;
+use soryntel_application::use_cases::WaterUseCases;
+use soryntel_core::SpeciesCatalogPort;
 use soryntel_thermo::{
-    balance::{h2o_saturation_pressure_bar, H2O_PC_BAR, H2O_TC_K},
+    balance::{H2O_PC_BAR, H2O_TC_K},
     water::{
-        sat_pressure_gs_bar, sat_temp_gl_k, sat_temp_ls_k, WaterAmountUnit, WaterCalcRequest,
+        WaterAmountUnit, WaterCalcRequest,
         WaterCalcResult, WaterDensityUnit, WaterDiagramCurves, WaterEnergyUnit, WaterPhaseMode,
         WaterPressureUnit, WaterTempUnit, H2O_MOL_WEIGHT, H2O_PT_BAR, H2O_TT_K,
     },
-    evaluate_species_si, SpeciesCatalogPort,
 };
 
 use crate::excel_grid::{EXCEL_GRID_BORDER, EXCEL_HEADER_BORDER};
@@ -59,9 +59,9 @@ pub struct WaterModuleState {
 
 impl WaterModuleState {
     pub fn new(catalog: &dyn SpeciesCatalogPort) -> Self {
-        let req = SoryntelApplication::default_water_request();
-        let curves = SoryntelApplication::water_phase_curves();
-        let result = SoryntelApplication::calculate_water(catalog, &req);
+        let req = WaterUseCases::default_water_request();
+        let curves = WaterUseCases::water_phase_curves();
+        let result = WaterUseCases::calculate_water(catalog, &req);
         let mut s = Self {
             amount_buf: format_clean(req.amount, 1),
             t1_buf: String::new(),
@@ -89,7 +89,7 @@ impl WaterModuleState {
     }
 
     fn recalculate(&mut self, catalog: &dyn SpeciesCatalogPort) {
-        match SoryntelApplication::try_calculate_water(catalog, &self.req) {
+        match WaterUseCases::try_calculate_water(catalog, &self.req) {
             Ok(result) => { self.result = result; self.input_error = None; }
             Err(error) => { self.input_error = Some(format!("{error}. Se conserva el último resultado válido.")); return; }
         }
@@ -126,7 +126,7 @@ impl WaterModuleState {
         ctx: &egui::Context,
         catalog: &dyn SpeciesCatalogPort,
     ) {
-        match SoryntelApplication::try_calculate_water(catalog, &self.req) {
+        match WaterUseCases::try_calculate_water(catalog, &self.req) {
             Ok(result) => { self.result = result; self.input_error = None; }
             Err(error) => { self.input_error = Some(format!("{error}. Se conserva el último resultado válido.")); return; }
         }
@@ -231,7 +231,7 @@ impl WaterModuleState {
         match id {
             1 => {
                 // Fig. 1: 180 °C Gas -> Triple Point Liquid
-                self.req = SoryntelApplication::default_water_request();
+                self.req = WaterUseCases::default_water_request();
                 self.amount_buf = "1.0".into();
                 self.active_point = ActiveWaterPoint::Point1;
                 self.show_line = true;
@@ -809,7 +809,7 @@ impl WaterModuleState {
                     if v > 0.0 {
                         if self.req.point1.phase == WaterPhaseMode::SatGasLiquid {
                             let p_bar = self.req.pressure_unit.to_bar(v);
-                            let t_k = sat_temp_gl_k(p_bar);
+                            let t_k = WaterUseCases::sat_temp_gl_k(p_bar);
                             self.req.point1.temp = self.req.temp_unit.from_kelvin(t_k);
                         }
                         self.req.point1.pressure = v;
@@ -841,7 +841,7 @@ impl WaterModuleState {
                     if v > 0.0 {
                         if self.req.point2.phase == WaterPhaseMode::SatGasLiquid {
                             let p_bar = self.req.pressure_unit.to_bar(v);
-                            let t_k = sat_temp_gl_k(p_bar);
+                            let t_k = WaterUseCases::sat_temp_gl_k(p_bar);
                             self.req.point2.temp = self.req.temp_unit.from_kelvin(t_k);
                         }
                         self.req.point2.pressure = v;
@@ -1591,7 +1591,7 @@ impl WaterModuleState {
                         target.pressure = self
                             .req
                             .pressure_unit
-                            .from_bar(h2o_saturation_pressure_bar(tc_clamped + 273.15));
+                            .from_bar(WaterUseCases::h2o_saturation_pressure_bar(tc_clamped + 273.15));
                     }
                     WaterPhaseMode::SatGasSolid => {
                         let tc_clamped = t_c.clamp(-100.0, 0.01);
@@ -1599,7 +1599,7 @@ impl WaterModuleState {
                         target.pressure = self
                             .req
                             .pressure_unit
-                            .from_bar(sat_pressure_gs_bar(tc_clamped + 273.15));
+                            .from_bar(WaterUseCases::sat_pressure_gs_bar(tc_clamped + 273.15));
                     }
                     WaterPhaseMode::SatLiquidSolid => {
                         let p_clamped = p_bar.clamp(H2O_PT_BAR, 1000.0);
@@ -1607,7 +1607,7 @@ impl WaterModuleState {
                         target.temp = self
                             .req
                             .temp_unit
-                            .from_kelvin(sat_temp_ls_k(p_clamped));
+                            .from_kelvin(WaterUseCases::sat_temp_ls_k(p_clamped));
                     }
                     _ => {
                         target.temp = self.req.temp_unit.from_kelvin(t_c + 273.15);
@@ -1728,7 +1728,7 @@ impl WaterModuleState {
                                         .filter_map(|i| {
                                             let tc = i as f64 * 5.0;
                                             let tk = tc + 273.15;
-                                            evaluate_species_si(&sp, tk, false, false)
+                                            WaterUseCases::evaluate_water_species(&sp, tk)
                                                 .ok()
                                                 .map(|(pt, _)| [tc, pt.cp / 0.01801528])
                                         })

@@ -1,6 +1,6 @@
 use eframe::egui::{self, Color32, RichText};
 use egui_plot::{HLine, Legend, Line, Plot, PlotPoints, Points, VLine};
-use soryntel_application::SoryntelApplication;
+use soryntel_application::use_cases::SimulationUseCases;
 use soryntel_thermo::sim::model::*;
 use soryntel_thermo::sim::presets::DEFAULT_STREAM_VARIABLES;
 use crate::sim_ui::state::*;
@@ -351,14 +351,14 @@ fn render_stream_table_editor(ctx: &egui::Context, state: &mut SimModuleState) {
                                 let mut row = vec![v.clone(), "".into()];
                                 if set.assigned_streams.is_empty() {
                                     if let Some(s) = state.project.streams.first() {
-                                        let (val, unit_s) = SoryntelApplication::sim_metric_value(s, v);
+                                        let (val, unit_s) = SimulationUseCases::sim_metric_value(s, v);
                                         row[1] = unit_s.to_string();
                                         row.push(format!("{val:.2}"));
                                     }
                                 } else {
                                     for sn in &set.assigned_streams {
                                         if let Some(s) = state.project.streams.iter().find(|s| &s.name_id == sn) {
-                                            let (val, unit_s) = SoryntelApplication::sim_metric_value(s, v);
+                                            let (val, unit_s) = SimulationUseCases::sim_metric_value(s, v);
                                             row[1] = unit_s.to_string();
                                             row.push(format!("{val:.2}"));
                                         }
@@ -474,7 +474,7 @@ fn render_select_unit_models(ctx: &egui::Context, state: &mut SimModuleState) {
         .open(&mut open)
         .default_size([700.0, 420.0])
         .show(ctx, |ui| {
-            let mut catalog = SoryntelApplication::sim_model_catalog();
+            let mut catalog = SimulationUseCases::sim_model_catalog();
             catalog.extend(state.project.imported_models.iter().cloned());
 
             ui.horizontal(|ui| {
@@ -618,7 +618,7 @@ fn render_unit_editor(ctx: &egui::Context, state: &mut SimModuleState) {
                     }
                     if ui.button("Run This Unit").clicked() {
                         state.push_undo();
-                        SoryntelApplication::sim_run_static(&mut state.project, Some(&[uid]));
+                        SimulationUseCases::sim_run_static(&mut state.project, Some(&[uid]));
                     }
                 });
             });
@@ -866,7 +866,7 @@ fn render_control_monitor(ctx: &egui::Context, state: &mut SimModuleState) {
                 ui.label("Draw Function:");
                 ui.add(egui::DragValue::new(&mut state.monitor_sweep_points).range(10..=200));
                 if ui.button("Re-Sweep").clicked() {
-                    state.monitor_sweep_cache = SoryntelApplication::sim_control_sweep(
+                    state.monitor_sweep_cache = SimulationUseCases::sim_control_sweep(
                         &state.project,
                         idx,
                         state.monitor_sweep_points.max(10),
@@ -895,12 +895,12 @@ fn render_scenario_editor(ctx: &egui::Context, state: &mut SimModuleState) {
             ui.horizontal_wrapped(|ui| {
                 if ui.button("Run Selected Scenario").clicked() {
                     state.push_undo();
-                    SoryntelApplication::sim_execute_scenario(&mut state.project, s_idx, 12345);
+                    SimulationUseCases::sim_execute_scenario(&mut state.project, s_idx, 12345);
                 }
                 if ui.button("Run All Scenarios").clicked() {
                     state.push_undo();
                     for i in 0..state.project.scenarios.len() {
-                        SoryntelApplication::sim_execute_scenario(&mut state.project, i, 12345 + i as u64);
+                        SimulationUseCases::sim_execute_scenario(&mut state.project, i, 12345 + i as u64);
                     }
                 }
                 if let Some(sc) = state.project.scenarios.get_mut(s_idx) {
@@ -1047,7 +1047,7 @@ fn render_scenario_editor(ctx: &egui::Context, state: &mut SimModuleState) {
                 // Right: Distribution Charts (PDF + CDF stacked, Fig. 33) OR Response Curve
                 if sc_snapshot.show_dist_charts {
                     if let Some(col) = sc_snapshot.columns.get(state.scenario_selected_col) {
-                        let (pdf, cdf) = SoryntelApplication::sim_mc_curves(col, 60);
+                        let (pdf, cdf) = SimulationUseCases::sim_mc_curves(col, 60);
                         cols[1].label(RichText::new(format!("Monte Carlo — mu = {:.1}, sigma = {:.2}", col.mc_mean, col.mc_sd)).strong());
                         let pdf_pts: PlotPoints = pdf.iter().map(|p| [p[0], p[1]]).collect();
                         Plot::new("mc_pdf_plot").height(190.0).show(&mut cols[1], |plot_ui| {
@@ -1092,16 +1092,16 @@ fn render_reports_window(ctx: &egui::Context, state: &mut SimModuleState) {
         .default_size([860.0, 480.0])
         .show(ctx, |ui| {
             if state.reports_cache.is_none() {
-                state.reports_cache = Some(SoryntelApplication::sim_generate_reports(&state.project));
+                state.reports_cache = Some(SimulationUseCases::sim_generate_reports(&state.project));
             }
             ui.horizontal(|ui| {
                 if ui.button("Refresh Reports").clicked() {
-                    state.reports_cache = Some(SoryntelApplication::sim_generate_reports(&state.project));
+                    state.reports_cache = Some(SimulationUseCases::sim_generate_reports(&state.project));
                 }
                 if ui.button("Copy Current Sheet as CSV").clicked() {
                     if let Some(ref wb) = state.reports_cache {
                         if let Some(sh) = wb.sheets.get(state.report_sheet_idx) {
-                            let csv = SoryntelApplication::sim_report_csv(sh);
+                            let csv = SimulationUseCases::sim_report_csv(sh);
                             ui.output_mut(|o| o.copied_text = csv);
                             state.status_banner = format!("Copied '{}' CSV to clipboard", sh.name);
                         }
@@ -1270,7 +1270,7 @@ fn render_calc_order_window(ctx: &egui::Context, state: &mut SimModuleState) {
         .open(&mut open)
         .default_size([440.0, 320.0])
         .show(ctx, |ui| {
-            let info = SoryntelApplication::sim_calc_order(&state.project);
+            let info = SimulationUseCases::sim_calc_order(&state.project);
             ui.checkbox(&mut state.highlight_calc_order_on_canvas, "Highlight Calculation Order Badges on Canvas");
             ui.separator();
             ui.label(RichText::new("Topological Unit Sequence:").strong());
@@ -1355,7 +1355,7 @@ fn render_sim7_migrator(ctx: &egui::Context, state: &mut SimModuleState) {
                 ui.add(egui::TextEdit::singleline(&mut state.sim7_expr_input).desired_width(340.0));
             });
             let (clean_sheet, rewritten) =
-                SoryntelApplication::sim_rewrite_sim7(&state.sim7_expr_input, &state.sim7_sheet_input);
+                SimulationUseCases::sim_rewrite_sim7(&state.sim7_expr_input, &state.sim7_sheet_input);
             ui.separator();
             ui.label(RichText::new(format!("Converted Sheet Name: {clean_sheet}")).strong());
             ui.label(RichText::new(format!("Converted Formula: {rewritten}")).monospace());

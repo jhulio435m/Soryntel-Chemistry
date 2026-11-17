@@ -1,5 +1,5 @@
 use eframe::egui::{self, Color32, Mesh, Pos2, Rect, Sense, Shape, Stroke, Vec2};
-use soryntel_application::SoryntelApplication;
+use soryntel_application::use_cases::SimulationUseCases;
 use soryntel_thermo::sim::model::*;
 use soryntel_thermo::sim::presets::{UNIT_ICON_GALLERY};
 use crate::sim_ui::icons::draw_equipment_icon;
@@ -237,7 +237,7 @@ pub fn render_flowsheet_canvas(ui: &mut egui::Ui, state: &mut SimModuleState) {
     let orthogonal = state.project.canvas_settings.orthogonal;
     let vis = &state.project.visualization;
     let calc_order = if state.highlight_calc_order_on_canvas {
-        Some(SoryntelApplication::sim_calc_order(&state.project))
+        Some(SimulationUseCases::sim_calc_order(&state.project))
     } else {
         None
     };
@@ -269,7 +269,7 @@ pub fn render_flowsheet_canvas(ui: &mut egui::Ui, state: &mut SimModuleState) {
         .iter()
         .filter(|s| s.page == page)
         .map(|s| {
-            let (mut v, _) = SoryntelApplication::sim_metric_value(s, &vis.variable);
+            let (mut v, _) = SimulationUseCases::sim_metric_value(s, &vis.variable);
             if vis.use_absolute_values {
                 v = v.abs();
             }
@@ -294,7 +294,7 @@ pub fn render_flowsheet_canvas(ui: &mut egui::Ui, state: &mut SimModuleState) {
             || state.multi_selected_streams.contains(&s.id);
 
         let (mut metric_val, metric_unit) =
-            SoryntelApplication::sim_metric_value(s, &vis.variable);
+            SimulationUseCases::sim_metric_value(s, &vis.variable);
         if vis.use_absolute_values {
             metric_val = metric_val.abs();
         }

@@ -5,7 +5,7 @@ pub mod icons;
 pub mod state;
 
 use eframe::egui::{self, Color32, RichText, Stroke, Vec2};
-use soryntel_application::SoryntelApplication;
+use soryntel_application::use_cases::SimulationUseCases;
 use soryntel_thermo::sim::model::*;
 use soryntel_thermo::sim::presets::VISUALIZATION_METRICS;
 
@@ -48,7 +48,7 @@ impl SimModuleState {
     pub fn ui(&mut self, ctx: &egui::Context) {
         self.handle_shortcuts(ctx);
         if self.dynamic_running && self.project.lock_state != LockState::EntireProcessLocked {
-            SoryntelApplication::sim_step_dynamic(&mut self.project, 1);
+            SimulationUseCases::sim_step_dynamic(&mut self.project, 1);
             ctx.request_repaint();
         }
 
@@ -148,11 +148,11 @@ impl SimModuleState {
         egui::menu::bar(ui, |ui| {
             ui.menu_button(crate::i18n::text("common.001"), |ui| {
                 if ui.button(crate::i18n::text("review.190")).clicked() {
-                    self.load_preset("Empty Flowsheet", soryntel_thermo::sim::presets::empty_project());
+                    self.load_preset("Empty Flowsheet", SimulationUseCases::empty_project());
                     ui.close_menu();
                 }
                 ui.menu_button("Open Reference Project...", |ui| {
-                    for (label, proj) in SoryntelApplication::sim_presets() {
+                    for (label, proj) in SimulationUseCases::sim_presets() {
                         if ui.button(label).clicked() {
                             self.load_preset(label, proj);
                             ui.close_menu();
@@ -174,14 +174,14 @@ impl SimModuleState {
                 }
                 if ui.button("Save as LCA JSON...").clicked() {
                     self.export_kind = ExportModalKind::LcaJson;
-                    self.export_buffer = SoryntelApplication::sim_export_lca_json(&self.project)
+                    self.export_buffer = SimulationUseCases::sim_export_lca_json(&self.project)
                         .unwrap_or_else(|e| format!("Error: {e}"));
                     self.show_export_modal = true;
                     ui.close_menu();
                 }
                 if ui.button("Export Flowsheet Image (.svg)...").clicked() {
                     self.export_kind = ExportModalKind::FlowsheetSvg;
-                    self.export_buffer = SoryntelApplication::sim_export_svg(&self.project);
+                    self.export_buffer = SimulationUseCases::sim_export_svg(&self.project);
                     self.show_export_modal = true;
                     ui.close_menu();
                 }
@@ -284,7 +284,7 @@ impl SimModuleState {
                     ui.close_menu();
                 }
                 if ui.button("Reports...").clicked() {
-                    self.reports_cache = Some(SoryntelApplication::sim_generate_reports(&self.project));
+                    self.reports_cache = Some(SimulationUseCases::sim_generate_reports(&self.project));
                     self.show_reports_window = true;
                     ui.close_menu();
                 }
@@ -344,7 +344,7 @@ impl SimModuleState {
                 }
                 if ui.button("Clear Internal Streams").clicked() {
                     self.push_undo();
-                    SoryntelApplication::sim_clear_internal(&mut self.project);
+                    SimulationUseCases::sim_clear_internal(&mut self.project);
                     ui.close_menu();
                 }
                 ui.separator();
@@ -353,11 +353,11 @@ impl SimModuleState {
                     ui.close_menu();
                 }
                 if ui.button("Step Dynamic +10s").clicked() {
-                    SoryntelApplication::sim_step_dynamic(&mut self.project, 10);
+                    SimulationUseCases::sim_step_dynamic(&mut self.project, 10);
                     ui.close_menu();
                 }
                 if ui.button("Empty All Tanks").clicked() {
-                    SoryntelApplication::sim_empty_tanks(&mut self.project);
+                    SimulationUseCases::sim_empty_tanks(&mut self.project);
                     ui.close_menu();
                 }
                 ui.separator();
@@ -377,7 +377,7 @@ impl SimModuleState {
                     ui.close_menu();
                 }
                 if ui.button("Global Mass & Enthalpy Balance Check").clicked() {
-                    let round = SoryntelApplication::sim_global_balances(&self.project);
+                    let round = SimulationUseCases::sim_global_balances(&self.project);
                     self.status_banner = format!(
                         "Global Balance Check: MB={:.4}%, EB={:.4}%",
                         round.mb_pct, round.eb_pct
@@ -402,7 +402,7 @@ impl SimModuleState {
                 egui::ComboBox::from_id_salt("quick_preset_cb")
                     .selected_text(format!("Demo: {}", self.active_preset_name))
                     .show_ui(ui, |ui| {
-                        for (label, proj) in SoryntelApplication::sim_presets() {
+                        for (label, proj) in SimulationUseCases::sim_presets() {
                             if ui.selectable_label(self.active_preset_name == label, label).clicked() {
                                 self.load_preset(label, proj);
                             }
@@ -421,7 +421,7 @@ impl SimModuleState {
                 ui.horizontal_wrapped(|ui| {
                     if self.top_tb.project {
                         if ui.button(crate::i18n::text("common.033")).on_hover_text(crate::i18n::text("review.190")).clicked() {
-                            self.load_preset("Empty Flowsheet", soryntel_thermo::sim::presets::empty_project());
+                            self.load_preset("Empty Flowsheet", SimulationUseCases::empty_project());
                         }
                         if ui.button(crate::i18n::text("common.087")).on_hover_text("Open / Import .simjson").clicked() {
                             self.export_kind = ExportModalKind::LoadProjectJson;
@@ -542,7 +542,7 @@ impl SimModuleState {
                         }
                         if tb_icon_btn(ui, "stop", false, "Stop & Empty Tanks").clicked() {
                             self.dynamic_running = false;
-                            SoryntelApplication::sim_empty_tanks(&mut self.project);
+                            SimulationUseCases::sim_empty_tanks(&mut self.project);
                         }
                     }
 
@@ -578,7 +578,7 @@ impl SimModuleState {
 
                     if self.top_tb.report {
                         if ui.button(crate::i18n::text("review.187")).clicked() {
-                            self.reports_cache = Some(SoryntelApplication::sim_generate_reports(&self.project));
+                            self.reports_cache = Some(SimulationUseCases::sim_generate_reports(&self.project));
                             self.show_reports_window = true;
                         }
                         if ui.button("Scenarios").clicked() {

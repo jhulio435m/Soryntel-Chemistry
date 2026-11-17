@@ -2,6 +2,10 @@
 use super::super::*;
 pub struct SimulationUseCases;
 impl SimulationUseCases {
+    pub fn empty_project() -> SimProject {
+        domain_sim_empty_project()
+    }
+
     pub fn sim_presets() -> Vec<(&'static str, SimProject)> {
         vec![
             ("Empty Flowsheet", domain_sim_empty_project()),

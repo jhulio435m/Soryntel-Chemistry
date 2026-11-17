@@ -4,8 +4,8 @@
 
 use eframe::egui;
 use egui_plot::{Legend, Line, Plot, PlotPoints};
-use soryntel_application::SoryntelApplication;
-use soryntel_db::ThermoDatabase;
+use soryntel_application::use_cases::AquaUseCases;
+use soryntel_core::SpeciesCatalogPort;
 use soryntel_thermo::aqua::{
     ActiveParameterSetsReport, AquaCalcResult, AquaCaseFile, AquaEnergyUnit, AquaMethod,
     AquaPressUnit, AquaSpeciesInput, AquaTempUnit, DensityCalcResult, DensityInputRow,
@@ -149,24 +149,24 @@ pub struct AquaModuleState {
 }
 
 impl AquaModuleState {
-    pub fn new(db: &ThermoDatabase) -> Self {
-        let case_file = AquaCaseFile::preset_na_s_h2o_fig3();
-        let main_db = SoryntelApplication::aqua_main_pitzer_db();
+    pub fn new(db: &dyn SpeciesCatalogPort) -> Self {
+        let case_file = AquaUseCases::preset_na_s_h2o_fig3();
+        let main_db = AquaUseCases::aqua_main_pitzer_db();
         let own_db = default_sample_own_db();
         let excluded_keys = BTreeSet::new();
 
         let rows = rows_from_case(&case_file);
         let phase_temp_buf = format_temp_display(case_file.species.first().map(|s| s.temp).unwrap_or(40.0));
         let calc_result =
-            SoryntelApplication::aqua_calculate(db, &case_file, &main_db, &own_db, &excluded_keys);
-        let merged_catalog = SoryntelApplication::aqua_resolve_catalog(
+            AquaUseCases::aqua_calculate(db, &case_file, &main_db, &own_db, &excluded_keys);
+        let merged_catalog = AquaUseCases::aqua_resolve_catalog(
             &main_db,
             &own_db,
             &excluded_keys,
             case_file.use_own_db,
         );
         let param_report =
-            SoryntelApplication::aqua_analyze_params(&case_file, &main_db, &own_db, &excluded_keys);
+            AquaUseCases::aqua_analyze_params(&case_file, &main_db, &own_db, &excluded_keys);
 
         // Fig. 7 default: ZnSO4 (0.149) + H2SO4 (0.048) @ 25 °C -> 1204.371594 kg/m3
         let density_rows = vec![
@@ -238,22 +238,22 @@ impl AquaModuleState {
             .collect();
     }
 
-    fn recalculate(&mut self, db: &ThermoDatabase) {
+    fn recalculate(&mut self, db: &dyn SpeciesCatalogPort) {
         self.sync_case_from_rows();
-        self.calc_result = SoryntelApplication::aqua_calculate(
+        self.calc_result = AquaUseCases::aqua_calculate(
             db,
             &self.case_file,
             &self.main_db,
             &self.own_db,
             &self.excluded_keys,
         );
-        self.merged_catalog = SoryntelApplication::aqua_resolve_catalog(
+        self.merged_catalog = AquaUseCases::aqua_resolve_catalog(
             &self.main_db,
             &self.own_db,
             &self.excluded_keys,
             self.case_file.use_own_db,
         );
-        self.param_report = SoryntelApplication::aqua_analyze_params(
+        self.param_report = AquaUseCases::aqua_analyze_params(
             &self.case_file,
             &self.main_db,
             &self.own_db,
@@ -273,7 +273,7 @@ impl AquaModuleState {
         );
     }
 
-    fn load_preset(&mut self, preset: AquaCaseFile, name: &str, db: &ThermoDatabase) {
+    fn load_preset(&mut self, preset: AquaCaseFile, name: &str, db: &dyn SpeciesCatalogPort) {
         self.case_file = preset;
         self.rows = rows_from_case(&self.case_file);
         self.phase_temp_buf =
@@ -283,7 +283,7 @@ impl AquaModuleState {
         self.status_msg = format!("Loaded preset: {name}");
     }
 
-    fn switch_temp_unit(&mut self, new_unit: AquaTempUnit, db: &ThermoDatabase) {
+    fn switch_temp_unit(&mut self, new_unit: AquaTempUnit, db: &dyn SpeciesCatalogPort) {
         let old = self.case_file.temp_unit;
         if old == new_unit {
             return;
@@ -379,7 +379,7 @@ impl AquaModuleState {
         self.select_cell(new_row, 0);
     }
 
-    fn delete_selected_row(&mut self, db: &ThermoDatabase) {
+    fn delete_selected_row(&mut self, db: &dyn SpeciesCatalogPort) {
         if self.selected_cell.row < 7 {
             return;
         }
@@ -391,7 +391,7 @@ impl AquaModuleState {
         }
     }
 
-    fn cut_selected_cell(&mut self, db: &ThermoDatabase) {
+    fn cut_selected_cell(&mut self, db: &dyn SpeciesCatalogPort) {
         self.clipboard_val = self.cell_raw_string(self.selected_cell.row, self.selected_cell.col);
         if self.selected_cell.row >= 7 {
             let ridx = self.selected_cell.row - 7;
@@ -410,7 +410,7 @@ impl AquaModuleState {
         self.status_msg = format!("Copied '{}'", self.clipboard_val);
     }
 
-    fn paste_selected_cell(&mut self, db: &ThermoDatabase) {
+    fn paste_selected_cell(&mut self, db: &dyn SpeciesCatalogPort) {
         if !self.clipboard_val.is_empty() {
             self.apply_formula_bar_edit(self.clipboard_val.clone(), db);
             self.sync_formula_bar_from_selection();
@@ -427,7 +427,7 @@ impl AquaModuleState {
         }
     }
 
-    fn load_case_quick(&mut self, db: &ThermoDatabase) {
+    fn load_case_quick(&mut self, db: &dyn SpeciesCatalogPort) {
         let p = std::env::temp_dir().join("soryntel_aqua_case.aqu8.json");
         if let Ok(txt) = std::fs::read_to_string(&p) {
             if let Ok(loaded) = serde_json::from_str::<AquaCaseFile>(&txt) {
@@ -438,19 +438,19 @@ impl AquaModuleState {
         }
     }
 
-    fn render_file_menu_items(&mut self, ui: &mut egui::Ui, db: &ThermoDatabase) -> bool {
+    fn render_file_menu_items(&mut self, ui: &mut egui::Ui, db: &dyn SpeciesCatalogPort) -> bool {
         let mut close = false;
         ui.label(egui::RichText::new("HSC Presets").strong().size(11.0));
         if ui.button("Preset: Na–S–H2O (40 °C, Fig. 3/4)").clicked() {
-            self.load_preset(AquaCaseFile::preset_na_s_h2o_fig3(), "Na–S–H2O (Fig. 3/4)", db);
+            self.load_preset(AquaUseCases::preset_na_s_h2o_fig3(), "Na–S–H2O (Fig. 3/4)", db);
             close = true;
         }
         if ui.button("Preset: Millero Seawater (S=35, Fig. 10)").clicked() {
-            self.load_preset(AquaCaseFile::preset_millero_seawater(), "Millero Seawater (Fig. 10)", db);
+            self.load_preset(AquaUseCases::preset_millero_seawater(), "Millero Seawater (Fig. 10)", db);
             close = true;
         }
         if ui.button("Preset: NaCl–HCl–H2O (25 °C)").clicked() {
-            self.load_preset(AquaCaseFile::preset_nacl_hcl(), "NaCl–HCl–H2O", db);
+            self.load_preset(AquaUseCases::preset_nacl_hcl(), "NaCl–HCl–H2O", db);
             close = true;
         }
         ui.separator();
@@ -480,7 +480,7 @@ impl AquaModuleState {
         close
     }
 
-    fn render_units_menu_items(&mut self, ui: &mut egui::Ui, db: &ThermoDatabase) -> bool {
+    fn render_units_menu_items(&mut self, ui: &mut egui::Ui, db: &dyn SpeciesCatalogPort) -> bool {
         let mut close = false;
         ui.label(egui::RichText::new(crate::i18n::text("common.005")).strong().size(11.0));
         for (tu, l) in [
@@ -521,7 +521,7 @@ impl AquaModuleState {
         close
     }
 
-    fn apply_formula_bar_edit(&mut self, new_val: String, db: &ThermoDatabase) {
+    fn apply_formula_bar_edit(&mut self, new_val: String, db: &dyn SpeciesCatalogPort) {
         let CellCoord { row, col } = self.selected_cell;
         if row == 4 && col == 1 {
             self.phase_temp_buf = new_val.clone();
@@ -598,7 +598,7 @@ impl AquaModuleState {
         }
     }
 
-    pub fn ui(&mut self, ctx: &egui::Context, db: &ThermoDatabase) {
+    pub fn ui(&mut self, ctx: &egui::Context, db: &dyn SpeciesCatalogPort) {
         if self.use_ribbon_toolbar {
             self.render_ribbon(ctx, db);
         } else {
@@ -634,7 +634,7 @@ impl AquaModuleState {
         }
     }
 
-    fn render_classic_menu_and_aqua_tools(&mut self, ctx: &egui::Context, db: &ThermoDatabase) {
+    fn render_classic_menu_and_aqua_tools(&mut self, ctx: &egui::Context, db: &dyn SpeciesCatalogPort) {
         egui::TopBottomPanel::top("aqua_classic_menubar")
             .frame(
                 egui::Frame::none()
@@ -785,7 +785,7 @@ impl AquaModuleState {
             });
     }
 
-    fn render_ribbon(&mut self, ctx: &egui::Context, db: &ThermoDatabase) {
+    fn render_ribbon(&mut self, ctx: &egui::Context, db: &dyn SpeciesCatalogPort) {
         egui::TopBottomPanel::top("aqua_ribbon")
             .frame(
                 egui::Frame::none()
@@ -1037,7 +1037,7 @@ impl AquaModuleState {
             });
     }
 
-    fn render_formula_bar(&mut self, ctx: &egui::Context, db: &ThermoDatabase) {
+    fn render_formula_bar(&mut self, ctx: &egui::Context, db: &dyn SpeciesCatalogPort) {
         egui::TopBottomPanel::top("aqua_formula_bar")
             .frame(
                 egui::Frame::none()
@@ -1276,7 +1276,7 @@ impl AquaModuleState {
             });
     }
 
-    fn render_water_phase_sheet(&mut self, ctx: &egui::Context, db: &ThermoDatabase) {
+    fn render_water_phase_sheet(&mut self, ctx: &egui::Context, db: &dyn SpeciesCatalogPort) {
         let total_cols = 24.max(13 + self.calc_result.element_columns.len() + 2);
         let widths = aqua_column_widths(total_cols);
 
@@ -1603,7 +1603,7 @@ impl AquaModuleState {
             });
     }
 
-    fn render_main_db_window(&mut self, ctx: &egui::Context, db: &ThermoDatabase) {
+    fn render_main_db_window(&mut self, ctx: &egui::Context, db: &dyn SpeciesCatalogPort) {
         let mut open = self.show_main_db;
         let mut recalc_needed = false;
         egui::Window::new("Main Pitzer Database")
@@ -1916,7 +1916,7 @@ impl AquaModuleState {
         self.show_param_sets = open;
     }
 
-    fn render_own_db_window(&mut self, ctx: &egui::Context, db: &ThermoDatabase) {
+    fn render_own_db_window(&mut self, ctx: &egui::Context, db: &dyn SpeciesCatalogPort) {
         let mut open = self.show_own_db;
         let mut changed = false;
         egui::Window::new("OwnDB")
@@ -2481,7 +2481,7 @@ impl AquaModuleState {
         }
     }
 
-    fn render_plot_window(&mut self, ctx: &egui::Context, db: &ThermoDatabase) {
+    fn render_plot_window(&mut self, ctx: &egui::Context, db: &dyn SpeciesCatalogPort) {
         let mut open = self.show_plot;
         egui::Window::new("Ionic AC vs Temperature (Fig. 10)")
             .open(&mut open)
@@ -2497,7 +2497,7 @@ impl AquaModuleState {
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         if ui.button("Load Millero Seawater (Fig. 10)").clicked() {
                             self.load_preset(
-                                AquaCaseFile::preset_millero_seawater(),
+                                AquaUseCases::preset_millero_seawater(),
                                 "Millero Seawater (Fig. 10)",
                                 db,
                             );
@@ -2514,7 +2514,7 @@ impl AquaModuleState {
                     for s in &mut req.species {
                         s.temp = t_c as f64;
                     }
-                    let res = SoryntelApplication::aqua_calculate(
+                    let res = AquaUseCases::aqua_calculate(
                         db,
                         &req,
                         &self.main_db,
@@ -2549,7 +2549,7 @@ impl AquaModuleState {
         self.show_plot = open;
     }
 
-    fn render_find_modal(&mut self, ctx: &egui::Context, db: &ThermoDatabase) {
+    fn render_find_modal(&mut self, ctx: &egui::Context, db: &dyn SpeciesCatalogPort) {
         let mut open = self.show_find;
         let mut replaced = false;
         egui::Window::new("Find / Replace")
@@ -2734,7 +2734,7 @@ fn recompute_density(rows: &[(String, String)], t_c: f64) -> DensityCalcResult {
             mass_fraction: w.trim().parse::<f64>().unwrap_or(0.0),
         })
         .collect();
-    SoryntelApplication::aqua_density(&inputs, t_c)
+    AquaUseCases::aqua_density(&inputs, t_c)
 }
 
 fn format_temp_display(v: f64) -> String {
