@@ -12,13 +12,13 @@
 //!   `Color RGB-number` swatch tinting, `Fix Left 3 Columns` freeze toggle, and `Exit`.
 
 use eframe::egui;
-use soryntel_application::SoryntelApplication;
+use soryntel_application::use_cases::MiscUseCases;
+use soryntel_core::SpeciesCatalogPort;
 use soryntel_thermo::{
     elements::{
-        find_element_index_by_symbol, ElementCategory, ElementWorkbook, PeriodicDiagramData,
-        StandardState, PERIODIC_ELEMENTS,
+        ElementCategory, ElementWorkbook, PeriodicDiagramData, StandardState, PERIODIC_ELEMENTS,
     },
-    ChemicalSpecies, Phase, SpeciesCatalogPort,
+    ChemicalSpecies, Phase,
 };
 use std::collections::HashMap;
 
@@ -70,7 +70,7 @@ pub struct ElementsModuleState {
 
 impl Default for ElementsModuleState {
     fn default() -> Self {
-        let workbook = SoryntelApplication::default_elements_workbook();
+        let workbook = MiscUseCases::default_elements_workbook();
         let mut s = Self {
             view_mode: ElementsViewMode::PeriodicChart,
             workbook,
@@ -101,7 +101,7 @@ impl Default for ElementsModuleState {
 impl ElementsModuleState {
     fn recompute_diagram(&mut self) {
         self.diagram_cache = match self.selected_diagram_row {
-            Some(r) => match SoryntelApplication::compute_elements_diagram(&self.workbook, r) {
+            Some(r) => match MiscUseCases::compute_elements_diagram(&self.workbook, r) {
                 Ok(d) => {
                     self.status_msg = format!(
                         "{} ({}) — {} elements plotted | Max: {:.4} | Min: {:.4}",
@@ -188,14 +188,14 @@ impl ElementsModuleState {
         self.selected_element_idx = idx;
         self.double_click_modal_idx = Some(idx);
         if let Some(spec) = PERIODIC_ELEMENTS.get(idx) {
-            self.modal_db_species = SoryntelApplication::lookup_element_species(catalog, spec.symbol);
+            self.modal_db_species = MiscUseCases::lookup_element_species(catalog, spec.symbol);
         } else {
             self.modal_db_species.clear();
         }
     }
 
     fn export_csv(&mut self) {
-        let csv = self.workbook.to_csv();
+        let csv = MiscUseCases::export_elements_csv(&self.workbook);
         let path = "/tmp/soryntel_elements_export.csv";
         match crate::storage::write_atomic(path, csv) {
             Ok(_) => {
@@ -878,7 +878,7 @@ impl ElementsModuleState {
                             ui.close_menu();
                         }
                         if ui.button("Reset Default Element4 Database").clicked() {
-                            self.workbook = SoryntelApplication::default_elements_workbook();
+                            self.workbook = MiscUseCases::default_elements_workbook();
                             self.recompute_diagram();
                             self.sync_formula_from_active_cell();
                             self.status_msg = "Reset workbook to default Element4 (103 elements).".into();
@@ -1569,7 +1569,7 @@ impl ElementsModuleState {
                     ui.label("• Periodic Chart with category coloring, state colors, and proportional 3D-shaded property spheres.");
                     ui.label("• Interactive Elements spreadsheet with Fix Left 3 Columns, Diagram toggles, VB6 RGB color swatches, custom rows, and CSV export.");
                     ui.label("• Integrated with Maindb6 species catalog lookup (double-click any element).");
-                    if let Some(idx) = find_element_index_by_symbol("Os") {
+                    if let Some(idx) = MiscUseCases::element_index("Os") {
                         let _ = idx;
                     }
                     if ui.button(crate::i18n::text("common.002")).clicked() {

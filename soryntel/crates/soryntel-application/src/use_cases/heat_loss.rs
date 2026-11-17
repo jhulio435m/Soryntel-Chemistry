@@ -1,7 +1,71 @@
 //! Casos de uso agrupados: heat_loss.
 use super::super::*;
+use soryntel_thermo::heat_loss::model::{
+    ConvectionFunctionPreset, FluidPropertyTable, SolidConductivityData, SurfaceEmissivityData,
+};
+use soryntel_thermo::heat_loss::presets as hl_presets;
+
+/// Ejemplos de workbook de Heat Loss incluidos en la aplicación.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HeatLossPreset {
+    HotWaterTank,
+    Smelting1,
+    Radiator,
+    SimpleCase,
+    OilFurnace,
+}
+
+/// Tablas de materiales integradas (sólidos, fluidos, funciones de convección y emisividades).
+pub struct HeatLossBuiltinTables {
+    pub solids: Vec<SolidConductivityData>,
+    pub fluids: Vec<FluidPropertyTable>,
+    pub conv_functions: Vec<ConvectionFunctionPreset>,
+    pub emissivities: Vec<SurfaceEmissivityData>,
+}
+
 pub struct HeatLossUseCases;
 impl HeatLossUseCases {
+    /// Workbook de ejemplo `kind`.
+    pub fn preset(kind: HeatLossPreset) -> HeatLossWorkbook {
+        match kind {
+            HeatLossPreset::HotWaterTank => hl_presets::preset_hotwatertank(),
+            HeatLossPreset::Smelting1 => hl_presets::preset_smelting1(),
+            HeatLossPreset::Radiator => hl_presets::preset_radiator(),
+            HeatLossPreset::SimpleCase => hl_presets::preset_simple_case(),
+            HeatLossPreset::OilFurnace => hl_presets::preset_oil_furnace(),
+        }
+    }
+
+    /// Composición del gas de combustión del ejemplo «oil furnace».
+    pub fn preset_oil_furnace_gas() -> soryntel_thermo::heat_loss::GasComposition {
+        hl_presets::preset_oil_furnace_gas()
+    }
+
+    /// Tablas de materiales integradas.
+    pub fn builtin_tables() -> HeatLossBuiltinTables {
+        HeatLossBuiltinTables {
+            solids: hl_presets::builtin_solids(),
+            fluids: hl_presets::builtin_fluids(),
+            conv_functions: hl_presets::builtin_convection_functions(),
+            emissivities: hl_presets::builtin_emissivities(),
+        }
+    }
+
+    /// Base de materiales con los valores por defecto de HSC.
+    pub fn default_material_database() -> soryntel_thermo::heat_loss::MaterialDatabase {
+        soryntel_thermo::heat_loss::MaterialDatabase::with_hsc_defaults()
+    }
+
+    /// Aplica al workbook el valor `value` de la variable objetivo `var` de la hoja `sheet_idx`.
+    pub fn apply_target_variable(
+        wb: &mut HeatLossWorkbook,
+        sheet_idx: usize,
+        var: soryntel_thermo::heat_loss::target::TargetVariable,
+        value: f64,
+    ) {
+        soryntel_thermo::heat_loss::target::apply_variable(wb, sheet_idx, var, value);
+    }
+
     pub fn estimate_reactor_natural_convection_loss(
         area_m2: f64,
         t_surface_c: f64,

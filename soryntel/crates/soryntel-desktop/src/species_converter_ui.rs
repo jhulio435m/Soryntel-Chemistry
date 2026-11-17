@@ -2,15 +2,14 @@ use std::f32::consts::TAU;
 
 use eframe::egui;
 use serde::{Deserialize, Serialize};
-use soryntel_application::SoryntelApplication;
+use soryntel_application::use_cases::MiscUseCases;
+use soryntel_core::SpeciesCatalogPort;
 use soryntel_thermo::{
     species_converter::{
         ConversionMethod, ConverterInputEntry, ConverterOutputSpec, SpeciesConverterRequest,
         SpeciesConverterResult, SpeciesTypeFilter,
     },
-    SpeciesCatalogPort,
 };
-
 use crate::excel_grid::{
     header_cell, row_num_cell, section_cell, text_cell, EXCEL_ALT_ROW_BG, EXCEL_GRID_BORDER,
     EXCEL_READONLY_BG,
@@ -251,7 +250,7 @@ impl SpeciesConverterModuleState {
             return;
         }
         let req = self.build_request(sheet);
-        match SoryntelApplication::initialize_species_converter(&req.inputs) {
+        match MiscUseCases::initialize_species_converter(&req.inputs) {
             Ok((calc_elems, in_tot)) => {
                 let sheet = &mut self.sheets[self.active_sheet];
                 sheet.result = Some(soryntel_thermo::species_converter::SpeciesConverterResult {
@@ -279,7 +278,7 @@ impl SpeciesConverterModuleState {
             return;
         }
         let req = self.build_request(sheet);
-        match SoryntelApplication::convert_species(catalog, &req) {
+        match MiscUseCases::convert_species(catalog, &req) {
             Ok(res) => {
                 self.sheets[self.active_sheet].result = Some(res);
             }
@@ -297,7 +296,7 @@ impl SpeciesConverterModuleState {
         }
         let req = self.build_request(sheet);
         let mut outs = req.outputs.clone();
-        if let Err(e) = SoryntelApplication::fix_species_balance(&req.inputs, &mut outs) {
+        if let Err(e) = MiscUseCases::fix_species_balance(&req.inputs, &mut outs) {
             self.status_msg = Some(e.to_string());
             return;
         }

@@ -10,7 +10,7 @@
 use eframe::egui::{self, Align2, Color32, FontId, Pos2, Rect, RichText, Rounding, Stroke, Vec2};
 use egui_plot::{HLine, Legend, Line, Plot, PlotPoints, Points};
 use serde::{Deserialize, Serialize};
-use soryntel_application::SoryntelApplication;
+use soryntel_application::use_cases::SimulationUseCases;
 use soryntel_thermo::sim::{
     mass_balance::{
         default_mineral_sg, evaluate_cell_uncertainty, search_minerals_catalog, BalanceType,
@@ -198,8 +198,8 @@ impl Default for MassBalanceWindowState {
 
 impl MassBalanceWindowState {
     pub fn with_preset_rougher() -> (SimProject, Self) {
-        let mut wb = SoryntelApplication::mb_preset_rougher();
-        let sol = SoryntelApplication::mb_calculate(&mut wb, 0).ok();
+        let mut wb = SimulationUseCases::mb_preset_rougher();
+        let sol = SimulationUseCases::mb_calculate(&mut wb, 0).ok();
         let banner = match &sol {
             Some(s) => format!(
                 "Rougher Flotation preset ready — {} rounds, WSSQ={:.4}, RMSD={:.4}",
@@ -215,8 +215,8 @@ impl MassBalanceWindowState {
     }
 
     pub fn with_preset_grinding() -> (SimProject, Self) {
-        let mut wb = SoryntelApplication::mb_preset_grinding();
-        let sol = SoryntelApplication::mb_calculate(&mut wb, 0).ok();
+        let mut wb = SimulationUseCases::mb_preset_grinding();
+        let sol = SimulationUseCases::mb_calculate(&mut wb, 0).ok();
         let banner = match &sol {
             Some(s) => format!(
                 "Grinding Survey preset ready — {} size fractions, WSSQ={:.4}",
@@ -310,8 +310,8 @@ impl MassBalanceWindowState {
         if project.units.is_empty() && project.streams.is_empty() {
             return;
         }
-        let mut wb = SoryntelApplication::mb_from_sim_project(project);
-        let _ = SoryntelApplication::mb_calculate(&mut wb, 0);
+        let mut wb = SimulationUseCases::mb_from_sim_project(project);
+        let _ = SimulationUseCases::mb_calculate(&mut wb, 0);
         self.workbook = wb;
         self.preset_label = format!("Flowsheet: {}", project.process_info.process_name);
         self.active_frac_idx = 0;
@@ -328,7 +328,7 @@ impl MassBalanceWindowState {
 
     fn run_calculate_active(&mut self) {
         let ds_idx = self.workbook.active_dataset;
-        match SoryntelApplication::mb_calculate(&mut self.workbook, ds_idx) {
+        match SimulationUseCases::mb_calculate(&mut self.workbook, ds_idx) {
             Ok(sol) => {
                 self.status_banner = format!(
                     "Balanced '{}': {} rounds (conv={}), WSSQ={:.4}, RMSD={:.4}, Rel.RMSD={:.4}%",
@@ -348,7 +348,7 @@ impl MassBalanceWindowState {
 
     fn run_error_check(&mut self) {
         let ds_idx = self.workbook.active_dataset;
-        self.error_check_cache = SoryntelApplication::mb_check_errors(&self.workbook, ds_idx);
+        self.error_check_cache = SimulationUseCases::mb_check_errors(&self.workbook, ds_idx);
         self.show_error_check_modal = true;
         self.status_banner = if self.error_check_cache.is_empty() {
             "Check for Errors: Everything seems to be OK!".to_string()
@@ -367,7 +367,7 @@ impl MassBalanceWindowState {
     }
 
     fn export_xlsx_to_tmp(&mut self) {
-        match SoryntelApplication::mb_export_xlsx(&self.workbook) {
+        match SimulationUseCases::mb_export_xlsx(&self.workbook) {
             Ok(bytes) => {
                 let path = "/tmp/soryntel_mass_balance_results.xlsx";
                 match crate::storage::write_atomic(path, &bytes) {
@@ -606,7 +606,7 @@ fn render_upper_ribbon(
                             ui.menu_button(RichText::new("Save to\nFlowsheet ▾").size(10.5), |ui| {
                                 if ui.button("Save Balanced Flows, Grades & Recoveries").clicked() {
                                     if let Some(proj) = project.as_deref_mut() {
-                                        let n = SoryntelApplication::mb_save_to_sim_project(
+                                        let n = SimulationUseCases::mb_save_to_sim_project(
                                             &state.workbook,
                                             proj,
                                         );
@@ -621,7 +621,7 @@ fn render_upper_ribbon(
                                 }
                                 if ui.button("Save Recoveries / Properties Info Only").clicked() {
                                     if let Some(proj) = project.as_deref_mut() {
-                                        let n = SoryntelApplication::mb_save_to_sim_project(
+                                        let n = SimulationUseCases::mb_save_to_sim_project(
                                             &state.workbook,
                                             proj,
                                         );
@@ -848,7 +848,7 @@ fn render_upper_ribbon(
                                         }
                                     }
                                     if rbtn(ui, "Batch\nRun", false).clicked() {
-                                        let res = SoryntelApplication::mb_calculate_batch(
+                                        let res = SimulationUseCases::mb_calculate_batch(
                                             &mut state.workbook,
                                         );
                                         let ok_cnt = res.iter().filter(|r| r.is_ok()).count();
@@ -1239,7 +1239,7 @@ fn render_upper_ribbon(
                                     }
                                     ui.menu_button(RichText::new("Batch\nRun ▾").size(10.5), |ui| {
                                         if ui.button("Run All Selected Data Sets").clicked() {
-                                            let res = SoryntelApplication::mb_calculate_batch(
+                                            let res = SimulationUseCases::mb_calculate_batch(
                                                 &mut state.workbook,
                                             );
                                             let ok_cnt = res.iter().filter(|r| r.is_ok()).count();
@@ -3883,7 +3883,7 @@ fn render_mb_modals(ctx: &egui::Context, state: &mut MassBalanceWindowState) {
                     } else {
                         Some(state.import_hsc7_flowsheet_buf.as_str())
                     };
-                    match SoryntelApplication::mb_import_hsc7(
+                    match SimulationUseCases::mb_import_hsc7(
                         &mut state.workbook,
                         fs_opt,
                         &state.import_hsc7_data_buf,

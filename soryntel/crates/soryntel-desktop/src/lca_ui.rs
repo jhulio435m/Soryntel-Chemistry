@@ -1,10 +1,10 @@
 //! Clean-room Desktop UI for Module 19: `HSC - Sim LCA` (`LCA Evaluation` 49.3 & `LCA` 49.4 Beta).
 //!
 //! Keeps all physical calculations, normalization, EcoSpold/JSON-LD/XLSX generation, and LCIA
-//! evaluation delegated to `soryntel_thermo::sim::lca` via `SoryntelApplication`.
+//! evaluation delegated to `soryntel_thermo::sim::lca` via `SimulationUseCases`.
 
 use eframe::egui::{self, Color32, RichText, Stroke};
-use soryntel_application::SoryntelApplication;
+use soryntel_application::use_cases::SimulationUseCases;
 use soryntel_thermo::sim::{
     lca::{
         deterministic_uuid, BetaLcaMode, BetaLcaState, BetaStreamRow, ClassicLcaState,
@@ -192,7 +192,7 @@ impl Default for LcaWindowState {
 
 impl LcaWindowState {
     pub fn with_preset_classic_zn() -> (SimProject, Self) {
-        let (proj, classic) = SoryntelApplication::sim_lca_preset_classic_zn();
+        let (proj, classic) = SimulationUseCases::sim_lca_preset_classic_zn();
         let mut st = Self::default();
         st.ui_mode = LcaUiMode::Classic;
         st.classic = classic;
@@ -202,7 +202,7 @@ impl LcaWindowState {
     }
 
     pub fn with_preset_beta_iron() -> (SimProject, Self) {
-        let (proj, beta) = SoryntelApplication::sim_lca_preset_beta_iron();
+        let (proj, beta) = SimulationUseCases::sim_lca_preset_beta_iron();
         let mut st = Self::default();
         st.ui_mode = LcaUiMode::Beta;
         st.classic.sync_from_project(&proj);
@@ -213,8 +213,8 @@ impl LcaWindowState {
     }
 
     pub fn sync_from_project(&mut self, project: &SimProject) {
-        SoryntelApplication::sim_lca_classic_sync(&mut self.classic, project);
-        SoryntelApplication::sim_lca_beta_sync(&mut self.beta, project);
+        SimulationUseCases::sim_lca_classic_sync(&mut self.classic, project);
+        SimulationUseCases::sim_lca_beta_sync(&mut self.beta, project);
     }
 }
 
@@ -438,7 +438,7 @@ fn render_classic_lca(
                 }
             }
             if ribbon_tile_button(ui, "▤", "Normalize", state.classic_tab == ClassicTab::Normalized, true).clicked() {
-                match SoryntelApplication::sim_lca_classic_normalize(&mut state.classic) {
+                match SimulationUseCases::sim_lca_classic_normalize(&mut state.classic) {
                     Ok(()) => {
                         state.classic_tab = ClassicTab::Normalized;
                         state.status_message = format!(
@@ -460,7 +460,7 @@ fn render_classic_lca(
         ribbon_group(ui, "Export", |ui| {
             let is_gabi = state.classic.active_db == LcaDatabaseKind::GaBi;
             if ribbon_tile_button(ui, "💾", "To EcoSpold\nv1.0 (GaBi)", false, is_gabi).clicked() {
-                match SoryntelApplication::sim_lca_classic_ecospold_xml(&mut state.classic) {
+                match SimulationUseCases::sim_lca_classic_ecospold_xml(&mut state.classic) {
                     Ok(xml) => {
                         let out_path = "/tmp/soryntel_ecospold_v1.xml";
                         let saved = crate::storage::write_atomic(out_path, xml.as_bytes()).is_ok();
@@ -478,7 +478,7 @@ fn render_classic_lca(
                 ui.menu_button(RichText::new("💾\nTo JSON-LD\n(OpenLCA) ▾").size(10.5), |ui| {
                     for action in ["To Active Database", "To Empty File..."] {
                         if ui.button(action).clicked() {
-                            match SoryntelApplication::sim_lca_classic_jsonld_zip(&mut state.classic) {
+                            match SimulationUseCases::sim_lca_classic_jsonld_zip(&mut state.classic) {
                                 Ok(bytes) => {
                                     let out_path = "/tmp/soryntel_openlca_jsonld.zip";
                                     let saved = crate::storage::write_atomic(out_path, &bytes).is_ok();
@@ -500,7 +500,7 @@ fn render_classic_lca(
                 });
             });
             if ribbon_tile_button(ui, "XLS", "To Excel", false, true).clicked() {
-                match SoryntelApplication::sim_lca_classic_xlsx(&mut state.classic) {
+                match SimulationUseCases::sim_lca_classic_xlsx(&mut state.classic) {
                     Ok(bytes) => {
                         let out_path = "/tmp/soryntel_lca_classic.xlsx";
                         let saved = crate::storage::write_atomic(out_path, &bytes).is_ok();
@@ -1324,7 +1324,7 @@ fn render_beta_lca(
                 state.show_ext_import_modal = true;
             }
             if ribbon_tile_button(ui, "XLS", "Export to\nExcel", false, true).clicked() {
-                let bytes = SoryntelApplication::sim_lca_beta_xlsx(&state.beta);
+                let bytes = SimulationUseCases::sim_lca_beta_xlsx(&state.beta);
                 let out_path = "/tmp/LCA_exports.xlsx";
                 let _ = crate::storage::write_atomic(out_path, &bytes);
                 state.export_last_saved_path = Some(out_path.to_string());
@@ -1394,7 +1394,7 @@ fn render_beta_lca(
                 state.beta.show_result_content = !state.beta.show_result_content;
             }
             if ribbon_tile_button(ui, "📊", "Calculate\nResults", false, true).clicked() {
-                match SoryntelApplication::sim_lca_beta_calculate(&mut state.beta) {
+                match SimulationUseCases::sim_lca_beta_calculate(&mut state.beta) {
                     Ok(()) => {
                         state.beta_sheet = BetaSheetTab::Results;
                         state.status_message = format!(
@@ -2243,7 +2243,7 @@ fn render_beta_right_dock(ui: &mut egui::Ui, state: &mut LcaWindowState) {
             }
         }
         BetaDockTab::ImpactMethods => {
-            let methods: Vec<LciaMethodSpec> = SoryntelApplication::sim_lca_methods();
+            let methods: Vec<LciaMethodSpec> = SimulationUseCases::sim_lca_methods();
             let find_q = state.beta_active_find.clone();
             let mut double_add: Option<(String, String)> = None;
 

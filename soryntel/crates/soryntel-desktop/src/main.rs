@@ -37,7 +37,7 @@ mod water_ui;
 
 use composition::AppServices;
 use eframe::egui;
-use soryntel_application::use_cases::AddinsUseCases;
+use soryntel_application::use_cases::{AddinsUseCases, CatalogUseCases};
 #[cfg(test)]
 use soryntel_db::ThermoDatabase;
 
@@ -488,11 +488,14 @@ impl SoryntelDesktopApp {
         let heat_loss_state = heat_loss_ui::HeatLossModuleState::new();
         let equilibrium_state = equilibrium_ui::EquilibriumUiState::default();
         let exergy_state = exergy_ui::ExergyModuleState::new(db);
+        // TODO(hex): los constructores aún reciben el guard de `legacy_db()` (que se suelta
+        // antes de construir `Self`); `&ThermoDatabase` se coerciona a cada puerto.
         let estimate_state = estimate_ui::EstimateModuleState::new(db);
         let ehph_state = ehph_ui::EhPhModuleState::new(db);
         let diagrams_state = diagrams_ui::DiagramsModuleState::new(db);
         let phase_stability_state = phase_stability_ui::PhaseStabilityModuleState::new(db);
-        let species_converter_state = species_converter_ui::SpeciesConverterModuleState::new(db);
+        let species_converter_state =
+            species_converter_ui::SpeciesConverterModuleState::new(db);
         let benson_state = benson_ui::BensonModuleState::new(db);
         let elements_state = elements_ui::ElementsModuleState::default();
         let water_state = water_ui::WaterModuleState::new(db);
@@ -586,16 +589,15 @@ impl eframe::App for SoryntelDesktopApp {
                         if let (Ok(area), Ok(q_w)) =
                             (parts[0].parse::<usize>(), parts[1].parse::<f64>())
                         {
-                            self.balance_state.set_area_heat_loss_w(
-                                area,
-                                q_w,
-                                &*self.services.legacy_db(),
-                            );
+                            self.services.with_catalog(|catalog| {
+                                self.balance_state.set_area_heat_loss_w(area, q_w, catalog)
+                            });
                         }
                     }
                     let _ = std::fs::remove_file(&export_path);
                 }
-                self.balance_state.ui(ctx, &*self.services.legacy_db());
+                self.services
+                    .with_catalog(|catalog| self.balance_state.ui(ctx, catalog));
                 return;
             }
             WindowMode::HeatLoss => {
@@ -623,6 +625,7 @@ impl eframe::App for SoryntelDesktopApp {
                 return;
             }
             WindowMode::Estimate => {
+                // Guard de escritura temporal: se suelta al terminar la sentencia.
                 self.estimate_state.ui(ctx, &mut *self.services.legacy_db_mut());
                 return;
             }
@@ -640,8 +643,8 @@ impl eframe::App for SoryntelDesktopApp {
                 return;
             }
             WindowMode::SpeciesConverter => {
-                self.species_converter_state
-                    .ui(ctx, &*self.services.legacy_db());
+                self.services
+                    .with_catalog(|catalog| self.species_converter_state.ui(ctx, catalog));
                 return;
             }
             WindowMode::Benson => {
@@ -649,7 +652,8 @@ impl eframe::App for SoryntelDesktopApp {
                 return;
             }
             WindowMode::Elements => {
-                self.elements_state.ui(ctx, &*self.services.legacy_db());
+                self.services
+                    .with_catalog(|catalog| self.elements_state.ui(ctx, catalog));
                 return;
             }
             WindowMode::Water => {
@@ -689,6 +693,8 @@ impl eframe::App for SoryntelDesktopApp {
                 return;
             }
             WindowMode::Species => {
+                // El guard de escritura se suelta al terminar esta sentencia, antes de
+                // tomar el de lectura para recalcular la reacción.
                 let selected = self.species_state.ui(ctx, &mut *self.services.legacy_db_mut());
                 if let Some(f) = selected {
                     let _ = crate::storage::write_atomic(
@@ -761,7 +767,7 @@ impl SoryntelDesktopApp {
         launcher_ui::render_hsc10_header(
             ctx,
             &mut self.launcher_ui_state,
-            self.services.with_catalog(|catalog| catalog.species_count()),
+            self.services.with_catalog(CatalogUseCases::species_count),
         );
         let footer_cmd =
             launcher_ui::render_hsc10_footer(ctx, &mut self.launcher_ui_state, open_count);
@@ -807,7 +813,7 @@ impl SoryntelDesktopApp {
                 ctx,
                 &mut self.launcher_ui_state,
                 &tiles,
-                self.services.with_catalog(|catalog| catalog.species_count()),
+                self.services.with_catalog(CatalogUseCases::species_count),
             ) {
                 launcher_ui::LauncherCommand::OpenModule(m) => self.launch_module_by_key(m),
                 launcher_ui::LauncherCommand::KillAll => self.kill_all_children(),
@@ -1070,7 +1076,7 @@ impl SoryntelDesktopApp {
         ];
 
         let mut pending_action: Option<(&'static str, bool)> = None;
-        let species_count = self.services.with_catalog(|catalog| catalog.species_count());
+        let species_count = self.services.with_catalog(CatalogUseCases::species_count);
         let search_q = self.launcher_ui_state.cards_search.trim().to_lowercase();
 
         egui::CentralPanel::default()
