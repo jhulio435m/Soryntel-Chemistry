@@ -2,14 +2,15 @@
 //!
 //! Hexagonal UI Adapter: delegates all stoichiometric balancing, Kelley polynomial integration,
 //! Criss-Cobble aqueous extrapolation, `.rea8` persistence, `.xlsx` / TSV exports, and vector SVG
-//! rendering to `SoryntelApplication`.
+//! rendering to `ReactionUseCases`.
 
 use crate::excel_grid;
 use eframe::egui;
 use egui_plot::{Legend, Line, Plot, PlotPoints, Text as PlotText};
-use soryntel_application::SoryntelApplication;
+use soryntel_application::ports::SpeciesCatalogPort;
+use soryntel_application::use_cases::{CatalogUseCases, ReactionUseCases};
 use soryntel_core::{EnergyUnit, ResultFormat, TemperatureUnit};
-use soryntel_db::ThermoDatabase;
+// DTOs/tipos de modelo de thermo usados como estado de la UI.
 use soryntel_thermo::{
     CalculationRequest, CalculationResponse, ReactionCollectedSheet, ReactionWorkbookFile,
     ReactionYAxis,
@@ -69,7 +70,7 @@ pub struct ReactionModuleState {
 }
 
 impl ReactionModuleState {
-    pub fn new(db: &ThermoDatabase) -> Self {
+    pub fn new(db: &dyn SpeciesCatalogPort) -> Self {
         let mut state = Self {
             formula_input: "Al2O3".to_string(),
             smallest_coeff: 1.0,
@@ -117,7 +118,7 @@ impl ReactionModuleState {
     }
 
     pub fn run_balance(&mut self) {
-        match SoryntelApplication::balance_reaction_equation(
+        match ReactionUseCases::balance_reaction_equation(
             &self.formula_input,
             self.smallest_coeff,
         ) {
@@ -133,7 +134,7 @@ impl ReactionModuleState {
         }
     }
 
-    pub fn run_calculate(&mut self, db: &ThermoDatabase) {
+    pub fn run_calculate(&mut self, db: &dyn SpeciesCatalogPort) {
         let req = CalculationRequest {
             input: self.formula_input.clone(),
             t_from: self.t_from,
@@ -145,7 +146,7 @@ impl ReactionModuleState {
             show_transitions: self.show_transitions,
             criss_cobble: self.criss_cobble,
         };
-        match SoryntelApplication::calculate_reaction(db, &req) {
+        match ReactionUseCases::calculate_reaction(db, &req) {
             Ok(resp) => {
                 if resp.is_single_substance {
                     if !matches!(
@@ -197,7 +198,7 @@ impl ReactionModuleState {
 
     pub fn load_preset(
         &mut self,
-        db: &ThermoDatabase,
+        db: &dyn SpeciesCatalogPort,
         eq: &str,
         f: f64,
         t: f64,
@@ -215,7 +216,7 @@ impl ReactionModuleState {
     }
 
     /// Reproduce Fig. 6 from Manual Ch. 10.3: Multi-reaction vapor pressure comparison (`Mg`, `Zn`, `Cd`).
-    pub fn load_fig6_multi_vapor_preset(&mut self, db: &ThermoDatabase) {
+    pub fn load_fig6_multi_vapor_preset(&mut self, db: &dyn SpeciesCatalogPort) {
         self.sheets.clear();
         self.temp_unit = TemperatureUnit::Celsius;
         self.energy_unit = EnergyUnit::Kilojoules;
@@ -258,7 +259,7 @@ impl ReactionModuleState {
             sheets: self.sheets.clone(),
             active_sheet_idx: self.active_sheet_idx,
         };
-        match SoryntelApplication::serialize_rea8_workbook(&wb)
+        match ReactionUseCases::serialize_rea8_workbook(&wb)
             .and_then(|json| std::fs::write(path, json).map_err(|e| soryntel_core::SoryntelError::DatabaseError(e.to_string())))
         {
             Ok(_) => {
@@ -275,7 +276,7 @@ impl ReactionModuleState {
     pub fn load_rea8(&mut self, path: &str) {
         match std::fs::read_to_string(path)
             .map_err(|e| soryntel_core::SoryntelError::DatabaseError(e.to_string()))
-            .and_then(|raw| SoryntelApplication::deserialize_rea8_workbook(&raw))
+            .and_then(|raw| ReactionUseCases::deserialize_rea8_workbook(&raw))
         {
             Ok(wb) => {
                 self.formula_input = wb.formula_input;
@@ -311,7 +312,7 @@ impl ReactionModuleState {
         if self.sheets.is_empty() {
             return;
         }
-        let bytes = SoryntelApplication::export_reaction_workbook_xlsx(&self.sheets);
+        let bytes = ReactionUseCases::export_reaction_workbook_xlsx(&self.sheets);
         match std::fs::write(path, bytes) {
             Ok(_) => {
                 self.status_msg = format!(
@@ -331,7 +332,7 @@ impl ReactionModuleState {
         let Some(sheet) = self.active_sheet() else {
             return;
         };
-        let tsv = SoryntelApplication::format_reaction_sheet_tsv(sheet, self.decimals);
+        let tsv = ReactionUseCases::format_reaction_sheet_tsv(sheet, self.decimals);
         let csv = tsv.replace('\t', ",");
         match std::fs::write(DEFAULT_CSV_PATH, csv) {
             Ok(_) => {
@@ -349,7 +350,7 @@ impl ReactionModuleState {
         let Some(sheet) = self.active_sheet() else {
             return;
         };
-        let tsv = SoryntelApplication::format_reaction_sheet_tsv(sheet, self.decimals);
+        let tsv = ReactionUseCases::format_reaction_sheet_tsv(sheet, self.decimals);
         ctx.copy_text(tsv);
         self.status_msg = format!(
             "Hoja {} copiada al portapapeles (formato TSV para Excel)",
@@ -368,14 +369,14 @@ impl ReactionModuleState {
         if self.plot_all_data && self.sheets.len() > 1 {
             for (idx, sheet) in self.sheets.iter().enumerate() {
                 if !sheet.visible_in_plot
-                    || !SoryntelApplication::are_reaction_sheets_plot_compatible(
+                    || !ReactionUseCases::are_reaction_sheets_plot_compatible(
                         primary,
                         &sheet.response,
                     )
                 {
                     continue;
                 }
-                let pts = SoryntelApplication::extract_reaction_plot_points(
+                let pts = ReactionUseCases::extract_reaction_plot_points(
                     &sheet.response,
                     self.y_axis,
                     self.log_y_scale,
@@ -384,7 +385,7 @@ impl ReactionModuleState {
                 series.push((sheet.response.normalized_input.clone(), pts, hex));
             }
         } else {
-            let pts = SoryntelApplication::extract_reaction_plot_points(
+            let pts = ReactionUseCases::extract_reaction_plot_points(
                 primary,
                 self.y_axis,
                 self.log_y_scale,
@@ -392,7 +393,7 @@ impl ReactionModuleState {
             series.push((primary.normalized_input.clone(), pts, SERIES_HEX[0]));
         }
 
-        Some(SoryntelApplication::render_reaction_chart_svg(
+        Some(ReactionUseCases::render_reaction_chart_svg(
             title,
             &x_label,
             &y_label,
@@ -433,7 +434,7 @@ impl ReactionModuleState {
         let Some(primary) = self.active_response() else {
             return;
         };
-        let pts = SoryntelApplication::extract_reaction_plot_points(
+        let pts = ReactionUseCases::extract_reaction_plot_points(
             primary,
             self.y_axis,
             self.log_y_scale,
@@ -451,7 +452,7 @@ impl ReactionModuleState {
         self.status_ok = true;
     }
 
-    pub fn ui(&mut self, ctx: &egui::Context, db: &ThermoDatabase) {
+    pub fn ui(&mut self, ctx: &egui::Context, db: &dyn SpeciesCatalogPort) {
         let yellow_bg = excel_grid::EXCEL_YELLOW_BG;
 
         // Keyboard shortcut Ctrl+C for copying selected cell or sheet
@@ -679,7 +680,7 @@ impl ReactionModuleState {
 
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     ui.label(
-                        egui::RichText::new(format!("🗄 Maindb6: {} especies", db.len()))
+                        egui::RichText::new(format!("🗄 Maindb6: {} especies", CatalogUseCases::species_count(db)))
                             .small()
                             .color(egui::Color32::from_rgb(71, 85, 105)),
                     );
@@ -886,7 +887,7 @@ impl ReactionModuleState {
     fn render_specifications_box(
         &mut self,
         ui: &mut egui::Ui,
-        db: &ThermoDatabase,
+        db: &dyn SpeciesCatalogPort,
         yellow_bg: egui::Color32,
     ) {
         egui::Frame::group(ui.style()).show(ui, |ui| {
@@ -964,7 +965,7 @@ impl ReactionModuleState {
         &mut self,
         ui: &mut egui::Ui,
         ctx: &egui::Context,
-        db: &ThermoDatabase,
+        db: &dyn SpeciesCatalogPort,
         yellow_bg: egui::Color32,
     ) {
         egui::Frame::group(ui.style()).show(ui, |ui| {
@@ -1089,7 +1090,7 @@ impl ReactionModuleState {
         });
     }
 
-    fn render_left_spreadsheet_pane(&mut self, ui: &mut egui::Ui, db: &ThermoDatabase) {
+    fn render_left_spreadsheet_pane(&mut self, ui: &mut egui::Ui, db: &dyn SpeciesCatalogPort) {
         let Some(sheet_clone) = self.active_sheet().cloned() else {
             return;
         };
@@ -1600,7 +1601,7 @@ impl ReactionModuleState {
                 if let Some(primary) = self.active_response().cloned() {
                     for s in &self.sheets {
                         if s.visible_in_plot
-                            && !SoryntelApplication::are_reaction_sheets_plot_compatible(
+                            && !ReactionUseCases::are_reaction_sheets_plot_compatible(
                                 &primary,
                                 &s.response,
                             )
@@ -1738,14 +1739,14 @@ impl ReactionModuleState {
                 let total_sheets = self.sheets.len();
                 for (idx, sheet) in self.sheets.iter().enumerate() {
                     if !sheet.visible_in_plot
-                        || !SoryntelApplication::are_reaction_sheets_plot_compatible(
+                        || !ReactionUseCases::are_reaction_sheets_plot_compatible(
                             &primary,
                             &sheet.response,
                         )
                     {
                         continue;
                     }
-                    let raw_pts = SoryntelApplication::extract_reaction_plot_points(
+                    let raw_pts = ReactionUseCases::extract_reaction_plot_points(
                         &sheet.response,
                         self.y_axis,
                         self.log_y_scale,
@@ -1774,7 +1775,7 @@ impl ReactionModuleState {
                     }
                 }
             } else {
-                let raw_pts = SoryntelApplication::extract_reaction_plot_points(
+                let raw_pts = ReactionUseCases::extract_reaction_plot_points(
                     &primary,
                     self.y_axis,
                     self.log_y_scale,
@@ -1886,7 +1887,7 @@ impl ReactionModuleState {
         let mut open = self.show_print_modal;
         let report_txt = self
             .active_sheet()
-            .map(|s| SoryntelApplication::format_reaction_sheet_tsv(s, self.decimals))
+            .map(|s| ReactionUseCases::format_reaction_sheet_tsv(s, self.decimals))
             .unwrap_or_default();
         egui::Window::new("📄 Print / Reaction Summary Report")
             .open(&mut open)
@@ -1950,6 +1951,7 @@ fn chart_tool_icon_btn(ui: &mut egui::Ui, icon: &str, tooltip: &str) -> egui::Re
 #[cfg(test)]
 mod tests {
     use super::*;
+    use soryntel_db::ThermoDatabase;
 
     #[test]
     fn reaction_ui_renders_wide_and_compact_and_supports_rea8_and_fig6_preset() {

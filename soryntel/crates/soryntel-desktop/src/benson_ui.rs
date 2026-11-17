@@ -1,7 +1,10 @@
 use eframe::egui;
-use soryntel_application::SoryntelApplication;
+use soryntel_application::ports::SpeciesCatalogPort;
+use soryntel_application::use_cases::{CatalogUseCases, MiscUseCases};
 use soryntel_core::CAL_TO_JOULE;
-use soryntel_db::ThermoDatabase;
+// Tipos de modelo de thermo usados como estado de la UI. `find_structural_block`,
+// `structural_blocks_for`, `MoleculeGraph::{from_block, empty}` y
+// `decompose_molecule_to_benson` aún no tienen caso de uso en `MiscUseCases`.
 use soryntel_thermo::{
     benson::{
         find_structural_block, structural_blocks_for, BensonEstimationResult, BensonParamsInput,
@@ -115,7 +118,7 @@ pub struct BensonModuleState {
 }
 
 impl BensonModuleState {
-    pub fn new(db: &ThermoDatabase) -> Self {
+    pub fn new(db: &dyn SpeciesCatalogPort) -> Self {
         // Default starter molecule: 9,10-Anthracenedimethanol (C16H14O2, MW 238.272) like Fig. 1
         let starter_spec = find_structural_block("aro_diol_ant")
             .unwrap_or_else(|| find_structural_block("aro_benzene").unwrap());
@@ -164,7 +167,7 @@ impl BensonModuleState {
         }
     }
 
-    fn load_molecule(&mut self, mol: MoleculeGraph, db: &ThermoDatabase) {
+    fn load_molecule(&mut self, mol: MoleculeGraph, db: &dyn SpeciesCatalogPort) {
         self.push_undo();
         self.molecule = mol;
         self.smiles_input = self.molecule.smiles.clone();
@@ -174,7 +177,7 @@ impl BensonModuleState {
         self.recompute_estimation(db, false);
     }
 
-    fn recompute_estimation(&mut self, db: &ThermoDatabase, open_results: bool) {
+    fn recompute_estimation(&mut self, db: &dyn SpeciesCatalogPort, open_results: bool) {
         if self.molecule.atoms.is_empty() {
             self.estimation = None;
             self.progress_pct = 0.0;
@@ -183,7 +186,7 @@ impl BensonModuleState {
         }
         let (_, auto_params) = soryntel_thermo::benson::decompose_molecule_to_benson(&self.molecule);
         self.benson_params = auto_params.clone();
-        match SoryntelApplication::estimate_benson_properties(db, &self.molecule, None, Some(&auto_params)) {
+        match MiscUseCases::estimate_benson_properties(db, &self.molecule, None, Some(&auto_params)) {
             Ok(est) => {
                 self.edit_formula = est.formula.clone();
                 self.edit_common_name = est.common_name.clone();
@@ -209,8 +212,8 @@ impl BensonModuleState {
         }
     }
 
-    fn recalculate_with_current_params(&mut self, db: &ThermoDatabase) {
-        match SoryntelApplication::estimate_benson_properties(
+    fn recalculate_with_current_params(&mut self, db: &dyn SpeciesCatalogPort) {
+        match MiscUseCases::estimate_benson_properties(
             db,
             &self.molecule,
             None,
@@ -227,7 +230,7 @@ impl BensonModuleState {
         }
     }
 
-    pub fn ui(&mut self, ctx: &egui::Context, db: &mut ThermoDatabase) {
+    pub fn ui(&mut self, ctx: &egui::Context, db: &mut dyn SpeciesCatalogPort) {
         // Gentle idle spin on the small Selected group preview viewport
         self.preview_yaw += ctx.input(|i| i.stable_dt).min(0.05) * 0.45;
         ctx.request_repaint_after(std::time::Duration::from_millis(60));
@@ -322,7 +325,7 @@ impl BensonModuleState {
         }
     }
 
-    fn render_top_ribbon(&mut self, ui: &mut egui::Ui, db: &mut ThermoDatabase) {
+    fn render_top_ribbon(&mut self, ui: &mut egui::Ui, db: &mut dyn SpeciesCatalogPort) {
         egui::ScrollArea::horizontal().show(ui, |ui| {
             ui.horizontal(|ui| {
                 // --- Group 1: Menu ---
@@ -559,7 +562,7 @@ impl BensonModuleState {
         });
     }
 
-    fn render_right_palette(&mut self, ui: &mut egui::Ui, db: &mut ThermoDatabase) {
+    fn render_right_palette(&mut self, ui: &mut egui::Ui, db: &mut dyn SpeciesCatalogPort) {
         egui::ScrollArea::vertical().show(ui, |ui| {
             let panel_w = ui.available_width();
             ui.add_sized(
@@ -723,7 +726,7 @@ impl BensonModuleState {
                 );
                 let enter = edit.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
                 if go_clicked || enter {
-                    match SoryntelApplication::parse_benson_smiles(&self.smiles_input) {
+                    match MiscUseCases::parse_benson_smiles(&self.smiles_input) {
                         Ok(mol) => self.load_molecule(mol, db),
                         Err(e) => {
                             self.last_error = Some(e.clone());
@@ -742,7 +745,7 @@ impl BensonModuleState {
         });
     }
 
-    fn render_3d_workspace(&mut self, ui: &mut egui::Ui, db: &mut ThermoDatabase) {
+    fn render_3d_workspace(&mut self, ui: &mut egui::Ui, db: &mut dyn SpeciesCatalogPort) {
         let avail = ui.available_rect_before_wrap();
         let response = ui.allocate_rect(avail, egui::Sense::click_and_drag());
 
@@ -838,7 +841,7 @@ impl BensonModuleState {
         }
     }
 
-    fn render_results_window(&mut self, ctx: &egui::Context, db: &mut ThermoDatabase) {
+    fn render_results_window(&mut self, ctx: &egui::Context, db: &mut dyn SpeciesCatalogPort) {
         let mut open = self.show_results_window;
         let title = self.results_unit.title();
         let Some(est) = self.estimation.clone() else {
@@ -1017,7 +1020,7 @@ impl BensonModuleState {
                 // Bottom toolbar matching Fig. 10 & Fig. 11
                 ui.horizontal_wrapped(|ui| {
                     if ui.button("Save to own database").clicked() {
-                        let sp = SoryntelApplication::save_benson_species(
+                        let sp = MiscUseCases::save_benson_species(
                             db,
                             &est,
                             self.selected_save_phase,
@@ -1027,7 +1030,7 @@ impl BensonModuleState {
                             "Saved '{}' ({:?}) to database ({} species total).",
                             sp.formula,
                             sp.phase,
-                            SoryntelApplication::species_count(db)
+                            CatalogUseCases::species_count(db)
                         );
                     }
 
@@ -1077,7 +1080,7 @@ impl BensonModuleState {
         }
     }
 
-    fn render_smiles_modal(&mut self, ctx: &egui::Context, db: &mut ThermoDatabase) {
+    fn render_smiles_modal(&mut self, ctx: &egui::Context, db: &mut dyn SpeciesCatalogPort) {
         let mut open = self.show_smiles_modal;
         egui::Window::new("Enter / Edit SMILES Structure")
             .open(&mut open)
@@ -1087,7 +1090,7 @@ impl BensonModuleState {
                 ui.add(egui::TextEdit::singleline(&mut self.smiles_input).desired_width(340.0));
                 ui.horizontal(|ui| {
                     if ui.button("Build Molecule").clicked() {
-                        match SoryntelApplication::parse_benson_smiles(&self.smiles_input) {
+                        match MiscUseCases::parse_benson_smiles(&self.smiles_input) {
                             Ok(mol) => {
                                 self.load_molecule(mol, db);
                                 self.show_smiles_modal = false;
@@ -1247,7 +1250,7 @@ fn build_selected_group_preview(el: ElementKind) -> MoleculeGraph {
         ElementKind::I => "I",
         ElementKind::H => "[H][H]",
     };
-    MoleculeGraph::from_smiles(smiles).unwrap_or_else(|_| MoleculeGraph::empty())
+    MiscUseCases::parse_benson_smiles(smiles).unwrap_or_else(|_| MoleculeGraph::empty())
 }
 
 fn element_badge_colors(el: ElementKind) -> (egui::Color32, egui::Color32) {

@@ -1,11 +1,13 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use eframe::egui;
-use soryntel_core::CAL_TO_JOULE;
-use soryntel_db::ThermoDatabase as SpeciesDb;
+use soryntel_application::ports::SpeciesCatalogPort;
+use soryntel_application::use_cases::{CatalogUseCases, MiscUseCases};
+// Tipos de modelo de thermo usados como estado de la UI. `delta_g_formation_h2o_kcal` y
+// `water_dielectric_constant` aún no tienen caso de uso en `MiscUseCases`.
 use soryntel_thermo::{
     ehph::{
-        calculate_ehph, delta_g_formation_h2o_kcal, water_dielectric_constant, EhPhRequest,
+        delta_g_formation_h2o_kcal, water_dielectric_constant, EhPhRequest,
         EhPhResult, ElementSpec, PotentialScale,
     },
     ChemicalSpecies,
@@ -142,7 +144,7 @@ pub struct EhPhModuleState {
 }
 
 impl EhPhModuleState {
-    pub fn new(db: &SpeciesDb) -> Self {
+    pub fn new(db: &dyn SpeciesCatalogPort) -> Self {
         let mut st = Self {
             view_mode: EpHViewMode::Diagram,
             selected_elements: vec![
@@ -271,14 +273,14 @@ impl EhPhModuleState {
         }
     }
 
-    fn update_temp_derived(&mut self, db: &SpeciesDb) {
+    fn update_temp_derived(&mut self, db: &dyn SpeciesCatalogPort) {
         let tk = self.t_k();
         self.dielectric_str = format!("{:.3}", water_dielectric_constant(tk));
         let dg = delta_g_formation_h2o_kcal(db, tk, self.criss_cobble);
         self.delta_g_h2o_str = format!("{dg:.3}");
     }
 
-    fn refresh_candidate_species(&mut self, db: &SpeciesDb, select_all: bool) {
+    fn refresh_candidate_species(&mut self, db: &dyn SpeciesCatalogPort, select_all: bool) {
         let mut elems: Vec<String> = self
             .selected_elements
             .iter()
@@ -290,7 +292,8 @@ impl EhPhModuleState {
         if !elems.iter().any(|e| e == "O") {
             elems.push("O".to_string());
         }
-        let mut list = db.search_by_elements(
+        let mut list = CatalogUseCases::search_species_by_elements(
+            db,
             &elems,
             self.mode_gases || self.mode_gas_ions,
             self.mode_liquids || self.mode_condensed,
@@ -353,7 +356,7 @@ impl EhPhModuleState {
         }
     }
 
-    fn draw_current(&mut self, db: &SpeciesDb) {
+    fn draw_current(&mut self, db: &dyn SpeciesCatalogPort) {
         for el in &mut self.selected_elements {
             if let Some(m_buf) = self.elem_mol_bufs.get(&el.symbol) {
                 if let Ok(v) = m_buf.trim().parse::<f64>() {
@@ -371,7 +374,7 @@ impl EhPhModuleState {
             }
         }
         let req = self.build_request();
-        match calculate_ehph(&req, Some(db)) {
+        match MiscUseCases::calculate_ehph(db, &req) {
             Ok(res) => {
                 self.status_error = None;
                 self.print_header = res.title.clone();
@@ -408,7 +411,7 @@ impl EhPhModuleState {
         }
     }
 
-    fn draw_combiner(&mut self, db: &SpeciesDb) {
+    fn draw_combiner(&mut self, db: &dyn SpeciesCatalogPort) {
         for ds in &mut self.combiner_datasets {
             let mut elems: Vec<String> = ds.elements.iter().map(|e| e.symbol.clone()).collect();
             if !elems.iter().any(|e| e == "H") {
@@ -417,7 +420,8 @@ impl EhPhModuleState {
             if !elems.iter().any(|e| e == "O") {
                 elems.push("O".to_string());
             }
-            let species = db.search_by_elements(
+            let species = CatalogUseCases::search_species_by_elements(
+                db,
                 &elems,
                 self.mode_gases || self.mode_gas_ions,
                 self.mode_liquids || self.mode_condensed,
@@ -446,7 +450,7 @@ impl EhPhModuleState {
                 show_predominance_ions: self.show_predominance_ions,
                 grid_resolution: 160,
             };
-            match calculate_ehph(&req, Some(db)) {
+            match MiscUseCases::calculate_ehph(db, &req) {
                 Ok(res) => {
                     ds.result = Some(res);
                     ds.error = None;
@@ -459,7 +463,7 @@ impl EhPhModuleState {
         }
     }
 
-    pub fn ui(&mut self, ctx: &egui::Context, db: &SpeciesDb) {
+    pub fn ui(&mut self, ctx: &egui::Context, db: &dyn SpeciesCatalogPort) {
         let mut light_vis = egui::Visuals::light();
         light_vis.panel_fill = egui::Color32::from_rgb(245, 246, 248);
         light_vis.window_fill = egui::Color32::WHITE;
@@ -551,7 +555,7 @@ impl EhPhModuleState {
         }
     }
 
-    fn ui_diagram_view(&mut self, ctx: &egui::Context, db: &SpeciesDb) {
+    fn ui_diagram_view(&mut self, ctx: &egui::Context, db: &dyn SpeciesCatalogPort) {
         egui::SidePanel::left("ehph_left_params")
             .resizable(true)
             .default_width(325.0)
@@ -1400,7 +1404,7 @@ impl EhPhModuleState {
         });
     }
 
-    fn ui_combiner_view(&mut self, ctx: &egui::Context, _db: &SpeciesDb) {
+    fn ui_combiner_view(&mut self, ctx: &egui::Context, _db: &dyn SpeciesCatalogPort) {
         egui::SidePanel::left("ehph_combiner_left")
             .resizable(true)
             .default_width(285.0)
@@ -1748,8 +1752,8 @@ impl EhPhModuleState {
     }
 }
 
-fn find_h2o_species(db: &SpeciesDb) -> Option<ChemicalSpecies> {
-    let matches = db.search("H2O", 12);
+fn find_h2o_species(db: &dyn SpeciesCatalogPort) -> Option<ChemicalSpecies> {
+    let matches = CatalogUseCases::search_species(db, "H2O", 12);
     matches
         .into_iter()
         .find(|s| s.formula == "H2O" || s.formula == "H2O(L)")

@@ -1,11 +1,14 @@
 use eframe::egui;
-use soryntel_db::ThermoDatabase;
+use soryntel_application::ports::SpeciesCatalogPort;
+use soryntel_application::use_cases::{CatalogUseCases, MiscUseCases};
+// Tipos de modelo de thermo usados como estado de la UI. `balanced_coeff_for_element` y
+// `species_db_temp_range` son helpers de dominio puros sin caso de uso todavía.
 use soryntel_thermo::{
     diagrams::{
-        balanced_coeff_for_element, calculate_diagram, species_db_temp_range, DiagramEnergyUnit,
+        balanced_coeff_for_element, species_db_temp_range, DiagramEnergyUnit,
         DiagramRequest, DiagramResult, DiagramSpeciesInput, DiagramType,
     },
-    ChemicalSpecies, SpeciesRepository,
+    ChemicalSpecies,
 };
 
 use crate::excel_grid::{
@@ -58,7 +61,7 @@ struct DiagramRow {
 }
 
 impl DiagramRow {
-    fn new(formula: &str, coeff: f64, db: &ThermoDatabase, in_kelvin: bool) -> Self {
+    fn new(formula: &str, coeff: f64, db: &dyn SpeciesCatalogPort, in_kelvin: bool) -> Self {
         let mut r = Self {
             formula: formula.to_string(),
             coeff_str: format!("{coeff:.2}"),
@@ -80,7 +83,7 @@ impl DiagramRow {
         }
     }
 
-    fn refresh_db_range(&mut self, db: &ThermoDatabase, in_kelvin: bool) {
+    fn refresh_db_range(&mut self, db: &dyn SpeciesCatalogPort, in_kelvin: bool) {
         if let Some(sp) = db.get_species(self.formula.trim()) {
             let (tmin_k, tmax_k) = species_db_temp_range(&sp);
             let off = if in_kelvin { 0.0 } else { 273.15 };
@@ -121,7 +124,7 @@ pub struct DiagramsModuleState {
 }
 
 impl DiagramsModuleState {
-    pub fn new(db: &ThermoDatabase) -> Self {
+    pub fn new(db: &dyn SpeciesCatalogPort) -> Self {
         let initial = vec![
             ("Cu2O", 2.0),
             ("FeO", 2.0),
@@ -161,13 +164,13 @@ impl DiagramsModuleState {
             status_error: None,
             show_db_browser: false,
             db_query: "Fe".to_string(),
-            db_matches: db.search("Fe", 40),
+            db_matches: CatalogUseCases::search_species(db, "Fe", 40),
         };
         st.recalculate(db);
         st
     }
 
-    fn recalculate(&mut self, db: &ThermoDatabase) {
+    fn recalculate(&mut self, db: &dyn SpeciesCatalogPort) {
         let t_min_val: f64 = self.t_min_str.trim().parse().unwrap_or(0.0);
         let t_max_val: f64 = self.t_max_str.trim().parse().unwrap_or(2000.0);
         let step_val: f64 = self.t_step_str.trim().parse().unwrap_or(50.0);
@@ -193,7 +196,7 @@ impl DiagramsModuleState {
             per_kg: self.per_kg,
         };
 
-        match calculate_diagram(&req, db) {
+        match MiscUseCases::calculate_diagram(db, &req) {
             Ok(res) => {
                 self.status_error = if res.warnings.is_empty() {
                     None
@@ -241,7 +244,7 @@ impl DiagramsModuleState {
         }
     }
 
-    pub fn ui(&mut self, ctx: &egui::Context, db: &ThermoDatabase) {
+    pub fn ui(&mut self, ctx: &egui::Context, db: &dyn SpeciesCatalogPort) {
         let mut vis = egui::Visuals::light();
         vis.panel_fill = egui::Color32::from_rgb(240, 242, 245);
         vis.window_fill = egui::Color32::WHITE;
@@ -532,7 +535,7 @@ impl DiagramsModuleState {
         }
     }
 
-    fn ui_xdata_grid(&mut self, ui: &mut egui::Ui, db: &ThermoDatabase) {
+    fn ui_xdata_grid(&mut self, ui: &mut egui::Ui, db: &dyn SpeciesCatalogPort) {
         let t_unit = if self.temp_in_kelvin { "K" } else { "°C" };
         ui.horizontal(|ui| {
             row_num_cell(ui, 0, 28.0);
@@ -796,7 +799,7 @@ impl DiagramsModuleState {
         });
     }
 
-    fn ui_db_browser(&mut self, ctx: &egui::Context, db: &ThermoDatabase) {
+    fn ui_db_browser(&mut self, ctx: &egui::Context, db: &dyn SpeciesCatalogPort) {
         let mut open = self.show_db_browser;
         egui::Window::new("Browse Database — Add Species")
             .open(&mut open)
@@ -806,7 +809,7 @@ impl DiagramsModuleState {
                 ui.horizontal(|ui| {
                     ui.label("Search:");
                     if ui.text_edit_singleline(&mut self.db_query).changed() {
-                        self.db_matches = db.search(&self.db_query, 50);
+                        self.db_matches = CatalogUseCases::search_species(db, &self.db_query, 50);
                     }
                 });
                 ui.separator();

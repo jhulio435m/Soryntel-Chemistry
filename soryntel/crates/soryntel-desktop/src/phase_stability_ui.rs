@@ -1,10 +1,12 @@
 use std::collections::BTreeSet;
 
 use eframe::egui;
-use soryntel_db::ThermoDatabase as SpeciesDb;
+use soryntel_application::ports::SpeciesCatalogPort;
+use soryntel_application::use_cases::{CatalogUseCases, MiscUseCases};
+// Tipos de modelo de thermo usados como estado de la UI.
 use soryntel_thermo::{
     phase_stability::{
-        calculate_phase_stability, AxisVariable, PhaseStabilityDiagram, PhaseStabilityInput,
+        AxisVariable, PhaseStabilityDiagram, PhaseStabilityInput,
         TemperatureUnit,
     },
     Phase,
@@ -70,7 +72,7 @@ pub struct PhaseStabilityModuleState {
 }
 
 impl PhaseStabilityModuleState {
-    pub fn new(db: &SpeciesDb) -> Self {
+    pub fn new(db: &dyn SpeciesCatalogPort) -> Self {
         let mut state = Self {
             selected_elements: vec!["Cu".into(), "S".into(), "O".into()],
             include_liquids: true,
@@ -100,7 +102,7 @@ impl PhaseStabilityModuleState {
         state
     }
 
-    fn apply_cu_s_o_preset(&mut self, db: &SpeciesDb) {
+    fn apply_cu_s_o_preset(&mut self, db: &dyn SpeciesCatalogPort) {
         self.selected_elements = vec!["Cu".into(), "S".into(), "O".into()];
         self.include_liquids = false;
         self.include_organics = false;
@@ -119,7 +121,7 @@ impl PhaseStabilityModuleState {
         self.run_calculate(db);
     }
 
-    fn apply_ti_cl_o_preset(&mut self, db: &SpeciesDb) {
+    fn apply_ti_cl_o_preset(&mut self, db: &dyn SpeciesCatalogPort) {
         self.selected_elements = vec!["Ti".into(), "Cl".into(), "O".into()];
         self.include_liquids = true;
         self.include_organics = false;
@@ -133,7 +135,7 @@ impl PhaseStabilityModuleState {
         self.run_calculate(db);
     }
 
-    fn apply_v_cl_o_preset(&mut self, db: &SpeciesDb) {
+    fn apply_v_cl_o_preset(&mut self, db: &dyn SpeciesCatalogPort) {
         self.selected_elements = vec!["V".into(), "Cl".into(), "O".into()];
         self.include_liquids = true;
         self.include_organics = false;
@@ -151,7 +153,7 @@ impl PhaseStabilityModuleState {
         self.run_calculate(db);
     }
 
-    fn refresh_species_and_gases(&mut self, db: &SpeciesDb) {
+    fn refresh_species_and_gases(&mut self, db: &dyn SpeciesCatalogPort) {
         self.available_species.clear();
         self.selected_species.clear();
         self.available_gases.clear();
@@ -160,7 +162,8 @@ impl PhaseStabilityModuleState {
             return;
         }
 
-        let condensed = db.search_by_elements(
+        let condensed = CatalogUseCases::search_species_by_elements(
+            db,
             &self.selected_elements,
             false,
             self.include_liquids,
@@ -179,7 +182,8 @@ impl PhaseStabilityModuleState {
             }
         }
 
-        let gases = db.search_by_elements(
+        let gases = CatalogUseCases::search_species_by_elements(
+            db,
             &self.selected_elements,
             true,
             false,
@@ -232,7 +236,7 @@ impl PhaseStabilityModuleState {
         }
     }
 
-    fn run_calculate(&mut self, db: &SpeciesDb) {
+    fn run_calculate(&mut self, db: &dyn SpeciesCatalogPort) {
         self.last_error = None;
         if self.selected_elements.len() != 3 {
             self.last_error = Some("Select exactly 3 elements.".into());
@@ -296,7 +300,7 @@ impl PhaseStabilityModuleState {
             ny: 120,
         };
 
-        match calculate_phase_stability(db, &input) {
+        match MiscUseCases::calculate_phase_stability(db, &input) {
             Ok(diagram) => {
                 if is_pp && self.auto_scale {
                     self.x_min_str = format!("{:.1}", diagram.x_min);
@@ -324,7 +328,7 @@ impl PhaseStabilityModuleState {
         }
     }
 
-    pub fn ui(&mut self, ctx: &egui::Context, db: &SpeciesDb) {
+    pub fn ui(&mut self, ctx: &egui::Context, db: &dyn SpeciesCatalogPort) {
         egui::SidePanel::left("phase_stability_params")
             .resizable(true)
             .default_width(336.0)
@@ -342,7 +346,7 @@ impl PhaseStabilityModuleState {
         });
     }
 
-    fn render_left_panel(&mut self, ui: &mut egui::Ui, db: &SpeciesDb) {
+    fn render_left_panel(&mut self, ui: &mut egui::Ui, db: &dyn SpeciesCatalogPort) {
         ui.horizontal(|ui| {
             ui.strong("Diagram Parameters");
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
