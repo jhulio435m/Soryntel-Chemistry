@@ -15,6 +15,7 @@ core_fail=0
 application_fail=0
 ui_fail=0
 facade_fail=0
+domain_fail=0
 
 report_check() {
   local label="$1" status="$2" findings="$3"
@@ -113,18 +114,41 @@ facade_count="$(printf '%s\n' "$facade_result" | head -n 1)"
 facade_findings="$(printf '%s\n' "$facade_result" | tail -n +2)"
 if (( facade_count > 0 )); then facade_fail=1; report_check "d) clientes sin fachada SoryntelApplication:: (conteo: $facade_count)" FAIL "$facade_findings"; else report_check "d) clientes sin fachada SoryntelApplication:: (conteo: 0)" PASS ""; fi
 
-printf 'e) Referencias informativas a soryntel_thermo:: y soryntel_solver:: por archivo:\n'
-python3 - "$root/crates/soryntel-desktop/src" <<'PY'
+domain_findings="$(python3 - "$root" <<'PY'
 from pathlib import Path
 import re, sys
-root = Path(sys.argv[1])
-pattern = re.compile(r"soryntel_(?:thermo|solver)::")
+root = Path(sys.argv[1]) / "crates/soryntel-desktop/src"
+needle = re.compile(r"soryntel_(?:thermo|solver)::")
+findings = {}
 for path in sorted(root.rglob("*.rs")):
-    count = sum(len(pattern.findall(line)) for line in path.read_text(errors="replace").splitlines())
-    if count:
-        print(f"  {path.relative_to(root)}: {count}")
+    lines = path.read_text(errors="replace").splitlines()
+    cfg_depth = 0
+    cfg_pending = False
+    for number, line in enumerate(lines, 1):
+        if cfg_depth:
+            cfg_depth += line.count("{") - line.count("}")
+            if cfg_depth <= 0:
+                cfg_depth = 0
+            continue
+        if "#[cfg(test)]" in line:
+            depth = line.count("{") - line.count("}")
+            if depth > 0:
+                cfg_depth = depth
+            else:
+                cfg_pending = True
+            continue
+        if cfg_pending:
+            depth = line.count("{") - line.count("}")
+            if depth > 0:
+                cfg_depth = depth
+            cfg_pending = False
+            continue
+        if needle.search(line):
+            findings.setdefault(str(path.relative_to(root)), []).append(number)
+print("\n".join(f"crates/soryntel-desktop/src/{path}:{','.join(map(str, numbers))}" for path, numbers in findings.items()))
 PY
-report_check "e) conteo informativo de dependencias de dominio en desktop/src" PASS ""
+)"
+if [[ -n "$domain_findings" ]]; then domain_fail=1; report_check "e) UI sin soryntel_thermo:: ni soryntel_solver:: fuera de #[cfg(test)]" FAIL "$domain_findings"; else report_check "e) UI sin soryntel_thermo:: ni soryntel_solver:: fuera de #[cfg(test)]" PASS ""; fi
 
 cli_fail=0
 cli_findings="$(python3 - "$root" <<'PY'
@@ -155,5 +179,5 @@ fi
 
 if [[ "$mode" == "report" ]]; then exit 0; fi
 if (( core_fail || application_fail || cli_fail )); then exit 1; fi
-if [[ "$mode" == "strict" ]] && (( ui_fail || facade_fail )); then exit 1; fi
+if [[ "$mode" == "strict" ]] && (( ui_fail || facade_fail || domain_fail )); then exit 1; fi
 exit 0

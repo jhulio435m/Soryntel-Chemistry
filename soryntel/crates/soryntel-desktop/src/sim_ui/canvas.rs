@@ -1,7 +1,7 @@
 use eframe::egui::{self, Color32, Mesh, Pos2, Rect, Sense, Shape, Stroke, Vec2};
 use soryntel_application::use_cases::SimulationUseCases;
-use soryntel_thermo::sim::model::*;
-use soryntel_thermo::sim::presets::{UNIT_ICON_GALLERY};
+use soryntel_application::models::simulation::*;
+use soryntel_application::models::simulation::{UNIT_ICON_GALLERY};
 use crate::sim_ui::icons::draw_equipment_icon;
 use crate::sim_ui::state::*;
 

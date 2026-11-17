@@ -10,15 +10,13 @@ Cada flecha representa una dependencia directa normal entre crates del workspace
 graph TD
     Desktop["soryntel-desktop"] --> App["soryntel-application"]
     Desktop --> DB["soryntel-db"]
-    Desktop --> Thermo["soryntel-thermo"]
-    Desktop --> Solver["soryntel-solver"]
     Desktop --> Core["soryntel-core"]
     CLI["soryntel-app"] --> App
     CLI --> DB
     CLI --> Core
     App --> Core
-    App --> Thermo
-    App --> Solver
+    App --> Thermo["soryntel-thermo"]
+    App --> Solver["soryntel-solver"]
     DB --> Core
     DB --> Thermo
     DB --> Solver
@@ -36,7 +34,7 @@ graph TD
 | `soryntel-application` | Casos de uso por capacidad, contratos de almacenamiento de proyectos, reexportación de DTO y catálogo de prueba en memoria. | Sin `soryntel-db`, egui, transporte HTTP ni locks de la composición. |
 | `soryntel-db` | Catálogo en memoria por capas, lectura y escritura de formatos de catálogo e implementación de puertos. | Sin lógica de presentación ni transporte de clientes. Mantiene dependencias de thermo y solver. |
 | `soryntel-app` | Adaptadores de entrada CLI y HTTP y raíz de composición. | El adaptador concreto se nombra en `composition.rs`. Los handlers usan puertos, casos de uso y DTO de application. |
-| `soryntel-desktop` | Interfaz egui, arranque, archivos del usuario y bridge HTTP de Add-ins. | La meta es limitar la infraestructura a composición y las operaciones a casos de uso. Los accesos legacy, la fachada obsoleta y las dependencias directas de thermo y solver siguen en migración. |
+| `soryntel-desktop` | Interfaz egui, arranque, archivos del usuario y bridge HTTP de Add-ins. | Sin dependencia directa de thermo ni solver: usa los DTO de `soryntel_application::models` y las operaciones de `use_cases`. La infraestructura queda en la composición. |
 | `chem_addin_core` | Motor de add-ins independiente con SQLite y álgebra numérica. | Sin dependencias de los demás crates del workspace. |
 
 ## Puertos y adaptadores
@@ -63,6 +61,28 @@ Los contratos de catálogo viven en [ports.rs](../../crates/soryntel-core/src/po
 2. Implementa el cálculo en thermo o solver y expón la operación desde [use_cases](../../crates/soryntel-application/src/use_cases/). El caso de uso recibe el puerto por parámetro. Reexporta los DTO que necesiten los clientes en [models.rs](../../crates/soryntel-application/src/models.rs).
 3. Implementa el puerto en el adaptador correspondiente y conéctalo en la raíz de composición. Prueba el caso de uso con el catálogo en memoria si no depende de un formato real.
 4. Conecta la UI o el handler al caso de uso. Deja la traducción a widgets, argumentos o respuestas HTTP en el adaptador de entrada. Ejecuta la auditoría de arquitectura y las pruebas del workspace.
+
+## Qué puede llamar la UI
+
+`soryntel-desktop` no depende de `soryntel-thermo` ni de `soryntel-solver`. Los tipos y constantes que necesita la interfaz llegan por `soryntel_application::models::<capacidad>`. Los tipos compartidos del núcleo, como `Phase`, `ChemicalSpecies` o `DbSource`, se importan desde `soryntel_core`.
+
+La UI puede llamar directamente:
+
+- **Constructores y valores por defecto** de los DTO reexportados, como `new`, `default`, `new_default` o `MoleculeGraph::{from_block, empty}`.
+- **Getters y consultas de presentación** que solo leen el propio modelo, como `molecular_formula`, `as_display_string` o `status_flag`.
+- **Edición del estado del workbook** que no calcula, como añadir, borrar o renombrar filas y hojas, o asignar campos.
+- **Serde del propio workbook**, como `to_exe8_json`, `from_exe8_str` o `to_gem9_json`.
+
+Pasan por un método de `use_cases`:
+
+- Las **funciones libres** de thermo o solver: cálculos, parsers, búsquedas en catálogos estáticos y utilidades de formato.
+- Los **métodos de cálculo o E/S** de un DTO: recalcular un workbook, resolver un balance, importar o exportar formatos externos o sondear servicios.
+
+Estos métodos solo delegan. Los cálculos permanecen en thermo y solver, y el caso de uso mantiene la firma y el comportamiento de la función de dominio. Por ejemplo, `EquilibriumUseCases::parse_species_term` envuelve `soryntel_solver::parse_term` y `MiscUseCases::calculate_exergy` envuelve `ExergyWorkbook::calculate`.
+
+Si falta un tipo, se añade un `pub use` en [models.rs](../../crates/soryntel-application/src/models.rs). Si falta una operación, se añade un método delegado al caso de uso de la capacidad. La regla (e) de la auditoría bloquea en modo estricto cualquier `soryntel_thermo::` o `soryntel_solver::` que quede en el escritorio fuera de `#[cfg(test)]`.
+
+Algunos métodos de workbook con cálculo todavía se invocan desde la UI a través del tipo reexportado. Entre ellos están `calculate_results` y `normalize` de LCA, y `estimate_missing_values`, `convert_elements_to_minerals` y `calculate_*_from_rounds` de Mass Balance. No rompen la regla (e) porque no nombran el crate de dominio, pero deben pasar a casos de uso cuando se toquen esos módulos.
 
 ## Composición y concurrencia
 
@@ -94,7 +114,7 @@ bash soryntel/scripts/check_architecture.sh --strict
 | b | El árbol normal de application carece de `soryntel-db`, `eframe` y `egui`. | Normal y estricto |
 | c | Busca referencias directas a DB en el escritorio fuera de `main.rs`, `composition.rs` y bloques `#[cfg(test)]`. | Estricto |
 | d | Lista y cuenta los usos de `SoryntelApplication::` en escritorio y CLI. | Estricto |
-| e | Cuenta las referencias a `soryntel_thermo::` y `soryntel_solver::` por archivo del escritorio. | Informativa |
+| e | Busca `soryntel_thermo::` y `soryntel_solver::` en `soryntel-desktop/src` fuera de bloques `#[cfg(test)]`. | Estricto |
 | f | Busca `soryntel_db` y `ThermoDatabase` en el CLI fuera de `composition.rs`. | Normal y estricto |
 
 `--report` muestra los hallazgos y devuelve 0. CI usa el modo normal mientras se completa la migración del escritorio. Las búsquedas de código son textuales, por lo que los hallazgos incluyen nombres en comentarios.

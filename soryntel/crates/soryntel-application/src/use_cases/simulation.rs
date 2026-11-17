@@ -212,4 +212,64 @@ impl SimulationUseCases {
     pub fn mb_export_xlsx(wb: &MassBalanceWorkbook) -> Result<Vec<u8>, String> {
         wb.export_results_xlsx()
     }
+
+    /// Incertidumbre de una celda medida:
+    /// `(sd_meas, rsd_pct, sd_sampling_scaled, sd_eff_for_solver)`.
+    #[allow(clippy::too_many_arguments)]
+    pub fn mb_evaluate_cell_uncertainty(
+        value: Option<f64>,
+        var: &crate::models::mass_balance::MbVariable,
+        stream: &crate::models::mass_balance::MbStream,
+        pre_status: crate::models::mass_balance::PreMeasStatus,
+        override_sd: Option<f64>,
+        null_sd_estimate: f64,
+        low_grade_coeff: f64,
+    ) -> (f64, f64, f64, f64) {
+        soryntel_thermo::sim::mass_balance::evaluate_cell_uncertainty(
+            value,
+            var,
+            stream,
+            pre_status,
+            override_sd,
+            null_sd_estimate,
+            low_grade_coeff,
+        )
+    }
+
+    /// Densidad relativa por defecto de un mineral según su nombre.
+    pub fn mb_default_mineral_sg(name: &str) -> f64 {
+        soryntel_thermo::sim::mass_balance::default_mineral_sg(name)
+    }
+
+    /// Búsqueda en el catálogo de minerales (como mucho `limit` resultados).
+    pub fn mb_search_minerals_catalog(
+        query: &str,
+        limit: usize,
+    ) -> Vec<&'static crate::models::mass_balance::MineralRawRow> {
+        soryntel_thermo::sim::mass_balance::search_minerals_catalog(query, limit)
+    }
+
+    /// Sondea el endpoint IPC de openLCA configurado en el estado beta.
+    pub fn sim_lca_beta_probe_openlca_ipc(state: &mut BetaLcaState) -> Result<String, String> {
+        state.probe_openlca_ipc()
+    }
+
+    /// Importa una hoja externa en el estado beta y devuelve el nombre final de la hoja.
+    pub fn sim_lca_beta_import_external_sheet(
+        state: &mut BetaLcaState,
+        table_name: &str,
+        headers: Vec<String>,
+        rows: Vec<Vec<String>>,
+    ) -> String {
+        state.import_external_sheet(table_name, headers, rows)
+    }
+
+    /// Carga flujos desde un archivo `.zip` JSON-LD de openLCA (entradas `STORE`).
+    pub fn sim_lca_classic_load_jsonld_zip(
+        state: &mut ClassicLcaState,
+        source_label: impl Into<String>,
+        zip_bytes: &[u8],
+    ) -> Result<usize, String> {
+        state.load_openlca_jsonld_zip_bytes(source_label, zip_bytes)
+    }
 }

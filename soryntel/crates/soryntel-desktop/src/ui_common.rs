@@ -129,7 +129,7 @@ pub fn draw_rotated_y_title(
 
 /// Return true if a chemical formula contains both C and H (organic heuristic).
 pub fn is_organic_formula(formula: &str) -> bool {
-    soryntel_solver::parse_term(formula)
+    soryntel_application::use_cases::EquilibriumUseCases::parse_species_term(formula)
         .map(|p| p.elements.contains_key("C") && p.elements.contains_key("H"))
         .unwrap_or(false)
 }

@@ -16,13 +16,11 @@ use crate::excel_grid::{
 use eframe::egui;
 use soryntel_application::use_cases::AddinsUseCases;
 use soryntel_core::SpeciesCatalogPort;
-use soryntel_thermo::excel_addins::{
-    format_cell_number, format_temp_unit_display, parse_a1, AddInFunctionMeta, AddInOrigin,
-    AddInUnits, ArgValue, CellEvalValue, MineralRecord, ADDIN_FUNCTION_CATALOG,
+use soryntel_application::models::addins::{
+    AddInFunctionMeta, AddInOrigin, AddInUnits, ArgValue, CellEvalValue, MineralRecord,
+    ADDIN_FUNCTION_CATALOG,
 };
-use soryntel_thermo::spreadsheet_export::{
-    col_to_a1, ExportCell, ExportCellStyle, ExportCellValue, ExportSheet,
-};
+use soryntel_application::models::addins::{ExportCell, ExportCellStyle, ExportCellValue, ExportSheet};
 use std::collections::{BTreeMap, HashSet};
 use std::sync::{Arc, Mutex, RwLock};
 
@@ -561,7 +559,7 @@ fn export_value_to_sheet_cell(cell: &ExportCell) -> SheetCell {
             is_formula: false,
         },
         ExportCellValue::Number(v) => SheetCell {
-            raw: format_cell_number(*v, 8),
+            raw: AddinsUseCases::format_cell_number(*v, 8),
             eval: CellEvalValue::Number(*v),
             style: cell.style,
             is_formula: false,
@@ -901,7 +899,7 @@ impl ExcelAddInsModuleState {
                                     .count();
                                 let coord_str = &after[..coord_len];
                                 let coord_clean = coord_str.replace('$', "");
-                                if let Some((row, col)) = parse_a1(&coord_clean) {
+                                if let Some((row, col)) = AddinsUseCases::parse_a1(&coord_clean) {
                                     let val_lit = self.cross_sheet_cell_expr(&sheet_norm, row, col);
                                     out.push_str(&val_lit);
                                     i += bang_rel + 1 + coord_len;
@@ -1024,7 +1022,7 @@ impl ExcelAddInsModuleState {
                 self.recalculate_all(db);
                 self.status_msg = format!(
                     "Unidades sincronizadas desde HTTP Bridge: {} / {} / {}.",
-                    format_temp_unit_display(&self.units.temp_unit),
+                    AddinsUseCases::format_temp_unit_display(&self.units.temp_unit),
                     self.units.energy_unit,
                     self.units.pressure_unit
                 );
@@ -1182,7 +1180,7 @@ impl ExcelAddInsModuleState {
                     &self.eq_inputs,
                     &self.eq_outputs,
                 );
-                let td = format_temp_unit_display(&self.units.temp_unit);
+                let td = AddinsUseCases::format_temp_unit_display(&self.units.temp_unit);
                 self.status_msg = format!(
                     "StreamEQ actualizado ({t_val} {td}, {p_val} {}).",
                     self.units.pressure_unit
@@ -1343,7 +1341,7 @@ impl ExcelAddInsModuleState {
         if let Some((a, b)) = t.split_once(':') {
             let a_clean = a.trim().replace('$', "");
             let b_clean = b.trim().replace('$', "");
-            if let (Some((r0, c0)), Some((r1, c1))) = (parse_a1(&a_clean), parse_a1(&b_clean)) {
+            if let (Some((r0, c0)), Some((r1, c1))) = (AddinsUseCases::parse_a1(&a_clean), AddinsUseCases::parse_a1(&b_clean)) {
                 let mut vals = Vec::new();
                 for rr in r0.min(r1)..=r0.max(r1) {
                     for cc in c0.min(c1)..=c0.max(c1) {
@@ -1464,14 +1462,14 @@ impl ExcelAddInsModuleState {
     pub fn populate_tester_from_example(&mut self, meta: AddInFunctionMeta, db: &dyn SpeciesCatalogPort) {
         self.test_args = Default::default();
         let upper = meta.name.to_ascii_uppercase();
-        let t25 = format_cell_number(temp_c_to_unit_value(&self.units, 25.0), 4);
-        let t100 = format_cell_number(temp_c_to_unit_value(&self.units, 100.0), 4);
-        let t200 = format_cell_number(temp_c_to_unit_value(&self.units, 200.0), 4);
-        let t1000 = format_cell_number(temp_c_to_unit_value(&self.units, 1000.0), 4);
-        let t0 = format_cell_number(temp_c_to_unit_value(&self.units, 0.0), 4);
-        let t_min = format_cell_number(temp_c_to_unit_value(&self.units, 0.0), 4);
-        let t_max = format_cell_number(temp_c_to_unit_value(&self.units, 2000.0), 4);
-        let td = format_temp_unit_display(&self.units.temp_unit);
+        let t25 = AddinsUseCases::format_cell_number(temp_c_to_unit_value(&self.units, 25.0), 4);
+        let t100 = AddinsUseCases::format_cell_number(temp_c_to_unit_value(&self.units, 100.0), 4);
+        let t200 = AddinsUseCases::format_cell_number(temp_c_to_unit_value(&self.units, 200.0), 4);
+        let t1000 = AddinsUseCases::format_cell_number(temp_c_to_unit_value(&self.units, 1000.0), 4);
+        let t0 = AddinsUseCases::format_cell_number(temp_c_to_unit_value(&self.units, 0.0), 4);
+        let t_min = AddinsUseCases::format_cell_number(temp_c_to_unit_value(&self.units, 0.0), 4);
+        let t_max = AddinsUseCases::format_cell_number(temp_c_to_unit_value(&self.units, 2000.0), 4);
+        let td = AddinsUseCases::format_temp_unit_display(&self.units.temp_unit);
 
         let sp_solid = pick_existing_species(db, &["Fe", "Fe2O3", "Al2O3", "Ni"]);
         let sp_oxide = pick_existing_species(db, &["Fe2O3", "Al2O3", "TiO2"]);
@@ -1685,7 +1683,7 @@ impl ExcelAddInsModuleState {
 
         match self.active_sheet {
             AddInSheetTab::Worksheet => {
-                if let Some((r, c)) = parse_a1(&cell_ref) {
+                if let Some((r, c)) = AddinsUseCases::parse_a1(&cell_ref) {
                     if r < WS_ROWS && c < WS_COLS {
                         let stored = val
                             .trim()
@@ -1708,7 +1706,7 @@ impl ExcelAddInsModuleState {
                 } else if cell_ref == "C2" {
                     self.eq_press_raw = val.trim().to_string();
                     self.recalculate_streameq(db);
-                } else if let Some((r, c)) = parse_a1(&cell_ref) {
+                } else if let Some((r, c)) = AddinsUseCases::parse_a1(&cell_ref) {
                     if r >= 3 {
                         let idx = r - 3;
                         while self.eq_species.len() <= idx {
@@ -1731,7 +1729,7 @@ impl ExcelAddInsModuleState {
                 }
             }
             AddInSheetTab::Minerals => {
-                if let Some((r, c)) = parse_a1(&cell_ref) {
+                if let Some((r, c)) = AddinsUseCases::parse_a1(&cell_ref) {
                     let is_f = val.trim().starts_with('=') || val.trim().starts_with("{=");
                     let prev_style = self
                         .min_cells
@@ -1768,7 +1766,7 @@ impl ExcelAddInsModuleState {
                         }
                     }
                 }
-                if let Some((r, c)) = parse_a1(&cell_ref) {
+                if let Some((r, c)) = AddinsUseCases::parse_a1(&cell_ref) {
                     let is_f = val.trim().starts_with('=') || val.trim().starts_with("{=");
                     let prev_style = self
                         .sample_cells
@@ -1827,12 +1825,12 @@ impl ExcelAddInsModuleState {
     }
 
     pub fn insert_formula_into_worksheet(&mut self, db: &dyn SpeciesCatalogPort, formula: String) {
-        let (r, c) = parse_a1(&self.active_cell_ref)
+        let (r, c) = AddinsUseCases::parse_a1(&self.active_cell_ref)
             .filter(|&(r, c)| r < WS_ROWS && c < WS_COLS)
             .unwrap_or((1, 2));
         self.ws_raw[r][c] = formula.clone();
         self.active_sheet = AddInSheetTab::Worksheet;
-        self.active_cell_ref = format!("{}{}", col_to_a1(c), r + 1);
+        self.active_cell_ref = format!("{}{}", AddinsUseCases::col_to_a1(c), r + 1);
         self.formula_bar_text = formula;
         self.recalculate_worksheet(db);
         self.status_msg = format!("Fórmula insertada en Worksheet {}.", self.active_cell_ref);
@@ -2156,7 +2154,7 @@ impl ExcelAddInsModuleState {
                         ui.label(
                             egui::RichText::new(format!(
                                 "{}  |  {}  |  {}   (DB: {} especies)",
-                                format_temp_unit_display(&self.units.temp_unit),
+                                AddinsUseCases::format_temp_unit_display(&self.units.temp_unit),
                                 self.units.energy_unit,
                                 self.units.pressure_unit,
                                 db.species_count()
@@ -2339,14 +2337,14 @@ impl ExcelAddInsModuleState {
                         }
                         egui::ComboBox::from_id_salt("ribbon_u_temp")
                             .width(56.0)
-                            .selected_text(format_temp_unit_display(&self.units.temp_unit))
+                            .selected_text(AddinsUseCases::format_temp_unit_display(&self.units.temp_unit))
                             .show_ui(ui, |ui| {
                                 for u in TEMP_UNITS {
                                     if ui
                                         .selectable_value(
                                             &mut self.units.temp_unit,
                                             (*u).to_string(),
-                                            format_temp_unit_display(u),
+                                            AddinsUseCases::format_temp_unit_display(u),
                                         )
                                         .changed()
                                     {
@@ -2448,7 +2446,7 @@ impl ExcelAddInsModuleState {
     fn load_cell_into_formula_bar(&mut self) {
         let cell_ref = self.active_cell_ref.trim().to_ascii_uppercase();
         self.active_cell_ref = cell_ref.clone();
-        let Some((r, c)) = parse_a1(&cell_ref) else {
+        let Some((r, c)) = AddinsUseCases::parse_a1(&cell_ref) else {
             return;
         };
         self.formula_bar_text = match self.active_sheet {
@@ -2713,7 +2711,7 @@ impl ExcelAddInsModuleState {
                     };
 
                     // Row 1: Temperature | "" | C1 | temp_unit
-                    let td = format_temp_unit_display(&self.units.temp_unit);
+                    let td = AddinsUseCases::format_temp_unit_display(&self.units.temp_unit);
                     let c1_sel = self.active_cell_ref == "C1";
                     let r1_rect = ui
                         .horizontal(|ui| {
@@ -3155,7 +3153,7 @@ impl ExcelAddInsModuleState {
         val: String,
         is_minerals: bool,
     ) {
-        let cname = format!("{}{}", col_to_a1(col), row + 1);
+        let cname = format!("{}{}", AddinsUseCases::col_to_a1(col), row + 1);
         let is_f = val.trim().starts_with('=') || val.trim().starts_with("{=");
         let map = if is_minerals {
             &mut self.min_cells
@@ -3724,7 +3722,7 @@ impl ExcelAddInsModuleState {
                     self.status_msg = format!("Añadida especie '{sp_name}' a StreamEQ.");
                 }
                 PickerTarget::WorksheetActiveCell => {
-                    let (r, c) = parse_a1(&self.active_cell_ref)
+                    let (r, c) = AddinsUseCases::parse_a1(&self.active_cell_ref)
                         .filter(|&(r, c)| r < WS_ROWS && c < WS_COLS)
                         .unwrap_or((1, 0));
                     self.ws_raw[r][c] = sp_name.clone();
@@ -3766,14 +3764,14 @@ impl ExcelAddInsModuleState {
                     .show(ui, |ui| {
                         ui.label("Temperature unit:");
                         egui::ComboBox::from_id_salt("modal_unit_temp")
-                            .selected_text(format_temp_unit_display(&self.pending_units.temp_unit))
+                            .selected_text(AddinsUseCases::format_temp_unit_display(&self.pending_units.temp_unit))
                             .width(150.0)
                             .show_ui(ui, |ui| {
                                 for &u in TEMP_UNITS {
                                     ui.selectable_value(
                                         &mut self.pending_units.temp_unit,
                                         u.to_string(),
-                                        format_temp_unit_display(u),
+                                        AddinsUseCases::format_temp_unit_display(u),
                                     );
                                 }
                             });
@@ -3849,7 +3847,7 @@ impl ExcelAddInsModuleState {
             self.recalculate_all(db);
             self.status_msg = format!(
                 "Unidades aplicadas y libro recalculado: {} / {} / {}.",
-                format_temp_unit_display(&self.units.temp_unit),
+                AddinsUseCases::format_temp_unit_display(&self.units.temp_unit),
                 self.units.energy_unit,
                 self.units.pressure_unit
             );
@@ -4247,7 +4245,7 @@ impl ExcelAddInsModuleState {
                             }
                             ui.label(format!(
                                 "Unidades activas: {} / {} / {}",
-                                format_temp_unit_display(&self.units.temp_unit),
+                                AddinsUseCases::format_temp_unit_display(&self.units.temp_unit),
                                 self.units.energy_unit,
                                 self.units.pressure_unit
                             ));
@@ -4440,7 +4438,7 @@ impl ExcelAddInsModuleState {
                                     ui.strong("Measurement Units & Locale Separator");
                                     ui.label(format!(
                                         "Unidades actuales: {} / {} / {}",
-                                        format_temp_unit_display(&self.units.temp_unit),
+                                        AddinsUseCases::format_temp_unit_display(&self.units.temp_unit),
                                         self.units.energy_unit,
                                         self.units.pressure_unit
                                     ));
@@ -4844,7 +4842,7 @@ fn render_export_cells_grid(
 mod tests {
     use super::*;
     use soryntel_db::ThermoDatabase;
-    use soryntel_thermo::SpeciesRepository;
+    use soryntel_core::SpeciesRepository;
 
     fn test_db_enriched() -> ThermoDatabase {
         let mut db = ThermoDatabase::with_open_defaults();

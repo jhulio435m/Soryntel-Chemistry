@@ -1,8 +1,8 @@
 use eframe::egui::{self, Color32, RichText};
 use egui_plot::{HLine, Legend, Line, Plot, PlotPoints, Points, VLine};
 use soryntel_application::use_cases::SimulationUseCases;
-use soryntel_thermo::sim::model::*;
-use soryntel_thermo::sim::presets::DEFAULT_STREAM_VARIABLES;
+use soryntel_application::models::simulation::*;
+use soryntel_application::models::simulation::DEFAULT_STREAM_VARIABLES;
 use crate::sim_ui::state::*;
 
 pub fn render_sim_modals(ctx: &egui::Context, state: &mut SimModuleState) {

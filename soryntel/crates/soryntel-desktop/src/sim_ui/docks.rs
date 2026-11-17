@@ -1,8 +1,8 @@
 use eframe::egui::{self, Color32, RichText, Stroke, Vec2};
 use soryntel_application::use_cases::SimulationUseCases;
-use soryntel_thermo::sim::model::*;
-use soryntel_thermo::sim::presets::UNIT_ICON_GALLERY;
-use soryntel_thermo::sim::solver::LogFilterLevel;
+use soryntel_application::models::simulation::*;
+use soryntel_application::models::simulation::UNIT_ICON_GALLERY;
+use soryntel_application::models::simulation::LogFilterLevel;
 use crate::sim_ui::icons::draw_equipment_icon;
 use crate::sim_ui::state::*;
 
@@ -474,7 +474,7 @@ fn render_icons_tab(ui: &mut egui::Ui, state: &mut SimModuleState) {
     let thumb = state.icons_thumb_size;
     let q = state.icons_search.to_lowercase();
     let cat = state.icons_filter_category.as_str();
-    let matches: Vec<(usize, &soryntel_thermo::sim::presets::UnitIconMeta)> = UNIT_ICON_GALLERY
+    let matches: Vec<(usize, &soryntel_application::models::simulation::UnitIconMeta)> = UNIT_ICON_GALLERY
         .iter()
         .enumerate()
         .filter(|(_, m)| {

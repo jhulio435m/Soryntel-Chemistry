@@ -4,13 +4,10 @@ use eframe::egui;
 use soryntel_application::ports::SpeciesCatalogPort;
 use soryntel_application::use_cases::{CatalogUseCases, MiscUseCases};
 // Tipos de modelo de thermo usados como estado de la UI.
-use soryntel_thermo::{
-    phase_stability::{
-        AxisVariable, PhaseStabilityDiagram, PhaseStabilityInput,
-        TemperatureUnit,
-    },
-    Phase,
+use soryntel_application::models::phase_stability::{
+    AxisVariable, PhaseStabilityDiagram, PhaseStabilityInput, TemperatureUnit,
 };
+use soryntel_core::Phase;
 
 use crate::excel_grid::{
     header_cell, row_num_cell, section_cell, text_cell, EXCEL_ALT_ROW_BG, EXCEL_GRID_BORDER,

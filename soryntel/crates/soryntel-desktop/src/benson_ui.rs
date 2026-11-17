@@ -2,16 +2,11 @@ use eframe::egui;
 use soryntel_application::ports::SpeciesCatalogPort;
 use soryntel_application::use_cases::{CatalogUseCases, MiscUseCases};
 use soryntel_core::CAL_TO_JOULE;
-// Tipos de modelo de thermo usados como estado de la UI. `find_structural_block`,
-// `structural_blocks_for`, `MoleculeGraph::{from_block, empty}` y
-// `decompose_molecule_to_benson` aún no tienen caso de uso en `MiscUseCases`.
-use soryntel_thermo::{
-    benson::{
-        find_structural_block, structural_blocks_for, BensonEstimationResult, BensonParamsInput,
-        BlockCategory, BondOrder, ElementKind, MoleculeGraph, PhaseThermoSummary,
-    },
-    Phase,
+use soryntel_application::models::benson::{
+    BensonEstimationResult, BensonParamsInput, BlockCategory, BondOrder, ElementKind,
+    MoleculeGraph, PhaseThermoSummary,
 };
+use soryntel_core::Phase;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum CameraMode {
@@ -120,8 +115,8 @@ pub struct BensonModuleState {
 impl BensonModuleState {
     pub fn new(db: &dyn SpeciesCatalogPort) -> Self {
         // Default starter molecule: 9,10-Anthracenedimethanol (C16H14O2, MW 238.272) like Fig. 1
-        let starter_spec = find_structural_block("aro_diol_ant")
-            .unwrap_or_else(|| find_structural_block("aro_benzene").unwrap());
+        let starter_spec = MiscUseCases::find_benson_structural_block("aro_diol_ant")
+            .unwrap_or_else(|| MiscUseCases::find_benson_structural_block("aro_benzene").unwrap());
         let molecule = MoleculeGraph::from_block(starter_spec);
         let preview_group_mol = build_selected_group_preview(ElementKind::O);
         let smiles_input = molecule.smiles.clone();
@@ -184,7 +179,7 @@ impl BensonModuleState {
             self.status_text = "Workspace empty — use 'Add structural block' or 'File -> Enter SMILES'.".into();
             return;
         }
-        let (_, auto_params) = soryntel_thermo::benson::decompose_molecule_to_benson(&self.molecule);
+        let (_, auto_params) = MiscUseCases::decompose_benson_molecule(&self.molecule);
         self.benson_params = auto_params.clone();
         match MiscUseCases::estimate_benson_properties(db, &self.molecule, None, Some(&auto_params)) {
             Ok(est) => {
@@ -359,7 +354,7 @@ impl BensonModuleState {
                             ];
                             for (id, label) in presets {
                                 if ui.button(label).clicked() {
-                                    if let Some(spec) = find_structural_block(id) {
+                                    if let Some(spec) = MiscUseCases::find_benson_structural_block(id) {
                                         self.load_molecule(MoleculeGraph::from_block(spec), db);
                                     }
                                     ui.close_menu();
@@ -381,7 +376,7 @@ impl BensonModuleState {
                     ui.menu_button("⊕\nAdd structural\nblock ▾", |ui| {
                         for cat in BlockCategory::ALL {
                             ui.menu_button(cat.label(), |ui| {
-                                for spec in structural_blocks_for(cat) {
+                                for spec in MiscUseCases::benson_structural_blocks_for(cat) {
                                     if ui.button(spec.name).clicked() {
                                         if let Some(attach_el) = spec.functional_attach {
                                             // Select the corresponding element for interactive H-click,

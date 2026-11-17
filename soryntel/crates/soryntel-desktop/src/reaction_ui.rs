@@ -12,7 +12,7 @@ use soryntel_application::ports::SpeciesCatalogPort;
 use soryntel_application::use_cases::{CatalogUseCases, ReactionUseCases};
 use soryntel_core::{EnergyUnit, ResultFormat, TemperatureUnit};
 // DTOs/tipos de modelo de thermo usados como estado de la UI.
-use soryntel_thermo::{
+use soryntel_application::models::reaction::{
     CalculationRequest, CalculationResponse, ReactionCollectedSheet, ReactionWorkbookFile,
     ReactionYAxis,
 };

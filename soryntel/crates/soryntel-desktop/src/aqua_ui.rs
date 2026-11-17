@@ -6,14 +6,14 @@ use eframe::egui;
 use egui_plot::{Legend, Line, Plot, PlotPoints};
 use soryntel_application::use_cases::AquaUseCases;
 use soryntel_core::SpeciesCatalogPort;
-use soryntel_thermo::aqua::{
+use soryntel_application::models::aqua::{
     ActiveParameterSetsReport, AquaCalcResult, AquaCaseFile, AquaEnergyUnit, AquaMethod,
     AquaPressUnit, AquaSpeciesInput, AquaTempUnit, DensityCalcResult, DensityInputRow,
     MergedPitzerCatalog, OwnBinaryRow, OwnLambdaRow, OwnPitzerDb, OwnPsiRow, OwnThetaRow,
     PitzerSourceColor,
 };
-use soryntel_thermo::aqua_density_data::DENSITY_SALTS;
-use soryntel_thermo::aqua_pitzer_data::{PitzerDatabase, PitzerTempCurve};
+use soryntel_application::models::aqua::DENSITY_SALTS;
+use soryntel_application::models::aqua::{PitzerDatabase, PitzerTempCurve};
 use std::collections::BTreeSet;
 
 use crate::excel_grid::{
@@ -3263,7 +3263,7 @@ fn draw_pitzer_status_or_x_cells(
     b1: &PitzerTempCurve,
     b2: &PitzerTempCurve,
     cf: &PitzerTempCurve,
-    range: &soryntel_thermo::aqua_pitzer_data::ValidityRange,
+    range: &soryntel_application::models::aqua::ValidityRange,
     mode: MainDbViewMode,
     fg: egui::Color32,
 ) {
@@ -3339,7 +3339,7 @@ fn draw_pitzer_status_or_x_cells(
 fn draw_single_curve_cells(
     ui: &mut egui::Ui,
     curve: &PitzerTempCurve,
-    range: &soryntel_thermo::aqua_pitzer_data::ValidityRange,
+    range: &soryntel_application::models::aqua::ValidityRange,
     fg: egui::Color32,
 ) {
     let f = curve.status_flag();

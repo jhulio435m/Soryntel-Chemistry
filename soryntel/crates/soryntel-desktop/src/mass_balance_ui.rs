@@ -11,15 +11,12 @@ use eframe::egui::{self, Align2, Color32, FontId, Pos2, Rect, RichText, Rounding
 use egui_plot::{HLine, Legend, Line, Plot, PlotPoints, Points};
 use serde::{Deserialize, Serialize};
 use soryntel_application::use_cases::SimulationUseCases;
-use soryntel_thermo::sim::{
-    mass_balance::{
-        default_mineral_sg, evaluate_cell_uncertainty, search_minerals_catalog, BalanceType,
-        CellKey, ChartPanelSpec, CheckSeverity, MassBalanceWorkbook, MbSolution, MbStream,
-        MbVariable, MeasurementMethod, PostBalStatus, PreMeasStatus, SampleQuality, SizingMode,
-        SolveMethod, StreamEquation, StreamType, ValidationIssue, VarTypeCode,
-    },
-    model::SimProject,
+use soryntel_application::models::mass_balance::{
+    BalanceType, CellKey, ChartPanelSpec, CheckSeverity, MassBalanceWorkbook, MbSolution,
+    MbStream, MbVariable, MeasurementMethod, PostBalStatus, PreMeasStatus, SampleQuality,
+    SizingMode, SolveMethod, StreamEquation, StreamType, ValidationIssue, VarTypeCode,
 };
+use soryntel_application::models::simulation::SimProject;
 
 // Palette matching HSC Mass Balance official screenshots
 const RIBBON_BG: Color32 = Color32::from_rgb(241, 244, 249);
@@ -209,7 +206,7 @@ impl MassBalanceWindowState {
             ),
             None => "Rougher Flotation preset loaded".to_string(),
         };
-        let proj = soryntel_thermo::sim::presets::empty_project();
+        let proj = SimulationUseCases::empty_project();
         let st = Self::from_workbook(wb, "Rougher Flotation (Figs. 3, 9–23)", banner);
         (proj, st)
     }
@@ -225,7 +222,7 @@ impl MassBalanceWindowState {
             ),
             None => "Grinding Survey preset loaded".to_string(),
         };
-        let proj = soryntel_thermo::sim::presets::empty_project();
+        let proj = SimulationUseCases::empty_project();
         let st = Self::from_workbook(wb, "3 Grinding Survey (Figs. 24–25)", banner);
         (proj, st)
     }
@@ -2403,7 +2400,7 @@ fn render_review_sd_page(ui: &mut egui::Ui, state: &mut MassBalanceWindowState, 
                         let st = state.workbook.cell_pre_status(ds_idx, k);
                         let val = ds.values.get(&k).copied();
                         let ov = ds.sd_override.get(&k).copied();
-                        let (sd_m, rsd, sd_s, sd_e) = evaluate_cell_uncertainty(
+                        let (sd_m, rsd, sd_s, sd_e) = SimulationUseCases::mb_evaluate_cell_uncertainty(
                             val,
                             v,
                             s,
@@ -2474,7 +2471,7 @@ fn render_edit_sd_page(ui: &mut egui::Ui, state: &mut MassBalanceWindowState, h:
                             let ds = &state.workbook.datasets[ds_idx];
                             let val = ds.values.get(&k).copied();
                             let ov = ds.sd_override.get(&k).copied();
-                            let (_, _, _, sd_eff) = evaluate_cell_uncertainty(
+                            let (_, _, _, sd_eff) = SimulationUseCases::mb_evaluate_cell_uncertainty(
                                 val,
                                 v,
                                 s,
@@ -3480,7 +3477,7 @@ fn render_properties_panel(ui: &mut egui::Ui, state: &mut MassBalanceWindowState
                                         prop_row(ui, "Name:", &v.name, false);
                                         prop_row(ui, "Type:", v.type_code.type_name(), false);
                                         ui.label("Mineral SG:");
-                                        let mut sg = v.mineral_sg.unwrap_or_else(|| default_mineral_sg(&v.name));
+                                        let mut sg = v.mineral_sg.unwrap_or_else(|| SimulationUseCases::mb_default_mineral_sg(&v.name));
                                         if ui.add(egui::DragValue::new(&mut sg).speed(0.01)).changed() {
                                             v.mineral_sg = Some(sg);
                                         }
@@ -3562,7 +3559,7 @@ fn render_properties_panel(ui: &mut egui::Ui, state: &mut MassBalanceWindowState
                                     let ds = &state.workbook.datasets[ds_idx];
                                     let val = ds.values.get(&k).copied();
                                     let ov = ds.sd_override.get(&k).copied();
-                                    let (sd_m, rsd, sd_s, sd_e) = evaluate_cell_uncertainty(
+                                    let (sd_m, rsd, sd_s, sd_e) = SimulationUseCases::mb_evaluate_cell_uncertainty(
                                         val,
                                         v,
                                         s,
@@ -3994,7 +3991,7 @@ fn render_mb_modals(ctx: &egui::Context, state: &mut MassBalanceWindowState) {
                     );
                 });
                 ui.separator();
-                let matches = search_minerals_catalog(&state.mineral_search_query, 35);
+                let matches = SimulationUseCases::mb_search_minerals_catalog(&state.mineral_search_query, 35);
                 egui::ScrollArea::vertical().max_height(300.0).show(ui, |ui| {
                     egui::Grid::new("mb_mineral_cat_grid").striped(true).show(ui, |ui| {
                         cell_hdr(ui, "Code", 75.0);
@@ -4025,7 +4022,7 @@ fn render_mb_modals(ctx: &egui::Context, state: &mut MassBalanceWindowState) {
                                     param_c: 5.0,
                                     low_grade_weighted: false,
                                     mineral_formula: Some(m.formula.to_string()),
-                                    mineral_sg: Some(default_mineral_sg(m.name)),
+                                    mineral_sg: Some(SimulationUseCases::mb_default_mineral_sg(m.name)),
                                 });
                             }
                             ui.end_row();

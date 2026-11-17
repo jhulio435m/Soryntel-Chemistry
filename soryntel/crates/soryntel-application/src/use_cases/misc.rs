@@ -230,6 +230,102 @@ impl MiscUseCases {
         domain_air_3d_surface()
     }
 
+    // --- Exergía -------------------------------------------------------------------------
+
+    /// Recalcula en sitio el balance de exergía del workbook (delegación pura en thermo).
+    pub fn calculate_exergy(
+        repo: &dyn soryntel_core::SpeciesRepository,
+        wb: &mut crate::models::exergy::ExergyWorkbook,
+    ) {
+        wb.calculate(repo);
+    }
+
+    // --- Benson ---------------------------------------------------------------------------
+
+    /// Descompone la molécula en grupos de Benson: `(grupos, parámetros auto)`.
+    pub fn decompose_benson_molecule(
+        mol: &MoleculeGraph,
+    ) -> (Vec<(String, usize)>, BensonParamsInput) {
+        soryntel_thermo::benson::decompose_molecule_to_benson(mol)
+    }
+
+    /// Bloque estructural de la biblioteca por identificador.
+    pub fn find_benson_structural_block(
+        id: &str,
+    ) -> Option<&'static crate::models::benson::StructuralBlockSpec> {
+        soryntel_thermo::benson::find_structural_block(id)
+    }
+
+    /// Bloques estructurales de una categoría, en el orden de la biblioteca.
+    pub fn benson_structural_blocks_for(
+        category: crate::models::benson::BlockCategory,
+    ) -> Vec<&'static crate::models::benson::StructuralBlockSpec> {
+        soryntel_thermo::benson::structural_blocks_for(category)
+    }
+
+    // --- Eh-pH ----------------------------------------------------------------------------
+
+    /// ΔG°f del H2O(l) en kcal/mol a `t_k`.
+    pub fn ehph_delta_g_formation_h2o_kcal(
+        repo: &dyn soryntel_core::SpeciesRepository,
+        t_k: f64,
+        criss_cobble: bool,
+    ) -> f64 {
+        soryntel_thermo::ehph::delta_g_formation_h2o_kcal(repo, t_k, criss_cobble)
+    }
+
+    /// Constante dieléctrica del agua a `t_k`.
+    pub fn ehph_water_dielectric_constant(t_k: f64) -> f64 {
+        soryntel_thermo::ehph::water_dielectric_constant(t_k)
+    }
+
+    /// Punto termodinámico SI de `species` a `t_k` junto con la referencia del intervalo usado.
+    pub fn evaluate_species_point(
+        species: &ChemicalSpecies,
+        t_k: f64,
+        criss_cobble: bool,
+        upper_side_on_boundary: bool,
+    ) -> Result<(ThermoPointSI, String), SoryntelError> {
+        soryntel_thermo::evaluate_species_si(species, t_k, criss_cobble, upper_side_on_boundary)
+    }
+
+    // --- Diagramas ------------------------------------------------------------------------
+
+    /// Coeficiente que balancea `formula` respecto a `target_atoms` átomos de `element`.
+    pub fn diagram_balanced_coeff_for_element(
+        formula: &str,
+        element: &str,
+        target_atoms: f64,
+    ) -> Option<f64> {
+        soryntel_thermo::diagrams::balanced_coeff_for_element(formula, element, target_atoms)
+    }
+
+    /// Rango de temperatura `(t_min, t_max)` en K de la especie en la base.
+    pub fn diagram_species_temp_range(sp: &ChemicalSpecies) -> (f64, f64) {
+        soryntel_thermo::diagrams::species_db_temp_range(sp)
+    }
+
+    /// Valor de la isolínea de pO2 de Ellingham a `t_k`.
+    pub fn ellingham_po2_isoline_val(
+        t_k: f64,
+        log10_po2: f64,
+        o_atoms_balanced: f64,
+        unit: crate::models::diagrams::DiagramEnergyUnit,
+    ) -> f64 {
+        soryntel_thermo::diagrams::ellingham_po2_isoline_val(t_k, log10_po2, o_atoms_balanced, unit)
+    }
+
+    /// Escalas auxiliares (pO2, CO/CO2, H2/H2O) de Ellingham en un punto.
+    pub fn ellingham_scales_at(
+        t_k: f64,
+        y_val: f64,
+        o_atoms_balanced: f64,
+        unit: crate::models::diagrams::DiagramEnergyUnit,
+        repo: &dyn soryntel_core::SpeciesRepository,
+    ) -> crate::models::diagrams::EllinghamScales {
+        soryntel_thermo::diagrams::ellingham_scales_at(t_k, y_val, o_atoms_balanced, unit, repo)
+    }
+
     pub fn recalculate_material_auto_properties(
         db: &mut soryntel_thermo::heat_loss::MaterialDatabase,
         material_idx: usize,

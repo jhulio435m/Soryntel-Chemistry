@@ -14,7 +14,7 @@ use soryntel_core::{
     SpeciesMetadata,
     SpeciesThermoInterval, SpeciesWorkspacePort,
 };
-use soryntel_thermo::estimate::{EstimateRow, EstimateSpeciesType, FunctionalGroup, OrganicGroup};
+use soryntel_application::models::estimate::{EstimateRow, EstimateSpeciesType, FunctionalGroup, OrganicGroup};
 use std::collections::BTreeSet;
 
 
@@ -2798,7 +2798,7 @@ mod tests {
     use super::*;
     use soryntel_db::ThermoDatabase;
     use soryntel_core::SpeciesRepository;
-    use soryntel_thermo::estimate::evaluate_estimate_row;
+    use soryntel_application::use_cases::MiscUseCases;
 
     #[test]
     fn cp_range_fit_update_and_persist_to_owndb_roundtrip() {
@@ -2810,7 +2810,7 @@ mod tests {
 
         // Add Na2WO4(g), run Cp Range 298.15..600 K, fit Kelley, update & save to OwnDB (Fig. 6-9)
         let mut row = EstimateRow::new("Na2WO4(g)");
-        evaluate_estimate_row(&mut row, &db);
+        MiscUseCases::evaluate_estimate(&db, &mut row);
         state.rows.insert(0, row);
         state.select_single(0);
         state.cp_tmin_k = 298.15;

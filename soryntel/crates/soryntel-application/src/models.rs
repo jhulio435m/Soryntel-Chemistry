@@ -81,6 +81,7 @@ pub mod diagrams {
         DiagramEnergyUnit, DiagramRequest, DiagramResult, DiagramSeries, DiagramSpeciesInput,
         DiagramType,
     };
+    pub use soryntel_thermo::diagrams::EllinghamScales;
 }
 
 pub mod ehph {
@@ -129,6 +130,7 @@ pub mod mass_balance {
         MbStream, MbVariable, MeasurementMethod, PostBalStatus, PreMeasStatus, SampleQuality,
         SizingMode, SolveMethod, StreamEquation, StreamType, ValidationIssue, VarTypeCode,
     };
+    pub use soryntel_thermo::sim::mass_balance::MineralRawRow;
 }
 
 pub mod lca {

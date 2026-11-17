@@ -1,18 +1,15 @@
 //! Clean-room Desktop UI for Module 19: `HSC - Sim LCA` (`LCA Evaluation` 49.3 & `LCA` 49.4 Beta).
 //!
 //! Keeps all physical calculations, normalization, EcoSpold/JSON-LD/XLSX generation, and LCIA
-//! evaluation delegated to `soryntel_thermo::sim::lca` via `SimulationUseCases`.
+//! evaluation delegated to the domain via `SimulationUseCases`.
 
 use eframe::egui::{self, Color32, RichText, Stroke};
 use soryntel_application::use_cases::SimulationUseCases;
-use soryntel_thermo::sim::{
-    lca::{
-        deterministic_uuid, BetaLcaMode, BetaLcaState, BetaStreamRow, ClassicLcaState,
-        ClassicProcessInfo, LcaCatalogFlow, LcaDatabaseKind, LcaFlowType, LcaFlowUnitKind,
-        LcaGroup, LciaMethodSpec,
-    },
-    model::SimProject,
+use soryntel_application::models::lca::{
+    BetaLcaMode, BetaLcaState, BetaStreamRow, ClassicLcaState, ClassicProcessInfo,
+    LcaCatalogFlow, LcaDatabaseKind, LcaFlowType, LcaFlowUnitKind, LcaGroup, LciaMethodSpec,
 };
+use soryntel_application::models::simulation::SimProject;
 use std::collections::{BTreeMap, BTreeSet};
 
 // Palette matching Chapter 49 screenshots
@@ -297,7 +294,7 @@ pub fn render_lca_body(
     project: &SimProject,
     state: &mut LcaWindowState,
 ) {
-    ui.colored_label(Color32::from_rgb(180, 90, 0), soryntel_thermo::sim::lca::BUILTIN_LCA_NOTICE);
+    ui.colored_label(Color32::from_rgb(180, 90, 0), soryntel_application::models::lca::BUILTIN_LCA_NOTICE);
     match state.ui_mode {
         LcaUiMode::Classic => render_classic_lca(ui, ctx, project, state),
         LcaUiMode::Beta => render_beta_lca(ui, ctx, project, state),
@@ -1212,7 +1209,7 @@ fn render_beta_lca(
                         .clicked()
                     {
                         state.beta.mode = BetaLcaMode::UnitDatabase;
-                        let _ = state.beta.probe_openlca_ipc();
+                        let _ = SimulationUseCases::sim_lca_beta_probe_openlca_ipc(&mut state.beta);
                         state.status_message = state.beta.ipc_status_note.clone();
                         ui.close_menu();
                     }
@@ -1221,7 +1218,7 @@ fn render_beta_lca(
                         .clicked()
                     {
                         state.beta.mode = BetaLcaMode::LciDatabase;
-                        let _ = state.beta.probe_openlca_ipc();
+                        let _ = SimulationUseCases::sim_lca_beta_probe_openlca_ipc(&mut state.beta);
                         state.status_message = state.beta.ipc_status_note.clone();
                         ui.close_menu();
                     }
@@ -1231,7 +1228,7 @@ fn render_beta_lca(
                         ui.add(egui::TextEdit::singleline(&mut state.beta.ipc_endpoint).desired_width(110.0));
                     });
                     if ui.button("Connect / Probe openLCA IPC").clicked() {
-                        let _ = state.beta.probe_openlca_ipc();
+                        let _ = SimulationUseCases::sim_lca_beta_probe_openlca_ipc(&mut state.beta);
                         state.status_message = state.beta.ipc_status_note.clone();
                         ui.close_menu();
                     }
@@ -2429,7 +2426,7 @@ fn render_shared_lca_modals(ctx: &egui::Context, project: &SimProject, state: &m
                         match std::fs::read(&state.openlca_zip_path_input) {
                             Ok(bytes) => {
                                 let p = state.openlca_zip_path_input.clone();
-                                match state.classic.load_openlca_jsonld_zip_bytes(p, &bytes) {
+                                match SimulationUseCases::sim_lca_classic_load_jsonld_zip(&mut state.classic, p, &bytes) {
                                     Ok(n) => {
                                         state.status_message = format!("Loaded {n} OpenLCA flows from JSON-LD archive");
                                         state.show_openlca_db_modal = false;
@@ -2522,13 +2519,14 @@ fn render_shared_lca_modals(ctx: &egui::Context, project: &SimProject, state: &m
                                         ]
                                     })
                                     .collect();
-                                let sheet_nm = state.beta.import_external_sheet(&st.name, headers, rows);
+                                let sheet_nm = SimulationUseCases::sim_lca_beta_import_external_sheet(&mut state.beta, &st.name, headers, rows);
                                 state.beta_sheet = BetaSheetTab::Custom(state.beta.custom_sheets.len() - 1);
                                 state.status_message = format!("Imported external sheet '{sheet_nm}'");
                             }
                         }
                         if state.ext_selected_tables.is_empty() {
-                            let sheet_nm = state.beta.import_external_sheet(
+                            let sheet_nm = SimulationUseCases::sim_lca_beta_import_external_sheet(
+                                &mut state.beta,
                                 "Flowsheet Summary",
                                 vec!["Stream".to_string(), "Mass (t/h)".to_string()],
                                 project
@@ -2660,6 +2658,4 @@ fn render_shared_lca_modals(ctx: &egui::Context, project: &SimProject, state: &m
         state.show_help_modal = open;
     }
 
-    // Keep unused deterministic_uuid helper referenced if needed? Already used cleanly in domain.
-    let _ = deterministic_uuid;
 }
