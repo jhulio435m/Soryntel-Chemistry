@@ -43,7 +43,7 @@ fn col_name(idx: usize) -> String {
 }
 use eframe::egui;
 use egui_plot::{Legend, Line, Plot, PlotPoints};
-use soryntel_application::ports::SpeciesCatalogPort;
+use soryntel_application::ports::{SpeciesCatalogPort, SpeciesRepository};
 use soryntel_application::use_cases::{CatalogUseCases, EquilibriumUseCases};
 // Tipos de modelo de thermo usados como estado de la UI (pendiente de mover a DTOs).
 // `collect_cp_warnings` aún no tiene caso de uso en `EquilibriumUseCases`.
@@ -262,6 +262,18 @@ impl Default for EquilibriumUiState {
         };
         s.load_preset_nico();
         s
+    }
+}
+
+/// Vista `Sized` de solo lectura de un `&dyn SpeciesCatalogPort` como [`SpeciesRepository`].
+struct CatalogRepo<'a>(&'a dyn SpeciesCatalogPort);
+
+impl SpeciesRepository for CatalogRepo<'_> {
+    fn get_species(&self, formula: &str) -> Option<soryntel_core::ChemicalSpecies> {
+        self.0.get_species(formula)
+    }
+    fn get_reference_element(&self, element_symbol: &str) -> Option<soryntel_core::ChemicalSpecies> {
+        self.0.get_reference_element(element_symbol)
     }
 }
 
@@ -1019,7 +1031,7 @@ impl EquilibriumUiState {
         self.chart_3d_cache = None;
     }
 
-    fn update_species_from_db<C: SpeciesCatalogPort>(&mut self, db: &C) {
+    fn update_species_from_db<C: SpeciesRepository>(&mut self, db: &C) {
         for phase in &mut self.system.phases {
             for sp in &mut phase.species {
                 if let Some(rec) = db.get_species(sp.formula.trim()) {
@@ -1030,7 +1042,11 @@ impl EquilibriumUiState {
         self.file_status_msg = Some("Updated species records from database.".to_string());
     }
 
-    pub fn ui<C: SpeciesCatalogPort>(&mut self, ctx: &egui::Context, db: &C) {
+    pub fn ui(&mut self, ctx: &egui::Context, db: &dyn SpeciesCatalogPort) {
+        // Los solvers de equilibrio son genéricos sobre `R: SpeciesRepository` (con `Sized`);
+        // el adaptador permite pasarles un puerto `dyn`.
+        let catalog = db;
+        let db = &CatalogRepo(catalog);
         // Consistent Top Menu Bar (matching Modules 1, 2, and 3)
         egui::TopBottomPanel::top("equil_menu_bar").show(ctx, |ui| {
             egui::menu::bar(ui, |ui| {
@@ -1369,10 +1385,10 @@ impl EquilibriumUiState {
             });
         });
 
-        self.render_modals(ctx, db);
+        self.render_modals(ctx, catalog);
     }
 
-    fn request_calculate<C: SpeciesCatalogPort>(&mut self, db: &C) {
+    fn request_calculate<C: SpeciesRepository>(&mut self, db: &C) {
         if !self.dont_show_warnings {
             let ws = collect_cp_warnings(&self.system, &self.params, db);
             if !ws.is_empty() {
@@ -1385,7 +1401,7 @@ impl EquilibriumUiState {
         self.run_calculate(db);
     }
 
-    fn run_calculate<C: SpeciesCatalogPort>(&mut self, db: &C) {
+    fn run_calculate<C: SpeciesRepository>(&mut self, db: &C) {
         self.last_error = None;
         match EquilibriumUseCases::solve_equilibrium_sweep(db, &self.system, &self.params) {
             Ok(res) => {
@@ -1408,7 +1424,7 @@ impl EquilibriumUiState {
         }
     }
 
-    fn render_toolbar_and_formula_bar<C: SpeciesCatalogPort>(&mut self, ui: &mut egui::Ui, db: &C) {
+    fn render_toolbar_and_formula_bar<C: SpeciesRepository>(&mut self, ui: &mut egui::Ui, db: &C) {
         ui.horizontal_wrapped(|ui| {
             if ui.button(crate::i18n::text("review.062")).clicked() {
                 self.show_from_elements = true;
@@ -1517,7 +1533,7 @@ impl EquilibriumUiState {
         });
     }
 
-    fn sort_phases<C: SpeciesCatalogPort>(&mut self, db: &C) {
+    fn sort_phases<C: SpeciesRepository>(&mut self, db: &C) {
         let mut gas = Vec::new();
         let mut aqua = Vec::new();
         let mut liq = Vec::new();
@@ -2201,7 +2217,7 @@ impl EquilibriumUiState {
         });
     }
 
-    fn render_parameters_panel<C: SpeciesCatalogPort>(&mut self, ui: &mut egui::Ui, db: &C) {
+    fn render_parameters_panel<C: SpeciesRepository>(&mut self, ui: &mut egui::Ui, db: &C) {
         egui::ScrollArea::vertical().show(ui, |ui| {
             ui.heading(crate::i18n::text("common.066"));
             ui.separator();
@@ -2711,7 +2727,7 @@ impl EquilibriumUiState {
         }
     }
 
-    fn render_modals<C: SpeciesCatalogPort>(&mut self, ctx: &egui::Context, db: &C) {
+    fn render_modals(&mut self, ctx: &egui::Context, db: &dyn SpeciesCatalogPort) {
         // From Elements Modal (Figs. 3-5)
         if self.show_from_elements {
             let mut open = true;
@@ -2944,7 +2960,7 @@ impl EquilibriumUiState {
                             self.show_warnings_modal = false;
                             if self.warnings_pending_calc {
                                 self.warnings_pending_calc = false;
-                                self.run_calculate(db);
+                                self.run_calculate(&CatalogRepo(db));
                             }
                         }
                         if ui.button(crate::i18n::text("common.000")).clicked() {

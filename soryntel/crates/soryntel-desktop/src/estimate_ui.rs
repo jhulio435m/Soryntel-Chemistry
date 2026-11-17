@@ -10,23 +10,13 @@ use egui_plot::{Bar, BarChart, Legend, Line, Plot, PlotPoints, Points};
 use serde::{Deserialize, Serialize};
 use soryntel_application::use_cases::{CatalogUseCases, MiscUseCases};
 use soryntel_core::{
-    ChemicalSpecies, KelleyCoefficients, OwnDbEditorPort, Phase, SpeciesBrowserPort,
-    SpeciesCatalogPort, SpeciesDatabaseAdminPort, SpeciesMetadata, SpeciesRepository,
-    SpeciesThermoInterval,
+    ChemicalSpecies, KelleyCoefficients, Phase,
+    SpeciesMetadata,
+    SpeciesThermoInterval, SpeciesWorkspacePort,
 };
 use soryntel_thermo::estimate::{EstimateRow, EstimateSpeciesType, FunctionalGroup, OrganicGroup};
 use std::collections::BTreeSet;
 
-/// Puertos que usa HSC Estimate: consulta de especies de referencia, recorrido del catálogo
-/// para la nube de paridad, escritura en OwnDB y persistencia del fichero OwnDB.
-pub trait EstimateCatalog:
-    SpeciesCatalogPort + SpeciesBrowserPort + OwnDbEditorPort + SpeciesDatabaseAdminPort
-{
-}
-impl<T> EstimateCatalog for T where
-    T: SpeciesCatalogPort + SpeciesBrowserPort + OwnDbEditorPort + SpeciesDatabaseAdminPort + ?Sized
-{
-}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EstimatePlotMode {
@@ -157,7 +147,7 @@ pub struct EstimateModuleState {
 }
 
 impl EstimateModuleState {
-    pub fn new(db: &dyn EstimateCatalog) -> Self {
+    pub fn new(db: &dyn SpeciesWorkspacePort) -> Self {
         let mut rows = MiscUseCases::estimate_default_rows();
         for r in &mut rows {
             MiscUseCases::evaluate_estimate(db, r);
@@ -226,7 +216,7 @@ impl EstimateModuleState {
         }
     }
 
-    fn recalc_all(&mut self, db: &dyn EstimateCatalog) {
+    fn recalc_all(&mut self, db: &dyn SpeciesWorkspacePort) {
         for r in &mut self.rows {
             MiscUseCases::evaluate_estimate(db, r);
         }
@@ -324,7 +314,7 @@ impl EstimateModuleState {
         out
     }
 
-    fn insert_evaluated_rows(&mut self, at_idx: usize, mut to_paste: Vec<EstimateRow>, db: &dyn EstimateCatalog) {
+    fn insert_evaluated_rows(&mut self, at_idx: usize, mut to_paste: Vec<EstimateRow>, db: &dyn SpeciesWorkspacePort) {
         if to_paste.is_empty() {
             return;
         }
@@ -342,7 +332,7 @@ impl EstimateModuleState {
         self.status_msg = format!("Pegadas {count} filas");
     }
 
-    fn paste_at_row(&mut self, at_idx: usize, ctx: &egui::Context, db: &dyn EstimateCatalog) {
+    fn paste_at_row(&mut self, at_idx: usize, ctx: &egui::Context, db: &dyn SpeciesWorkspacePort) {
         let mut to_paste = self.clipboard_rows.clone();
         if to_paste.is_empty() {
             let clip_text = ctx.input(|i| {
@@ -364,7 +354,7 @@ impl EstimateModuleState {
         self.insert_evaluated_rows(at_idx, to_paste, db);
     }
 
-    pub fn open_cp_data_for_row(&mut self, row_idx: usize, db: &dyn EstimateCatalog) {
+    pub fn open_cp_data_for_row(&mut self, row_idx: usize, db: &dyn SpeciesWorkspacePort) {
         let Some(row) = self.rows.get(row_idx).cloned() else {
             return;
         };
@@ -379,7 +369,7 @@ impl EstimateModuleState {
         self.show_cp_data_win = true;
     }
 
-    fn regenerate_cp_points(&mut self, db: &dyn EstimateCatalog) {
+    fn regenerate_cp_points(&mut self, db: &dyn SpeciesWorkspacePort) {
         let Some(mut row) = self.rows.get(self.cp_target_row).cloned() else {
             return;
         };
@@ -448,7 +438,7 @@ impl EstimateModuleState {
         self.cp_kelley.cp(t)
     }
 
-    fn prepare_db_review(&mut self, row_idx: usize, ranges: Vec<(f64, f64, KelleyCoefficients)>, db: &dyn EstimateCatalog) {
+    fn prepare_db_review(&mut self, row_idx: usize, ranges: Vec<(f64, f64, KelleyCoefficients)>, db: &dyn SpeciesWorkspacePort) {
         let Some(row) = self.rows.get(row_idx).cloned() else {
             return;
         };
@@ -508,7 +498,7 @@ impl EstimateModuleState {
         };
     }
 
-    pub fn save_db_review_to_owndb(&mut self, db: &mut dyn EstimateCatalog) -> Result<(), String> {
+    pub fn save_db_review_to_owndb(&mut self, db: &mut dyn SpeciesWorkspacePort) -> Result<(), String> {
         let formula = self.db_review.formula.trim().to_string();
         if formula.is_empty() {
             return Err("La fórmula no puede estar vacía".into());
@@ -588,7 +578,7 @@ impl EstimateModuleState {
         Ok(non_empty.len())
     }
 
-    pub fn load_sheet_from_path(&mut self, path: &str, db: &dyn EstimateCatalog) -> Result<usize, String> {
+    pub fn load_sheet_from_path(&mut self, path: &str, db: &dyn SpeciesWorkspacePort) -> Result<usize, String> {
         let raw = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
         let mut loaded = if let Ok(bundle) = serde_json::from_str::<EstimateSheetFile>(&raw) {
             bundle.rows
@@ -626,7 +616,7 @@ impl EstimateModuleState {
         Ok(n)
     }
 
-    pub fn ui(&mut self, ctx: &egui::Context, db: &mut dyn EstimateCatalog) {
+    pub fn ui(&mut self, ctx: &egui::Context, db: &mut dyn SpeciesWorkspacePort) {
         if !ctx.wants_keyboard_input() {
             let (ev_copy, ev_cut, ev_paste) = ctx.input(|i| {
                 let mut cp = false;
@@ -1183,7 +1173,7 @@ impl EstimateModuleState {
         }
     }
 
-    fn render_spreadsheet(&mut self, ctx: &egui::Context, ui: &mut egui::Ui, db: &mut dyn EstimateCatalog) {
+    fn render_spreadsheet(&mut self, ctx: &egui::Context, ui: &mut egui::Ui, db: &mut dyn SpeciesWorkspacePort) {
         let max_elems = self
             .rows
             .iter()
@@ -1775,7 +1765,7 @@ impl EstimateModuleState {
         }
     }
 
-    fn render_db_picker(&mut self, ctx: &egui::Context, db: &dyn EstimateCatalog) {
+    fn render_db_picker(&mut self, ctx: &egui::Context, db: &dyn SpeciesWorkspacePort) {
         let mut open = self.show_db_picker;
         let mut insert_formula: Option<String> = None;
 
@@ -1820,7 +1810,7 @@ impl EstimateModuleState {
         }
     }
 
-    fn ensure_db_scatter_cache(&mut self, db: &dyn EstimateCatalog) {
+    fn ensure_db_scatter_cache(&mut self, db: &dyn SpeciesWorkspacePort) {
         if matches!(
             self.scatter_scope,
             EstimateScatterScope::SheetRows | EstimateScatterScope::SelectedRows
@@ -1860,7 +1850,7 @@ impl EstimateModuleState {
         self.cached_db_scope = Some(self.scatter_scope);
     }
 
-    fn render_graphics_window(&mut self, ctx: &egui::Context, db: &dyn EstimateCatalog) {
+    fn render_graphics_window(&mut self, ctx: &egui::Context, db: &dyn SpeciesWorkspacePort) {
         self.ensure_db_scatter_cache(db);
         let mut open = self.show_graphics_win;
         let mut close_clicked = false;
@@ -2277,7 +2267,7 @@ impl EstimateModuleState {
         self.show_graphics_win = open && !close_clicked;
     }
 
-    fn render_cp_range_dialog(&mut self, ctx: &egui::Context, db: &dyn EstimateCatalog) {
+    fn render_cp_range_dialog(&mut self, ctx: &egui::Context, db: &dyn SpeciesWorkspacePort) {
         let mut open = self.show_cp_range_dialog;
         let mut run_fit = false;
         let mut close_now = false;
@@ -2336,7 +2326,7 @@ impl EstimateModuleState {
         }
     }
 
-    fn render_cp_data_window(&mut self, ctx: &egui::Context, db: &mut dyn EstimateCatalog) {
+    fn render_cp_data_window(&mut self, ctx: &egui::Context, db: &mut dyn SpeciesWorkspacePort) {
         let mut open = self.show_cp_data_win;
         let mut do_update_species = false;
         let mut do_fit = false;
@@ -2588,7 +2578,7 @@ impl EstimateModuleState {
         }
     }
 
-    fn render_db_review_window(&mut self, ctx: &egui::Context, db: &mut dyn EstimateCatalog) {
+    fn render_db_review_window(&mut self, ctx: &egui::Context, db: &mut dyn SpeciesWorkspacePort) {
         let mut open = self.db_review.open;
         let mut do_save = false;
         let mut do_cancel = false;
@@ -2716,7 +2706,7 @@ impl EstimateModuleState {
         }
     }
 
-    fn render_file_io_modal(&mut self, ctx: &egui::Context, db: &dyn EstimateCatalog) {
+    fn render_file_io_modal(&mut self, ctx: &egui::Context, db: &dyn SpeciesWorkspacePort) {
         let mut open = self.show_file_io_modal;
         let mut close_now = false;
         let title = if self.file_io_save_mode {
@@ -2807,6 +2797,7 @@ fn series_palette_color(idx: usize) -> egui::Color32 {
 mod tests {
     use super::*;
     use soryntel_db::ThermoDatabase;
+    use soryntel_core::SpeciesRepository;
     use soryntel_thermo::estimate::evaluate_estimate_row;
 
     #[test]

@@ -234,6 +234,33 @@ pub trait HscFileToolsPort {
     fn convert_legacy_to_hsc6(&self, src: &Path, dst: &Path) -> Result<usize, CatalogError>;
 }
 
+/// Full species workspace: everything the desktop catalog windows need.
+///
+/// Aggregates the catalog, administration, browser, OwnDB editor, reference
+/// library and `.HSC` file-tool ports so a single `&dyn SpeciesWorkspacePort`
+/// can be handed to UI modules. Any type implementing all of them gets it via
+/// the blanket impl. Trait upcasting lets it coerce to any of its supertraits.
+pub trait SpeciesWorkspacePort:
+    SpeciesCatalogPort
+    + SpeciesDatabaseAdminPort
+    + SpeciesBrowserPort
+    + OwnDbEditorPort
+    + ReferenceLibraryPort
+    + HscFileToolsPort
+{
+}
+
+impl<T> SpeciesWorkspacePort for T where
+    T: SpeciesCatalogPort
+        + SpeciesDatabaseAdminPort
+        + SpeciesBrowserPort
+        + OwnDbEditorPort
+        + ReferenceLibraryPort
+        + HscFileToolsPort
+        + ?Sized
+{
+}
+
 /// Location of the default database files.
 pub trait DatabaseLocatorPort {
     /// Default `MainDB` file, if one is available.

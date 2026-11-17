@@ -1,8 +1,7 @@
 use eframe::egui;
 use serde::{Deserialize, Serialize};
-use soryntel_application::ports::SpeciesCatalogPort;
 use soryntel_application::use_cases::{CatalogUseCases, MiscUseCases};
-use soryntel_core::SpeciesBrowserPort;
+use soryntel_core::SpeciesWorkspacePort;
 // Tipos de modelo de thermo usados como estado de la UI. `balanced_coeff_for_element`,
 // `species_db_temp_range` y `ellingham_*` son helpers de dominio puros sin caso de uso todavía.
 use soryntel_thermo::{
@@ -15,9 +14,6 @@ use soryntel_thermo::{
     ChemicalSpecies,
 };
 
-/// Puertos que necesita el módulo: catálogo con precedencia y acceso por capa (OwnDB/MainDB).
-pub trait DiagramsCatalog: SpeciesCatalogPort + SpeciesBrowserPort {}
-impl<T: SpeciesCatalogPort + SpeciesBrowserPort + ?Sized> DiagramsCatalog for T {}
 
 use crate::excel_grid::{
     header_cell, row_num_cell, text_cell, widget_cell, EXCEL_ALT_ROW_BG, EXCEL_GRID_BORDER,
@@ -101,7 +97,7 @@ struct DiagramRow {
 }
 
 impl DiagramRow {
-    fn new(formula: &str, coeff: f64, db_no: u8, db: &dyn DiagramsCatalog, in_kelvin: bool) -> Self {
+    fn new(formula: &str, coeff: f64, db_no: u8, db: &dyn SpeciesWorkspacePort, in_kelvin: bool) -> Self {
         let mut r = Self {
             formula: formula.to_string(),
             coeff_str: format!("{coeff:.2}"),
@@ -125,7 +121,7 @@ impl DiagramRow {
         }
     }
 
-    fn resolve_species(&self, db: &dyn DiagramsCatalog) -> Option<ChemicalSpecies> {
+    fn resolve_species(&self, db: &dyn SpeciesWorkspacePort) -> Option<ChemicalSpecies> {
         let f = self.formula.trim();
         if f.is_empty() {
             return None;
@@ -137,7 +133,7 @@ impl DiagramRow {
         }
     }
 
-    fn refresh_db_range(&mut self, db: &dyn DiagramsCatalog, in_kelvin: bool) {
+    fn refresh_db_range(&mut self, db: &dyn SpeciesWorkspacePort, in_kelvin: bool) {
         if let Some(sp) = self.resolve_species(db) {
             let (tmin_k, tmax_k) = species_db_temp_range(&sp);
             let off = if in_kelvin { 0.0 } else { 273.15 };
@@ -194,7 +190,7 @@ pub struct DiagramsModuleState {
 }
 
 impl DiagramsModuleState {
-    pub fn new(db: &dyn DiagramsCatalog) -> Self {
+    pub fn new(db: &dyn SpeciesWorkspacePort) -> Self {
         let initial = vec![
             ("Cu2O", 2.0),
             ("FeO", 2.0),
@@ -248,7 +244,7 @@ impl DiagramsModuleState {
         st
     }
 
-    fn recalculate(&mut self, db: &dyn DiagramsCatalog) {
+    fn recalculate(&mut self, db: &dyn SpeciesWorkspacePort) {
         let t_min_val: f64 = self.t_min_str.trim().parse().unwrap_or(0.0);
         let t_max_val: f64 = self.t_max_str.trim().parse().unwrap_or(2000.0);
         let step_val: f64 = self.t_step_str.trim().parse().unwrap_or(50.0);
@@ -345,7 +341,7 @@ impl DiagramsModuleState {
 
     fn load_preset(
         &mut self,
-        db: &dyn DiagramsCatalog,
+        db: &dyn SpeciesWorkspacePort,
         dtype: DiagramType,
         items: &[(&str, f64)],
         bal_elem: &str,
@@ -419,7 +415,7 @@ impl DiagramsModuleState {
         }
     }
 
-    fn open_dia8(&mut self, db: &dyn DiagramsCatalog, path: &str) {
+    fn open_dia8(&mut self, db: &dyn SpeciesWorkspacePort, path: &str) {
         match std::fs::read_to_string(path) {
             Ok(txt) => match serde_json::from_str::<DiagSaveFile>(&txt) {
                 Ok(sf) => {
@@ -573,7 +569,7 @@ impl DiagramsModuleState {
         }
     }
 
-    pub fn ui(&mut self, ctx: &egui::Context, db: &dyn DiagramsCatalog) {
+    pub fn ui(&mut self, ctx: &egui::Context, db: &dyn SpeciesWorkspacePort) {
         let mut vis = egui::Visuals::light();
         vis.panel_fill = egui::Color32::from_rgb(240, 242, 245);
         vis.window_fill = egui::Color32::WHITE;
@@ -978,7 +974,7 @@ impl DiagramsModuleState {
         self.ui_extra_modals(ctx, db);
     }
 
-    fn ui_xdata_grid(&mut self, ui: &mut egui::Ui, db: &dyn DiagramsCatalog) {
+    fn ui_xdata_grid(&mut self, ui: &mut egui::Ui, db: &dyn SpeciesWorkspacePort) {
         let t_unit = if self.temp_in_kelvin { "K" } else { "°C" };
         ui.horizontal(|ui| {
             row_num_cell(ui, 0, 26.0);
@@ -1136,7 +1132,7 @@ impl DiagramsModuleState {
         }
     }
 
-    fn ui_chart(&mut self, ui: &mut egui::Ui, db: &dyn DiagramsCatalog) {
+    fn ui_chart(&mut self, ui: &mut egui::Ui, db: &dyn SpeciesWorkspacePort) {
         let Some(res) = self.result.clone() else {
             ui.centered_and_justified(|ui| {
                 ui.label("Click Diagram to plot.");
@@ -1382,7 +1378,7 @@ impl DiagramsModuleState {
         }
     }
 
-    fn ui_db_browser(&mut self, ctx: &egui::Context, db: &dyn DiagramsCatalog) {
+    fn ui_db_browser(&mut self, ctx: &egui::Context, db: &dyn SpeciesWorkspacePort) {
         let mut open = self.show_db_browser;
         egui::Window::new("Browse Database — Add Species")
             .open(&mut open)
@@ -1422,7 +1418,7 @@ impl DiagramsModuleState {
         }
     }
 
-    fn ui_extra_modals(&mut self, ctx: &egui::Context, db: &dyn DiagramsCatalog) {
+    fn ui_extra_modals(&mut self, ctx: &egui::Context, db: &dyn SpeciesWorkspacePort) {
         if self.show_file_modal {
             let mut open = self.show_file_modal;
             let title = if self.file_modal_is_save {

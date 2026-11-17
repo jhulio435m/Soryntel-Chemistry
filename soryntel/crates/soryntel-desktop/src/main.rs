@@ -181,7 +181,7 @@ fn main() -> eframe::Result<()> {
         let mut units = soryntel_thermo::excel_addins::AddInUnits::default();
         let target = &cli_args[0];
         let val = if target.trim_start().starts_with('=') {
-            AddinsUseCases::eval_addin_formula(&*services.legacy_db(), &mut units, target, |_, _| {
+            AddinsUseCases::eval_addin_formula(&*services.catalog(), &mut units, target, |_, _| {
                 String::new()
             })
         } else {
@@ -213,7 +213,7 @@ fn main() -> eframe::Result<()> {
                     }
                 })
                 .collect();
-            AddinsUseCases::eval_addin_call(&*services.legacy_db(), &mut units, target, &args_vec)
+            AddinsUseCases::eval_addin_call(&*services.catalog(), &mut units, target, &args_vec)
         };
         println!("{}", val.as_multiline_string(8));
         return Ok(());
@@ -480,7 +480,10 @@ struct SoryntelDesktopApp {
 
 impl SoryntelDesktopApp {
     fn new(services: AppServices, window_mode: WindowMode, custom_db_arg: Option<String>) -> Self {
-        let guard = services.legacy_db();
+        // Un único guard de lectura para construir los estados; se suelta antes de mover
+        // `services` a `Self`. `&dyn SpeciesWorkspacePort` se convierte por upcasting en el
+        // puerto que pida cada módulo.
+        let guard = services.catalog();
         let db = &*guard;
         let reaction_state = reaction_ui::ReactionModuleState::new(db);
         let aqua_state = aqua_ui::AquaModuleState::new(db);
@@ -488,8 +491,6 @@ impl SoryntelDesktopApp {
         let heat_loss_state = heat_loss_ui::HeatLossModuleState::new();
         let equilibrium_state = equilibrium_ui::EquilibriumUiState::default();
         let exergy_state = exergy_ui::ExergyModuleState::new(db);
-        // TODO(hex): los constructores aún reciben el guard de `legacy_db()` (que se suelta
-        // antes de construir `Self`); `&ThermoDatabase` se coerciona a cada puerto.
         let estimate_state = estimate_ui::EstimateModuleState::new(db);
         let ehph_state = ehph_ui::EhPhModuleState::new(db);
         let diagrams_state = diagrams_ui::DiagramsModuleState::new(db);
@@ -567,11 +568,11 @@ impl eframe::App for SoryntelDesktopApp {
                     let f = imported.trim().to_string();
                     if !f.is_empty() {
                         self.reaction_state.formula_input = f;
-                        self.reaction_state.run_calculate(&*self.services.legacy_db());
+                        self.reaction_state.run_calculate(&*self.services.catalog());
                     }
                     let _ = std::fs::remove_file(&import_path);
                 }
-                self.reaction_state.ui(ctx, &*self.services.legacy_db());
+                self.reaction_state.ui(ctx, &*self.services.catalog());
                 if self.reaction_state.request_open_browser {
                     self.reaction_state.request_open_browser = false;
                     if !is_child_running(&mut self.child_browser) {
@@ -617,29 +618,29 @@ impl eframe::App for SoryntelDesktopApp {
                 return;
             }
             WindowMode::Equilibrium => {
-                self.equilibrium_state.ui(ctx, &*self.services.legacy_db());
+                self.equilibrium_state.ui(ctx, &*self.services.catalog());
                 return;
             }
             WindowMode::Exergy => {
-                self.exergy_state.ui(ctx, &*self.services.legacy_db());
+                self.exergy_state.ui(ctx, &*self.services.catalog());
                 return;
             }
             WindowMode::Estimate => {
                 // Guard de escritura temporal: se suelta al terminar la sentencia.
-                self.estimate_state.ui(ctx, &mut *self.services.legacy_db_mut());
+                self.estimate_state.ui(ctx, &mut *self.services.catalog_mut());
                 return;
             }
             WindowMode::EhPh => {
-                self.ehph_state.ui(ctx, &*self.services.legacy_db());
+                self.ehph_state.ui(ctx, &*self.services.catalog());
                 return;
             }
             WindowMode::Diagrams => {
-                self.diagrams_state.ui(ctx, &*self.services.legacy_db());
+                self.diagrams_state.ui(ctx, &*self.services.catalog());
                 return;
             }
             WindowMode::PhaseStability => {
                 self.phase_stability_state
-                    .ui(ctx, &*self.services.legacy_db());
+                    .ui(ctx, &*self.services.catalog());
                 return;
             }
             WindowMode::SpeciesConverter => {
@@ -648,7 +649,7 @@ impl eframe::App for SoryntelDesktopApp {
                 return;
             }
             WindowMode::Benson => {
-                self.benson_state.ui(ctx, &mut *self.services.legacy_db_mut());
+                self.benson_state.ui(ctx, &mut *self.services.catalog_mut());
                 return;
             }
             WindowMode::Elements => {
@@ -657,7 +658,7 @@ impl eframe::App for SoryntelDesktopApp {
                 return;
             }
             WindowMode::Water => {
-                self.water_state.ui(ctx, &*self.services.legacy_db());
+                self.water_state.ui(ctx, &*self.services.catalog());
                 return;
             }
             WindowMode::Units => {
@@ -669,7 +670,7 @@ impl eframe::App for SoryntelDesktopApp {
                 return;
             }
             WindowMode::Aqua => {
-                self.aqua_state.ui(ctx, &*self.services.legacy_db());
+                self.aqua_state.ui(ctx, &*self.services.catalog());
                 return;
             }
             WindowMode::Sim => {
@@ -695,14 +696,14 @@ impl eframe::App for SoryntelDesktopApp {
             WindowMode::Species => {
                 // El guard de escritura se suelta al terminar esta sentencia, antes de
                 // tomar el de lectura para recalcular la reacción.
-                let selected = self.species_state.ui(ctx, &mut *self.services.legacy_db_mut());
+                let selected = self.species_state.ui(ctx, &mut *self.services.catalog_mut());
                 if let Some(f) = selected {
                     let _ = crate::storage::write_atomic(
                         crate::ui_common::temp_file_path("soryntel_import_formula.txt"),
                         &f,
                     );
                     self.reaction_state.formula_input = f;
-                    self.reaction_state.run_calculate(&*self.services.legacy_db());
+                    self.reaction_state.run_calculate(&*self.services.catalog());
                 }
                 return;
             }
@@ -767,7 +768,7 @@ impl SoryntelDesktopApp {
         launcher_ui::render_hsc10_header(
             ctx,
             &mut self.launcher_ui_state,
-            self.services.with_catalog(CatalogUseCases::species_count),
+            self.services.with_catalog(|catalog| CatalogUseCases::species_count(catalog)),
         );
         let footer_cmd =
             launcher_ui::render_hsc10_footer(ctx, &mut self.launcher_ui_state, open_count);
@@ -813,7 +814,7 @@ impl SoryntelDesktopApp {
                 ctx,
                 &mut self.launcher_ui_state,
                 &tiles,
-                self.services.with_catalog(CatalogUseCases::species_count),
+                self.services.with_catalog(|catalog| CatalogUseCases::species_count(catalog)),
             ) {
                 launcher_ui::LauncherCommand::OpenModule(m) => self.launch_module_by_key(m),
                 launcher_ui::LauncherCommand::KillAll => self.kill_all_children(),
@@ -1076,7 +1077,7 @@ impl SoryntelDesktopApp {
         ];
 
         let mut pending_action: Option<(&'static str, bool)> = None;
-        let species_count = self.services.with_catalog(CatalogUseCases::species_count);
+        let species_count = self.services.with_catalog(|catalog| CatalogUseCases::species_count(catalog));
         let search_q = self.launcher_ui_state.cards_search.trim().to_lowercase();
 
         egui::CentralPanel::default()

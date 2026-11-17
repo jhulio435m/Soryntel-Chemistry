@@ -15,6 +15,7 @@ pub use catalog::{
 pub use ports::{
     CatalogError, DatabaseLocatorPort, HscFileToolsPort, OwnDbEditorPort, ReferenceLibraryPort,
     SpeciesBrowserPort, SpeciesCatalogPort, SpeciesDatabaseAdminPort, SpeciesRepository,
+    SpeciesWorkspacePort,
 };
 pub use species::{
     ChemicalSpecies, KelleyCoefficients, Phase, SpeciesMetadata, SpeciesThermoInterval,

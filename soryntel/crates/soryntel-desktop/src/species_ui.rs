@@ -23,9 +23,8 @@ use soryntel_core::catalog::{
     PhaseFilterFlags, ReferenceEntry, SpeciesCatalogEntry,
 };
 use soryntel_core::{
-    ChemicalSpecies, HscFileToolsPort, KelleyCoefficients, OwnDbEditorPort, Phase,
-    ReferenceLibraryPort, SpeciesBrowserPort, SpeciesCatalogPort, SpeciesDatabaseAdminPort,
-    SpeciesMetadata, SpeciesThermoInterval, CAL_TO_JOULE, T_REF_K,
+    ChemicalSpecies, KelleyCoefficients, Phase, SpeciesMetadata, SpeciesThermoInterval,
+    SpeciesWorkspacePort, CAL_TO_JOULE, T_REF_K,
 };
 use soryntel_thermo::elements::PERIODIC_ELEMENTS;
 use soryntel_thermo::species::{
@@ -34,28 +33,6 @@ use soryntel_thermo::species::{
 };
 use std::collections::{BTreeMap, BTreeSet};
 
-/// Puertos que necesita la ventana de bases de datos: consulta resuelta, administración de
-/// MainDB/OwnDB, navegador por capas, edición de OwnDB, diccionario `.REF` y herramientas
-/// de ficheros `.HSC`.
-pub trait SpeciesWindowCatalog:
-    SpeciesCatalogPort
-    + SpeciesDatabaseAdminPort
-    + SpeciesBrowserPort
-    + OwnDbEditorPort
-    + ReferenceLibraryPort
-    + HscFileToolsPort
-{
-}
-impl<T> SpeciesWindowCatalog for T where
-    T: SpeciesCatalogPort
-        + SpeciesDatabaseAdminPort
-        + SpeciesBrowserPort
-        + OwnDbEditorPort
-        + ReferenceLibraryPort
-        + HscFileToolsPort
-        + ?Sized
-{
-}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SpeciesViewTab {
@@ -235,7 +212,7 @@ pub struct SpeciesModuleState {
 }
 
 impl SpeciesModuleState {
-    pub fn new(db: &dyn SpeciesWindowCatalog) -> Self {
+    pub fn new(db: &dyn SpeciesWorkspacePort) -> Self {
         let summary = CatalogUseCases::status(db);
         let default_main = summary
             .main_path
@@ -385,7 +362,7 @@ impl SpeciesModuleState {
     }
 
     /// Execute active search mode against the species browser port.
-    pub fn refresh_search(&mut self, db: &dyn SpeciesWindowCatalog) {
+    pub fn refresh_search(&mut self, db: &dyn SpeciesWorkspacePort) {
         self.phase_filters.carbon_counts = CatalogUseCases::parse_carbon_filter(&self.carbon_limit_text);
         let res = match self.query_mode {
             BrowserQueryMode::Keyword => CatalogUseCases::browse_keyword(
@@ -492,7 +469,7 @@ impl SpeciesModuleState {
         };
     }
 
-    fn save_editor_to_owndb(&mut self, db: &mut dyn SpeciesWindowCatalog) {
+    fn save_editor_to_owndb(&mut self, db: &mut dyn SpeciesWorkspacePort) {
         let formula = self.editor.formula.trim().to_string();
         if formula.is_empty() {
             self.set_status("Formula cannot be empty when saving to OwnDB.", true);
@@ -581,7 +558,7 @@ impl SpeciesModuleState {
     }
 
     /// Main UI entry point. Returns optional formula imported for Reaction Equations module.
-    pub fn ui(&mut self, ctx: &egui::Context, db: &mut dyn SpeciesWindowCatalog) -> Option<String> {
+    pub fn ui(&mut self, ctx: &egui::Context, db: &mut dyn SpeciesWorkspacePort) -> Option<String> {
         if self.results_dirty {
             self.refresh_search(db);
         }
@@ -618,7 +595,7 @@ impl SpeciesModuleState {
         self.import_to_reaction_formula.take()
     }
 
-    fn show_menu_bar(&mut self, ctx: &egui::Context, db: &mut dyn SpeciesWindowCatalog) {
+    fn show_menu_bar(&mut self, ctx: &egui::Context, db: &mut dyn SpeciesWorkspacePort) {
         egui::TopBottomPanel::top("species_top_menu").show(ctx, |ui| {
             egui::menu::bar(ui, |ui| {
                 ui.menu_button(crate::i18n::text("common.001"), |ui| {
@@ -757,7 +734,7 @@ impl SpeciesModuleState {
         });
     }
 
-    fn show_status_footer(&self, ctx: &egui::Context, db: &dyn SpeciesWindowCatalog) {
+    fn show_status_footer(&self, ctx: &egui::Context, db: &dyn SpeciesWorkspacePort) {
         let sum = CatalogUseCases::status(db);
         egui::TopBottomPanel::bottom("species_status_footer").show(ctx, |ui| {
             ui.horizontal(|ui| {
@@ -784,7 +761,7 @@ impl SpeciesModuleState {
         });
     }
 
-    fn load_selected_into_editor(&mut self, db: &dyn SpeciesWindowCatalog) {
+    fn load_selected_into_editor(&mut self, db: &dyn SpeciesWorkspacePort) {
         if let Some(ref f) = self.selected_formula.clone() {
             let src = self.selected_source;
             if let Some(entry) = self
@@ -802,7 +779,7 @@ impl SpeciesModuleState {
         }
     }
 
-    fn show_browser_tab(&mut self, ui: &mut egui::Ui, db: &mut dyn SpeciesWindowCatalog) {
+    fn show_browser_tab(&mut self, ui: &mut egui::Ui, db: &mut dyn SpeciesWorkspacePort) {
         let mut changed = false;
 
         ui.columns(3, |cols| {
@@ -1187,7 +1164,7 @@ impl SpeciesModuleState {
         });
     }
 
-    fn show_editor_tab(&mut self, ui: &mut egui::Ui, db: &mut dyn SpeciesWindowCatalog) {
+    fn show_editor_tab(&mut self, ui: &mut egui::Ui, db: &mut dyn SpeciesWorkspacePort) {
         ui.horizontal(|ui| {
             ui.strong("OwnDB Species Editor (Ch. 28.11)");
             ui.separator();
@@ -1759,7 +1736,7 @@ impl SpeciesModuleState {
         }
     }
 
-    fn show_convert_gibbs_tab(&mut self, ui: &mut egui::Ui, db: &dyn SpeciesWindowCatalog) {
+    fn show_convert_gibbs_tab(&mut self, ui: &mut egui::Ui, db: &dyn SpeciesWorkspacePort) {
         ui.horizontal(|ui| {
             ui.strong("Convert G(T) -> H, S, Cp & Delta to Normal (Ch. 28.14 Fig. 13)");
             ui.separator();
@@ -1907,7 +1884,7 @@ impl SpeciesModuleState {
         }
     }
 
-    fn show_db_tools_tab(&mut self, ui: &mut egui::Ui, db: &mut dyn SpeciesWindowCatalog) {
+    fn show_db_tools_tab(&mut self, ui: &mut egui::Ui, db: &mut dyn SpeciesWorkspacePort) {
         egui::ScrollArea::vertical().id_salt("db_tools_main_scroll").show(ui, |ui| {
             ui.strong("Active Databases & Paths (Ch. 28.17)");
             egui::Grid::new("db_paths_grid").spacing([10.0, 5.0]).show(ui, |ui| {

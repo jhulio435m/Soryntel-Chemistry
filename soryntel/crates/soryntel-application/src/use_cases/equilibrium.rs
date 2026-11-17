@@ -2,7 +2,7 @@
 use super::super::*;
 pub struct EquilibriumUseCases;
 impl EquilibriumUseCases {
-    pub fn solve_equilibrium_sweep<R: SpeciesCatalogPort>(
+    pub fn solve_equilibrium_sweep<R: crate::ports::SpeciesRepository>(
         catalog: &R,
         sys: &EquilibriumSystem,
         params: &EquilibriumParams,
