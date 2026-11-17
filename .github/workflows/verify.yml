@@ -39,6 +39,10 @@ jobs:
           python3 scripts/audit-repository.py
           python3 scripts/audit-architecture.py
           python3 scripts/audit-ui-texts.py
+      # TODO: activar --strict cuando termine la migración del escritorio.
+      - name: Auditoría de límites entre crates
+        working-directory: .
+        run: bash soryntel/scripts/check_architecture.sh
       - name: Tests
         run: cargo test --workspace --locked
       - name: Build desktop
