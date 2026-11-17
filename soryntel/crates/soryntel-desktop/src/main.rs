@@ -1,10 +1,14 @@
 //! Soryntel Chemistry — Native Desktop Application (Módulos 01, 02 & 03).
-#![cfg_attr(all(target_os = "windows", not(debug_assertions)), windows_subsystem = "windows")]
+#![cfg_attr(
+    all(target_os = "windows", not(debug_assertions)),
+    windows_subsystem = "windows"
+)]
 
 mod addins_bridge;
 mod aqua_ui;
 mod balance_ui;
 mod benson_ui;
+mod composition;
 mod diagrams_ui;
 mod ehph_ui;
 mod elements_ui;
@@ -26,7 +30,10 @@ mod ui_common;
 mod units_ui;
 mod water_ui;
 
+use composition::AppServices;
 use eframe::egui;
+use soryntel_application::use_cases::AddinsUseCases;
+#[cfg(test)]
 use soryntel_db::ThermoDatabase;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -84,8 +91,6 @@ fn kill_child(slot: &mut Option<std::process::Child>) {
 }
 
 fn main() -> eframe::Result<()> {
-    let mut db = ThermoDatabase::with_open_defaults();
-
     // Load external user-supplied HSC database in read-only mode if provided via --hsc-db or default path
     let args: Vec<String> = std::env::args().collect();
     let mut custom_db = None;
@@ -107,7 +112,11 @@ fn main() -> eframe::Result<()> {
                 .and_then(|s| s.parse::<u16>().ok())
                 .unwrap_or(8765);
             bridge_port = Some(p);
-            if args.get(i + 1).and_then(|s| s.parse::<u16>().ok()).is_some() {
+            if args
+                .get(i + 1)
+                .and_then(|s| s.parse::<u16>().ok())
+                .is_some()
+            {
                 i += 2;
             } else {
                 i += 1;
@@ -147,37 +156,10 @@ fn main() -> eframe::Result<()> {
             i += 1;
         }
     }
-    let exe_db_dir = std::env::current_exe()
-        .ok()
-        .and_then(|p| p.parent().map(|d| d.join("Databases")));
-    let default_hsc6 = "/home/nando/Descargas/HSC6/Databases/Maindb6.HSC";
-    if let Some(ref p) = custom_db {
-        let _ = db.load_main_hsc(p);
-    } else if let Some(ref dir) = exe_db_dir {
-        let local_main = dir.join("Maindb6.HSC");
-        if local_main.exists() {
-            let _ = db.load_main_hsc(local_main);
-        } else if std::path::Path::new(default_hsc6).exists() {
-            let _ = db.load_main_hsc(default_hsc6);
-        }
-    } else if std::path::Path::new(default_hsc6).exists() {
-        let _ = db.load_main_hsc(default_hsc6);
-    }
-
-    let default_own = "/home/nando/Descargas/HSC6/Databases/OWNDB6.HSC";
-    if let Some(ref dir) = exe_db_dir {
-        let local_own = dir.join("OWNDB6.HSC");
-        if local_own.exists() {
-            let _ = db.load_own_hsc(local_own);
-        } else if std::path::Path::new(default_own).exists() {
-            let _ = db.load_own_hsc(default_own);
-        }
-    } else if std::path::Path::new(default_own).exists() {
-        let _ = db.load_own_hsc(default_own);
-    }
+    let services = AppServices::load(custom_db.as_deref());
 
     if let Some(port) = bridge_port {
-        let db_arc = std::sync::Arc::new(db);
+        let db_arc = std::sync::Arc::new(services.into_catalog());
         let units_arc = std::sync::Arc::new(std::sync::Mutex::new(
             soryntel_thermo::excel_addins::AddInUnits::default(),
         ));
@@ -192,12 +174,9 @@ fn main() -> eframe::Result<()> {
         let mut units = soryntel_thermo::excel_addins::AddInUnits::default();
         let target = &cli_args[0];
         let val = if target.trim_start().starts_with('=') {
-            soryntel_application::SoryntelApplication::eval_addin_formula(
-                &db,
-                &mut units,
-                target,
-                |_, _| String::new(),
-            )
+            AddinsUseCases::eval_addin_formula(services.catalog(), &mut units, target, |_, _| {
+                String::new()
+            })
         } else {
             let fn_upper = target.trim().to_ascii_uppercase();
             let args_vec: Vec<soryntel_thermo::excel_addins::ArgValue> = cli_args[1..]
@@ -227,12 +206,7 @@ fn main() -> eframe::Result<()> {
                     }
                 })
                 .collect();
-            soryntel_application::SoryntelApplication::eval_addin_call(
-                &db,
-                &mut units,
-                target,
-                &args_vec,
-            )
+            AddinsUseCases::eval_addin_call(services.catalog(), &mut units, target, &args_vec)
         };
         println!("{}", val.as_multiline_string(8));
         return Ok(());
@@ -319,11 +293,7 @@ fn main() -> eframe::Result<()> {
             [1220.0, 760.0],
             [480.0, 360.0],
         ),
-        WindowMode::Aqua => (
-            "Aqua — Soryntel Chemistry",
-            [1320.0, 780.0],
-            [720.0, 480.0],
-        ),
+        WindowMode::Aqua => ("Aqua — Soryntel Chemistry", [1320.0, 780.0], [720.0, 480.0]),
         WindowMode::Sim => (
             "HSC Sim — Soryntel Chemistry",
             [1380.0, 820.0],
@@ -361,7 +331,7 @@ fn main() -> eframe::Result<()> {
         Box::new(move |cc| {
             configure_soryntel_theme(&cc.egui_ctx);
             Ok(Box::new(SoryntelDesktopApp::new(
-                db,
+                services,
                 window_mode,
                 custom_db_clone,
             )))
@@ -453,7 +423,7 @@ impl ModuleRunningFlags {
 }
 
 struct SoryntelDesktopApp {
-    db: ThermoDatabase,
+    services: AppServices,
     window_mode: WindowMode,
     custom_db_arg: Option<String>,
     child_reaction: Option<std::process::Child>,
@@ -502,29 +472,31 @@ struct SoryntelDesktopApp {
 }
 
 impl SoryntelDesktopApp {
-    fn new(db: ThermoDatabase, window_mode: WindowMode, custom_db_arg: Option<String>) -> Self {
-        let reaction_state = reaction_ui::ReactionModuleState::new(&db);
-        let aqua_state = aqua_ui::AquaModuleState::new(&db);
-        let balance_state = balance_ui::BalanceModuleState::new(&db);
+    fn new(services: AppServices, window_mode: WindowMode, custom_db_arg: Option<String>) -> Self {
+        let db = services.legacy_db();
+        let reaction_state = reaction_ui::ReactionModuleState::new(db);
+        let aqua_state = aqua_ui::AquaModuleState::new(db);
+        let balance_state = balance_ui::BalanceModuleState::new(db);
         let heat_loss_state = heat_loss_ui::HeatLossModuleState::new();
         let equilibrium_state = equilibrium_ui::EquilibriumUiState::default();
-        let exergy_state = exergy_ui::ExergyModuleState::new(&db);
-        let estimate_state = estimate_ui::EstimateModuleState::new(&db);
-        let ehph_state = ehph_ui::EhPhModuleState::new(&db);
-        let diagrams_state = diagrams_ui::DiagramsModuleState::new(&db);
-        let phase_stability_state = phase_stability_ui::PhaseStabilityModuleState::new(&db);
-        let species_converter_state = species_converter_ui::SpeciesConverterModuleState::new(&db);
-        let benson_state = benson_ui::BensonModuleState::new(&db);
+        let exergy_state = exergy_ui::ExergyModuleState::new(db);
+        let estimate_state = estimate_ui::EstimateModuleState::new(db);
+        let ehph_state = ehph_ui::EhPhModuleState::new(db);
+        let diagrams_state = diagrams_ui::DiagramsModuleState::new(db);
+        let phase_stability_state = phase_stability_ui::PhaseStabilityModuleState::new(db);
+        let species_converter_state = species_converter_ui::SpeciesConverterModuleState::new(db);
+        let benson_state = benson_ui::BensonModuleState::new(db);
         let elements_state = elements_ui::ElementsModuleState::default();
-        let water_state = water_ui::WaterModuleState::new(&db);
+        let water_state = water_ui::WaterModuleState::new(db);
         let units_state = units_ui::UnitsModuleState::default();
         let excel_addins_state = excel_addins_ui::ExcelAddInsModuleState::default();
         let sim_state = sim_ui::SimModuleState::default();
         let (lca_standalone_project, lca_state) = lca_ui::LcaWindowState::with_preset_classic_zn();
-        let (mb_standalone_project, mb_state) = mass_balance_ui::MassBalanceWindowState::with_preset_rougher();
-        let species_state = species_ui::SpeciesModuleState::new(&db);
+        let (mb_standalone_project, mb_state) =
+            mass_balance_ui::MassBalanceWindowState::with_preset_rougher();
+        let species_state = species_ui::SpeciesModuleState::new(db);
         Self {
-            db,
+            services,
             window_mode,
             custom_db_arg,
             child_reaction: None,
@@ -583,11 +555,11 @@ impl eframe::App for SoryntelDesktopApp {
                     let f = imported.trim().to_string();
                     if !f.is_empty() {
                         self.reaction_state.formula_input = f;
-                        self.reaction_state.run_calculate(&self.db);
+                        self.reaction_state.run_calculate(self.services.legacy_db());
                     }
                     let _ = std::fs::remove_file(&import_path);
                 }
-                self.reaction_state.ui(ctx, &self.db);
+                self.reaction_state.ui(ctx, self.services.legacy_db());
                 if self.reaction_state.request_open_browser {
                     self.reaction_state.request_open_browser = false;
                     if !is_child_running(&mut self.child_browser) {
@@ -605,12 +577,16 @@ impl eframe::App for SoryntelDesktopApp {
                         if let (Ok(area), Ok(q_w)) =
                             (parts[0].parse::<usize>(), parts[1].parse::<f64>())
                         {
-                            self.balance_state.set_area_heat_loss_w(area, q_w, &self.db);
+                            self.balance_state.set_area_heat_loss_w(
+                                area,
+                                q_w,
+                                self.services.legacy_db(),
+                            );
                         }
                     }
                     let _ = std::fs::remove_file(&export_path);
                 }
-                self.balance_state.ui(ctx, &self.db);
+                self.balance_state.ui(ctx, self.services.legacy_db());
                 return;
             }
             WindowMode::HeatLoss => {
@@ -630,43 +606,45 @@ impl eframe::App for SoryntelDesktopApp {
                 return;
             }
             WindowMode::Equilibrium => {
-                self.equilibrium_state.ui(ctx, &self.db);
+                self.equilibrium_state.ui(ctx, self.services.legacy_db());
                 return;
             }
             WindowMode::Exergy => {
-                self.exergy_state.ui(ctx, &self.db);
+                self.exergy_state.ui(ctx, self.services.legacy_db());
                 return;
             }
             WindowMode::Estimate => {
-                self.estimate_state.ui(ctx, &mut self.db);
+                self.estimate_state.ui(ctx, self.services.legacy_db_mut());
                 return;
             }
             WindowMode::EhPh => {
-                self.ehph_state.ui(ctx, &self.db);
+                self.ehph_state.ui(ctx, self.services.legacy_db());
                 return;
             }
             WindowMode::Diagrams => {
-                self.diagrams_state.ui(ctx, &self.db);
+                self.diagrams_state.ui(ctx, self.services.legacy_db());
                 return;
             }
             WindowMode::PhaseStability => {
-                self.phase_stability_state.ui(ctx, &self.db);
+                self.phase_stability_state
+                    .ui(ctx, self.services.legacy_db());
                 return;
             }
             WindowMode::SpeciesConverter => {
-                self.species_converter_state.ui(ctx, &self.db);
+                self.species_converter_state
+                    .ui(ctx, self.services.legacy_db());
                 return;
             }
             WindowMode::Benson => {
-                self.benson_state.ui(ctx, &mut self.db);
+                self.benson_state.ui(ctx, self.services.legacy_db_mut());
                 return;
             }
             WindowMode::Elements => {
-                self.elements_state.ui(ctx, &self.db);
+                self.elements_state.ui(ctx, self.services.legacy_db());
                 return;
             }
             WindowMode::Water => {
-                self.water_state.ui(ctx, &self.db);
+                self.water_state.ui(ctx, self.services.legacy_db());
                 return;
             }
             WindowMode::Units => {
@@ -674,11 +652,11 @@ impl eframe::App for SoryntelDesktopApp {
                 return;
             }
             WindowMode::ExcelAddIns => {
-                self.excel_addins_state.ui(ctx, &self.db);
+                self.excel_addins_state.ui(ctx, self.services.legacy_db());
                 return;
             }
             WindowMode::Aqua => {
-                self.aqua_state.ui(ctx, &self.db);
+                self.aqua_state.ui(ctx, self.services.legacy_db());
                 return;
             }
             WindowMode::Sim => {
@@ -702,13 +680,13 @@ impl eframe::App for SoryntelDesktopApp {
                 return;
             }
             WindowMode::Species => {
-                if let Some(f) = self.species_state.ui(ctx, &mut self.db) {
+                if let Some(f) = self.species_state.ui(ctx, self.services.legacy_db_mut()) {
                     let _ = std::fs::write(
                         crate::ui_common::temp_file_path("soryntel_import_formula.txt"),
                         &f,
                     );
                     self.reaction_state.formula_input = f;
-                    self.reaction_state.run_calculate(&self.db);
+                    self.reaction_state.run_calculate(self.services.legacy_db());
                 }
                 return;
             }
@@ -721,7 +699,6 @@ impl eframe::App for SoryntelDesktopApp {
 
 impl SoryntelDesktopApp {
     fn show_launcher_ui(&mut self, ctx: &egui::Context) {
-
         // Poll child processes periodically while launcher is open
         ctx.request_repaint_after(std::time::Duration::from_millis(400));
         let running_reaction = is_child_running(&mut self.child_reaction);
@@ -771,7 +748,11 @@ impl SoryntelDesktopApp {
         .filter(|&b| b)
         .count();
 
-        launcher_ui::render_hsc10_header(ctx, &mut self.launcher_ui_state, self.db.len());
+        launcher_ui::render_hsc10_header(
+            ctx,
+            &mut self.launcher_ui_state,
+            self.services.legacy_db().len(),
+        );
         let footer_cmd =
             launcher_ui::render_hsc10_footer(ctx, &mut self.launcher_ui_state, open_count);
         match footer_cmd {
@@ -784,39 +765,183 @@ impl SoryntelDesktopApp {
             use launcher_ui::{ShowcaseCategory as Cat, TileAction as Act, TileSpec};
             let tiles: [TileSpec; 24] = [
                 // Row 1 (Fig. 1 top row)
-                TileSpec { code: "Aqu", label: "Aqueous\nSolutions", action: Act::Launch("aqua"), category: Cat::Sustainability, running: running_aqua },
-                TileSpec { code: "Bal", label: "Heat & Material\nBalance", action: Act::Launch("balance"), category: Cat::Products, running: running_balance },
-                TileSpec { code: "EpH", label: "Eh-pH\nDiagrams", action: Act::Launch("ehph"), category: Cat::Sustainability, running: running_ehph },
-                TileSpec { code: "Est", label: "H, S and Cp\nEstimates", action: Act::Launch("estimate"), category: Cat::ResearchDev, running: running_estimate },
-                TileSpec { code: "Mea", label: "Measure\nUnits", action: Act::Launch("units"), category: Cat::Services, running: running_units },
-                TileSpec { code: "Nav", label: "Diagram\nNavigator", action: Act::Launch("diagrams"), category: Cat::Products, running: running_diagrams },
+                TileSpec {
+                    code: "Aqu",
+                    label: "Aqueous\nSolutions",
+                    action: Act::Launch("aqua"),
+                    category: Cat::Sustainability,
+                    running: running_aqua,
+                },
+                TileSpec {
+                    code: "Bal",
+                    label: "Heat & Material\nBalance",
+                    action: Act::Launch("balance"),
+                    category: Cat::Products,
+                    running: running_balance,
+                },
+                TileSpec {
+                    code: "EpH",
+                    label: "Eh-pH\nDiagrams",
+                    action: Act::Launch("ehph"),
+                    category: Cat::Sustainability,
+                    running: running_ehph,
+                },
+                TileSpec {
+                    code: "Est",
+                    label: "H, S and Cp\nEstimates",
+                    action: Act::Launch("estimate"),
+                    category: Cat::ResearchDev,
+                    running: running_estimate,
+                },
+                TileSpec {
+                    code: "Mea",
+                    label: "Measure\nUnits",
+                    action: Act::Launch("units"),
+                    category: Cat::Services,
+                    running: running_units,
+                },
+                TileSpec {
+                    code: "Nav",
+                    label: "Diagram\nNavigator",
+                    action: Act::Launch("diagrams"),
+                    category: Cat::Products,
+                    running: running_diagrams,
+                },
                 // Row 2
-                TileSpec { code: "Ben", label: "Benson\nEstimation", action: Act::Launch("benson"), category: Cat::ResearchDev, running: running_benson },
-                TileSpec { code: "Con", label: "Species\nConverter", action: Act::Launch("species_converter"), category: Cat::Services, running: running_species_converter },
-                TileSpec { code: "Exe", label: "Exergy\nBalance", action: Act::Launch("exergy"), category: Cat::Sustainability, running: running_exergy },
-                TileSpec { code: "Gem", label: "Equilibrium\nCompositions", action: Act::Launch("equilibrium"), category: Cat::Products, running: running_equilibrium },
-                TileSpec { code: "Rea", label: "Reaction\nEquations", action: Act::Launch("reaction"), category: Cat::Products, running: running_reaction },
-                TileSpec { code: "Sim", label: "Flowsheet\nSimulation", action: Act::Launch("sim"), category: Cat::Products, running: running_sim },
+                TileSpec {
+                    code: "Ben",
+                    label: "Benson\nEstimation",
+                    action: Act::Launch("benson"),
+                    category: Cat::ResearchDev,
+                    running: running_benson,
+                },
+                TileSpec {
+                    code: "Con",
+                    label: "Species\nConverter",
+                    action: Act::Launch("species_converter"),
+                    category: Cat::Services,
+                    running: running_species_converter,
+                },
+                TileSpec {
+                    code: "Exe",
+                    label: "Exergy\nBalance",
+                    action: Act::Launch("exergy"),
+                    category: Cat::Sustainability,
+                    running: running_exergy,
+                },
+                TileSpec {
+                    code: "Gem",
+                    label: "Equilibrium\nCompositions",
+                    action: Act::Launch("equilibrium"),
+                    category: Cat::Products,
+                    running: running_equilibrium,
+                },
+                TileSpec {
+                    code: "Rea",
+                    label: "Reaction\nEquations",
+                    action: Act::Launch("reaction"),
+                    category: Cat::Products,
+                    running: running_reaction,
+                },
+                TileSpec {
+                    code: "Sim",
+                    label: "Flowsheet\nSimulation",
+                    action: Act::Launch("sim"),
+                    category: Cat::Products,
+                    running: running_sim,
+                },
                 // Row 3
-                TileSpec { code: "Dat", label: "Data\nProcessing", action: Act::Launch("excel_addins"), category: Cat::Services, running: running_excel_addins },
-                TileSpec { code: "DB", label: "H, S and Cp\nDatabase", action: Act::Launch("species"), category: Cat::ResearchDev, running: running_browser },
-                TileSpec { code: "Geo", label: "Mineral\nDatabase", action: Act::Launch("excel_addins"), category: Cat::Services, running: running_excel_addins },
-                TileSpec { code: "HTr", label: "Heat Loss\nCalculator", action: Act::Launch("heatloss"), category: Cat::Services, running: running_heat_loss },
-                TileSpec { code: "Tpp", label: "Stability\nDiagrams", action: Act::Launch("phase_stability"), category: Cat::ResearchDev, running: running_phase_stability },
-                TileSpec { code: "Wat", label: "Water\nCalculator", action: Act::Launch("water"), category: Cat::Sustainability, running: running_water },
+                TileSpec {
+                    code: "Dat",
+                    label: "Data\nProcessing",
+                    action: Act::Launch("excel_addins"),
+                    category: Cat::Services,
+                    running: running_excel_addins,
+                },
+                TileSpec {
+                    code: "DB",
+                    label: "H, S and Cp\nDatabase",
+                    action: Act::Launch("species"),
+                    category: Cat::ResearchDev,
+                    running: running_browser,
+                },
+                TileSpec {
+                    code: "Geo",
+                    label: "Mineral\nDatabase",
+                    action: Act::Launch("excel_addins"),
+                    category: Cat::Services,
+                    running: running_excel_addins,
+                },
+                TileSpec {
+                    code: "HTr",
+                    label: "Heat Loss\nCalculator",
+                    action: Act::Launch("heatloss"),
+                    category: Cat::Services,
+                    running: running_heat_loss,
+                },
+                TileSpec {
+                    code: "Tpp",
+                    label: "Stability\nDiagrams",
+                    action: Act::Launch("phase_stability"),
+                    category: Cat::ResearchDev,
+                    running: running_phase_stability,
+                },
+                TileSpec {
+                    code: "Wat",
+                    label: "Water\nCalculator",
+                    action: Act::Launch("water"),
+                    category: Cat::Sustainability,
+                    running: running_water,
+                },
                 // Row 4
-                TileSpec { code: "Dia", label: "H, S, Cp and G\nDiagrams", action: Act::Launch("diagrams"), category: Cat::ResearchDev, running: running_diagrams },
-                TileSpec { code: "Ele", label: "Periodic\nChart", action: Act::Launch("elements"), category: Cat::ResearchDev, running: running_elements },
-                TileSpec { code: "Mas", label: "Mass\nBalances", action: Act::Launch("mass_balance"), category: Cat::Products, running: running_mass_balance },
-                TileSpec { code: "Lca", label: "LCA\nEvaluation", action: Act::Launch("lca"), category: Cat::Sustainability, running: running_lca },
-                TileSpec { code: "?", label: "Help\nModule", action: Act::Help, category: Cat::None, running: false },
-                TileSpec { code: "SUB", label: "SUB\nMENU", action: Act::SubMenu, category: Cat::None, running: false },
+                TileSpec {
+                    code: "Dia",
+                    label: "H, S, Cp and G\nDiagrams",
+                    action: Act::Launch("diagrams"),
+                    category: Cat::ResearchDev,
+                    running: running_diagrams,
+                },
+                TileSpec {
+                    code: "Ele",
+                    label: "Periodic\nChart",
+                    action: Act::Launch("elements"),
+                    category: Cat::ResearchDev,
+                    running: running_elements,
+                },
+                TileSpec {
+                    code: "Mas",
+                    label: "Mass\nBalances",
+                    action: Act::Launch("mass_balance"),
+                    category: Cat::Products,
+                    running: running_mass_balance,
+                },
+                TileSpec {
+                    code: "Lca",
+                    label: "LCA\nEvaluation",
+                    action: Act::Launch("lca"),
+                    category: Cat::Sustainability,
+                    running: running_lca,
+                },
+                TileSpec {
+                    code: "?",
+                    label: "Help\nModule",
+                    action: Act::Help,
+                    category: Cat::None,
+                    running: false,
+                },
+                TileSpec {
+                    code: "SUB",
+                    label: "SUB\nMENU",
+                    action: Act::SubMenu,
+                    category: Cat::None,
+                    running: false,
+                },
             ];
             match launcher_ui::render_hsc10_grid_canvas(
                 ctx,
                 &mut self.launcher_ui_state,
                 &tiles,
-                self.db.len(),
+                self.services.legacy_db().len(),
             ) {
                 launcher_ui::LauncherCommand::OpenModule(m) => self.launch_module_by_key(m),
                 launcher_ui::LauncherCommand::KillAll => self.kill_all_children(),
@@ -1079,7 +1204,7 @@ impl SoryntelDesktopApp {
         ];
 
         let mut pending_action: Option<(&'static str, bool)> = None;
-        let species_count = self.db.len();
+        let species_count = self.services.legacy_db().len();
         let search_q = self.launcher_ui_state.cards_search.trim().to_lowercase();
 
         egui::CentralPanel::default()
@@ -1610,7 +1735,8 @@ mod tests {
     #[test]
     fn cards_view_renders_all_20_modules_and_geo() {
         let db = ThermoDatabase::with_open_defaults();
-        let mut app = SoryntelDesktopApp::new(db, WindowMode::Launcher, None);
+        let mut app =
+            SoryntelDesktopApp::new(AppServices::from_catalog(db), WindowMode::Launcher, None);
         app.launcher_ui_state.detailed_view = true;
         let texts = collect_rendered_texts(&mut app, [1120.0, 2200.0], 0);
         for num in 1..=20 {
@@ -1636,7 +1762,8 @@ mod tests {
     #[test]
     fn cards_view_recent_filter_and_scroll_show_latest_modules() {
         let db = ThermoDatabase::with_open_defaults();
-        let mut app = SoryntelDesktopApp::new(db, WindowMode::Launcher, None);
+        let mut app =
+            SoryntelDesktopApp::new(AppServices::from_catalog(db), WindowMode::Launcher, None);
         app.launcher_ui_state.detailed_view = true;
 
         // With Recientes 17-20 filter, all 4 newest modules appear immediately in 1120x680
