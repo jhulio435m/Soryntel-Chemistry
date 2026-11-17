@@ -33,9 +33,8 @@ impl AppServices {
             .ok()
             .and_then(|path| path.parent().map(|dir| dir.join("Databases")));
 
-        let main_db_path = std::env::var_os("SORYNTEL_MAIN_DB")
-            .map(PathBuf::from)
-            .or_else(|| custom_main_db.map(PathBuf::from))
+        let main_db_path = custom_main_db.map(PathBuf::from)
+            .or_else(|| std::env::var_os("SORYNTEL_MAIN_DB").map(PathBuf::from))
             .or_else(|| {
                 default_database_path(
                     executable_db_dir.as_deref(),
@@ -44,7 +43,9 @@ impl AppServices {
                 )
             });
         if let Some(path) = main_db_path {
-            let _ = catalog.load_main_hsc(path);
+            if let Err(message) = CatalogUseCases::open_main_db(&mut catalog, &path) {
+                eprintln!("[soryntel-db] Warning: {}: {message}", path.display());
+            }
         }
 
         let own_db_path = std::env::var_os("SORYNTEL_OWN_DB")
@@ -57,7 +58,9 @@ impl AppServices {
                 )
             });
         if let Some(path) = own_db_path {
-            let _ = catalog.load_own_hsc(path);
+            if let Err(message) = CatalogUseCases::open_own_db(&mut catalog, &path) {
+                eprintln!("[soryntel-db] Warning: {}: {message}", path.display());
+            }
         }
 
         Self::from_catalog(catalog)

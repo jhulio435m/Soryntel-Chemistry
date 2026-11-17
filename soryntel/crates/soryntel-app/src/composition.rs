@@ -1,3 +1,4 @@
+use soryntel_application::use_cases::catalog::catalog_error_message;
 use soryntel_core::{
     DatabaseLocatorPort, MainDbPrecedence, SpeciesCatalogPort, SpeciesDatabaseAdminPort,
 };
@@ -17,35 +18,61 @@ pub(crate) fn catalog(custom_main: Option<&str>) -> Arc<dyn SpeciesCatalogPort +
             .cloned()
             .chain([PathBuf::from("/home/nando/Descargas/HSC6/Databases")]),
     );
-    let main = std::env::var_os("SORYNTEL_MAIN_DB")
-        .map(PathBuf::from)
-        .or_else(|| custom_main.map(PathBuf::from))
-        .or_else(|| locator.default_main_db());
+    let main = resolve_main_path(
+        custom_main.map(Path::new),
+        std::env::var_os("SORYNTEL_MAIN_DB")
+            .as_deref()
+            .map(Path::new),
+        &locator,
+    );
     let own = std::env::var_os("SORYNTEL_OWN_DB")
         .map(PathBuf::from)
         .or_else(|| locator.default_own_db());
-    Arc::new(load_catalog(main.as_deref(), own.as_deref()))
+    Arc::new(load_catalog(main.as_deref(), own.as_deref(), |line| {
+        eprintln!("{line}")
+    }))
 }
 
-fn load_catalog(main: Option<&Path>, own: Option<&Path>) -> ThermoDatabase {
+fn resolve_main_path(
+    explicit: Option<&Path>,
+    environment: Option<&Path>,
+    locator: &dyn DatabaseLocatorPort,
+) -> Option<PathBuf> {
+    explicit
+        .or(environment)
+        .map(Path::to_owned)
+        .or_else(|| locator.default_main_db())
+}
+
+fn load_catalog(
+    main: Option<&Path>,
+    own: Option<&Path>,
+    mut log: impl FnMut(String),
+) -> ThermoDatabase {
     let mut catalog = ThermoDatabase::with_open_defaults();
     let admin: &mut dyn SpeciesDatabaseAdminPort = &mut catalog;
     if let Some(path) = main {
         match admin.load_main_db(path, MainDbPrecedence::OverrideOpenDefault) {
-            Ok((count, _)) => eprintln!(
+            Ok((count, _)) => log(format!(
                 "[soryntel-db] Loaded {count} species from {} (read-only)",
                 path.display()
-            ),
-            Err(e) => eprintln!("[soryntel-db] Warning: {e}"),
+            )),
+            Err(e) => log(format!(
+                "[soryntel-db] Warning: {}",
+                catalog_error_message(e)
+            )),
         }
     }
     if let Some(path) = own {
         match admin.load_own_db(path) {
-            Ok((count, _)) => eprintln!(
+            Ok((count, _)) => log(format!(
                 "[soryntel-db] Loaded {count} species from {} (read-only)",
                 path.display()
-            ),
-            Err(e) => eprintln!("[soryntel-db] Warning: {e}"),
+            )),
+            Err(e) => log(format!(
+                "[soryntel-db] Warning: {}",
+                catalog_error_message(e)
+            )),
         }
     }
     catalog
@@ -58,16 +85,70 @@ mod tests {
     use soryntel_db::hsc_binary::serialize_datasets_to_hsc;
 
     #[test]
+    fn explicit_main_path_wins_without_fallback_and_preserves_legacy_warning() {
+        let dir =
+            std::env::temp_dir().join(format!("soryntel-app-main-path-{}", std::process::id()));
+        std::fs::create_dir(&dir).unwrap();
+        let _cleanup = Cleanup(dir.clone());
+        let path_a = dir.join("A.HSC");
+        let path_b = dir.join("B.HSC");
+        let missing = dir.join("missing.HSC");
+        let mut original = ThermoDatabase::with_open_defaults();
+        let base = original.get_species("Al2O3").unwrap();
+        let h0 = base.intervals[0].h_or_delta_h_tr;
+        for (path, shift) in [(&path_a, 10_000.0), (&path_b, 20_000.0)] {
+            write_hsc(path, &base, DbSource::Main, shift);
+        }
+        let locator = DatabaseDirLocator::new([dir]);
+        let legacy_error = original
+            .load_external_hsc_readonly(&missing, false)
+            .unwrap_err();
+
+        for (explicit, expected_shift, expected_path) in [
+            (Some(path_b.as_path()), 20_000.0, Some(path_b.as_path())),
+            (Some(missing.as_path()), 0.0, None),
+            (None, 10_000.0, Some(path_a.as_path())),
+        ] {
+            let selected = resolve_main_path(explicit, Some(&path_a), &locator);
+            let mut messages = Vec::new();
+            let catalog = load_catalog(selected.as_deref(), None, |line| messages.push(line));
+            assert_eq!(catalog.status().main_path.as_deref(), expected_path);
+            let h = catalog.get_species("Al2O3").unwrap().intervals[0].h_or_delta_h_tr;
+            assert!((h - h0 - expected_shift).abs() < 0.5);
+            if expected_path.is_none() {
+                assert_eq!(messages, [format!("[soryntel-db] Warning: {legacy_error}")]);
+                assert!(messages[0].contains(missing.to_str().unwrap()));
+                assert!(!messages[0].contains("catalog backend error:"));
+            }
+        }
+    }
+
+    struct Cleanup(PathBuf);
+
+    impl Drop for Cleanup {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn write_hsc(path: &Path, base: &soryntel_core::ChemicalSpecies, source: DbSource, shift: f64) {
+        let mut species = base.clone();
+        species.intervals[0].h_or_delta_h_tr += shift;
+        let dataset = SpeciesDataset {
+            source,
+            species,
+            metadata: Default::default(),
+            dataset_index: 0,
+            raw_phase_code: "s".into(),
+        };
+        std::fs::write(path, serialize_datasets_to_hsc(&[dataset])).unwrap();
+    }
+
+    #[test]
     fn cli_precedence_and_http_response() {
         let dir =
             std::env::temp_dir().join(format!("soryntel-app-precedence-{}", std::process::id()));
         std::fs::create_dir(&dir).unwrap();
-        struct Cleanup(PathBuf);
-        impl Drop for Cleanup {
-            fn drop(&mut self) {
-                let _ = std::fs::remove_dir_all(&self.0);
-            }
-        }
         let _cleanup = Cleanup(dir.clone());
         let main = dir.join("Maindb6.HSC");
         let own = dir.join("OWNDB6.HSC");
@@ -78,21 +159,12 @@ mod tests {
             (&main, DbSource::Main, -10_000.0),
             (&own, DbSource::Own, -20_000.0),
         ] {
-            let mut species = base.clone();
-            species.intervals[0].h_or_delta_h_tr += shift;
-            let dataset = SpeciesDataset {
-                source,
-                species,
-                metadata: Default::default(),
-                dataset_index: 0,
-                raw_phase_code: "s".into(),
-            };
-            std::fs::write(path, serialize_datasets_to_hsc(&[dataset])).unwrap();
+            write_hsc(path, &base, source, shift);
         }
         old.load_main_db(&main, MainDbPrecedence::PreserveOpenDefault)
             .unwrap();
-        let new = load_catalog(Some(&main), None);
-        let layered = load_catalog(Some(&main), Some(&own));
+        let new = load_catalog(Some(&main), None, |_| {});
+        let layered = load_catalog(Some(&main), Some(&own), |_| {});
         for (catalog, shift) in [(&old, 0.0), (&new, -10_000.0), (&layered, -20_000.0)] {
             let h = catalog.get_species("Al2O3").unwrap().intervals[0].h_or_delta_h_tr;
             assert!((h - h0 - shift).abs() < 0.5);

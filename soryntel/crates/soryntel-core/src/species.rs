@@ -43,14 +43,14 @@ pub struct KelleyCoefficients {
 impl KelleyCoefficients {
     /// Heat capacity `Cp(T)` in J/(mol·K) at temperature `t_k` (K).
     pub fn cp(&self, t_k: f64) -> f64 {
-        self.a + self.b * 1e-3 * t_k + self.c * 1e5 / (t_k * t_k) + self.d * 1e-6 * t_k * t_k
+        self.a + self.b * 1e-3 * t_k + self.c * 1e5 / (t_k * t_k) + self.d * 1e-6 * (t_k * t_k)
     }
 
     /// Enthalpy change `∫ Cp dT` from `t1` to `t2` (K), in J/mol.
     pub fn integrate_h(&self, t1: f64, t2: f64) -> f64 {
         self.a * (t2 - t1) + 0.5 * self.b * 1e-3 * (t2 * t2 - t1 * t1)
             - self.c * 1e5 * (1.0 / t2 - 1.0 / t1)
-            + self.d * 1e-6 / 3.0 * (t2 * t2 * t2 - t1 * t1 * t1)
+            + (self.d * 1e-6 / 3.0) * (t2 * t2 * t2 - t1 * t1 * t1)
     }
 
     /// Entropy change `∫ Cp/T dT` from `t1` to `t2` (K), in J/(mol·K).
@@ -154,6 +154,19 @@ mod tests {
     use super::*;
 
     const EPS: f64 = 1e-9;
+
+    #[test]
+    fn cp_preserves_legacy_rounding_with_quadratic_term() {
+        let k = KelleyCoefficients {
+            a: 0.0,
+            b: 0.0,
+            c: 0.0,
+            d: 3.0,
+        };
+        let t = 500.3_f64;
+        let legacy = k.a + k.b * 1e-3 * t + k.c * 1e5 / (t * t) + k.d * 1e-6 * (t * t);
+        assert_eq!(k.cp(t).to_bits(), legacy.to_bits());
+    }
 
     fn sample() -> KelleyCoefficients {
         KelleyCoefficients {
