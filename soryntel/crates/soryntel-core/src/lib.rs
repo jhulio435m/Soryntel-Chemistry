@@ -3,46 +3,14 @@
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-/// Physical phase of aggregation for a chemical species.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub enum Phase { Solid, Liquid, Gas, AqueousIon, AqueousNeutral }
+pub mod ports;
+pub mod species;
 
-/// Kelley heat-capacity coefficients in SI units.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
-pub struct KelleyCoefficients { pub a: f64, pub b: f64, pub c: f64, pub d: f64 }
-
-impl KelleyCoefficients {
-    pub fn cp(&self, t_k: f64) -> f64 { self.a + self.b * 1e-3 * t_k + self.c * 1e5 / (t_k*t_k) + self.d * 1e-6 * t_k*t_k }
-    pub fn integrate_h(&self, t1: f64, t2: f64) -> f64 { self.a*(t2-t1) + 0.5*self.b*1e-3*(t2*t2-t1*t1) - self.c*1e5*(1.0/t2-1.0/t1) + self.d*1e-6/3.0*(t2*t2*t2-t1*t1*t1) }
-    pub fn integrate_s(&self, t1: f64, t2: f64) -> f64 { self.a*(t2/t1).ln() + self.b*1e-3*(t2-t1) - 0.5*self.c*1e5*(1.0/(t2*t2)-1.0/(t1*t1)) + 0.5*self.d*1e-6*(t2*t2-t1*t1) }
-    pub fn has_temp_terms(&self) -> bool { self.b.abs()>1e-12 || self.c.abs()>1e-12 || self.d.abs()>1e-12 }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SpeciesThermoInterval { pub t_min:f64, pub t_max:f64, pub phase:Phase, pub kelley:KelleyCoefficients, pub h_or_delta_h_tr:f64, pub s_or_delta_s_tr:f64, pub reference:String }
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ChemicalSpecies { pub formula:String, pub name:String, pub phase:Phase, pub molecular_weight:f64, pub density_g_cm3:f64, pub charge:i32, pub intervals:Vec<SpeciesThermoInterval> }
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
-pub struct ThermoPointSI { pub t_k:f64, pub cp:f64, pub h:f64, pub s:f64, pub g:f64, pub extrapolated_from_k:Option<f64> }
-
-pub trait SpeciesRepository {
-    fn get_species(&self, formula:&str) -> Option<ChemicalSpecies>;
-    fn get_reference_element(&self, element_symbol:&str) -> Option<ChemicalSpecies>;
-}
-
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
-pub struct SpeciesMetadata { pub structural_formula:String, pub common_name:String, pub cas_number:String, pub melting_point_k:f64, pub boiling_point_k:f64, pub color_code:i16, pub solubility:String, pub reliability_class:i16 }
-
-pub trait SpeciesCatalogPort: SpeciesRepository {
-    fn search_species(&self, query:&str, limit:usize) -> Vec<ChemicalSpecies>;
-    fn search_species_by_elements(&self, elements:&[String], include_gas:bool, include_liquid:bool, include_solid:bool, include_aqua_ions:bool, include_aqua_neutrals:bool, limit:usize) -> Vec<ChemicalSpecies>;
-    fn insert_or_update_species(&mut self, sp:ChemicalSpecies);
-    fn species_count(&self) -> usize;
-    fn get_species_metadata(&self, _formula:&str) -> Option<SpeciesMetadata> { None }
-    fn get_species_at(&self, _index:usize) -> Option<ChemicalSpecies> { None }
-}
+pub use ports::{CatalogError, SpeciesCatalogPort, SpeciesRepository};
+pub use species::{
+    ChemicalSpecies, KelleyCoefficients, Phase, SpeciesMetadata, SpeciesThermoInterval,
+    ThermoPointSI,
+};
 
 /// Reference temperature (25.0 °C in Kelvin).
 pub const T_REF_K: f64 = 298.15;
