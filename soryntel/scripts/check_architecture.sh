@@ -126,7 +126,34 @@ for path in sorted(root.rglob("*.rs")):
 PY
 report_check "e) conteo informativo de dependencias de dominio en desktop/src" PASS ""
 
+cli_fail=0
+cli_findings="$(python3 - "$root" <<'PY'
+from pathlib import Path
+import re
+import sys
+
+root = Path(sys.argv[1])
+src = root / "crates/soryntel-app/src"
+composition = src / "composition.rs"
+pattern = re.compile(r"\b(?:soryntel_db|ThermoDatabase)\b")
+for path in sorted(src.rglob("*.rs")):
+    if path == composition:
+        continue
+    for number, line in enumerate(path.read_text().splitlines(), 1):
+        if pattern.search(line):
+            print(f"{path.relative_to(root)}:{number}: {line.strip()}")
+PY
+)" || cli_fail=1
+if (( cli_fail )); then
+  report_check "f) adaptador de BD del CLI solo en composition.rs" FAIL "No se pudo completar la inspección."
+elif [[ -n "$cli_findings" ]]; then
+  cli_fail=1
+  report_check "f) adaptador de BD del CLI solo en composition.rs" FAIL "$cli_findings"
+else
+  report_check "f) adaptador de BD del CLI solo en composition.rs" PASS ""
+fi
+
 if [[ "$mode" == "report" ]]; then exit 0; fi
-if (( core_fail || application_fail )); then exit 1; fi
+if (( core_fail || application_fail || cli_fail )); then exit 1; fi
 if [[ "$mode" == "strict" ]] && (( ui_fail || facade_fail )); then exit 1; fi
 exit 0
