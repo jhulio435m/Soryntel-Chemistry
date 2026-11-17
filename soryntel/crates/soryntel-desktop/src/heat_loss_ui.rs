@@ -7,7 +7,7 @@ use crate::excel_grid::{
 };
 use eframe::egui;
 use egui_plot::{Legend, Line, Plot, PlotPoints};
-use soryntel_application::SoryntelApplication;
+use soryntel_application::use_cases::{HeatLossPreset, HeatLossUseCases, MiscUseCases};
 use soryntel_core::{HeatFlowUnit, LengthUnit, TemperatureUnit};
 use soryntel_thermo::heat_loss::convection::ConvectionDiagnostics;
 use soryntel_thermo::heat_loss::diagram::{
@@ -25,11 +25,6 @@ use soryntel_thermo::heat_loss::model::{
     CalculationMode, ColumnType, ConvectionFunctionPreset, ConvectionGeometry, ConvectionRegime,
     FluidPropertyTable, Geometry, HeatLossColumn, HeatLossWorkbook, SolidConductivityData,
     SurfaceEmissivityData, WorkbookResult,
-};
-use soryntel_thermo::heat_loss::presets::{
-    builtin_convection_functions, builtin_emissivities, builtin_fluids, builtin_solids,
-    preset_hotwatertank, preset_oil_furnace, preset_oil_furnace_gas, preset_radiator,
-    preset_simple_case, preset_smelting1,
 };
 use soryntel_thermo::heat_loss::target::{TargetGoal, TargetSpec, TargetVariable};
 
@@ -163,26 +158,27 @@ pub struct HeatLossModuleState {
 
 impl HeatLossModuleState {
     pub fn new() -> Self {
-        let wb = preset_hotwatertank();
+        let wb = HeatLossUseCases::preset(HeatLossPreset::HotWaterTank);
         let mut particle_spec = ParticleSuspensionSpec::default();
         let particle_detailed_res =
-            SoryntelApplication::evaluate_heat_loss_particle_suspension_detailed(&particle_spec)
+            HeatLossUseCases::evaluate_heat_loss_particle_suspension_detailed(&particle_spec)
                 .ok();
         if let Some(pr) = &particle_detailed_res {
             let _ = pr;
         }
         let _ = &mut particle_spec;
 
+        let tables = HeatLossUseCases::builtin_tables();
         let mut state = Self {
             wb,
             result: None,
             selected_col: 0,
             show_advanced_rows: false,
-            solids: builtin_solids(),
-            fluids: builtin_fluids(),
-            conv_functions: builtin_convection_functions(),
-            emissivities: builtin_emissivities(),
-            material_db: MaterialDatabase::with_hsc_defaults(),
+            solids: tables.solids,
+            fluids: tables.fluids,
+            conv_functions: tables.conv_functions,
+            emissivities: tables.emissivities,
+            material_db: HeatLossUseCases::default_material_database(),
             status_msg: "Listo (Hotwatertank.htr8 cargado).".into(),
             status_ok: true,
             file_path_input: "Hotwatertank.htr8".into(),
@@ -272,7 +268,7 @@ impl HeatLossModuleState {
             export_target_area: 0,
             pending_export_w: None,
         };
-        if let Ok(gr) = SoryntelApplication::calculate_heat_loss_gas_radiation(&state.gas_input) {
+        if let Ok(gr) = HeatLossUseCases::calculate_heat_loss_gas_radiation(&state.gas_input) {
             state.gas_result = Some((gr, 0.0, 0.0));
         }
         state.recalculate();
@@ -280,7 +276,7 @@ impl HeatLossModuleState {
     }
 
     pub fn recalculate(&mut self) {
-        match SoryntelApplication::solve_heat_loss_workbook(&self.wb) {
+        match HeatLossUseCases::solve_heat_loss_workbook(&self.wb) {
             Ok(res) => {
                 let mut warn_count = 0usize;
                 for sr in &res.sheet_results {
@@ -307,7 +303,7 @@ impl HeatLossModuleState {
     }
 
     pub fn save_htr8(&mut self, path: &str) {
-        match SoryntelApplication::serialize_htr8_workbook(&self.wb) {
+        match HeatLossUseCases::serialize_htr8_workbook(&self.wb) {
             Ok(json) => match crate::storage::write_atomic(path, json) {
                 Ok(_) => {
                     self.status_msg = format!("✔ Guardado en {path}");
@@ -327,7 +323,7 @@ impl HeatLossModuleState {
 
     pub fn load_htr8(&mut self, path: &str) {
         match std::fs::read_to_string(path) {
-            Ok(raw) => match SoryntelApplication::deserialize_htr8_workbook(&raw) {
+            Ok(raw) => match HeatLossUseCases::deserialize_htr8_workbook(&raw) {
                 Ok(wb) => {
                     self.wb = wb;
                     self.selected_col = 0;
@@ -349,7 +345,7 @@ impl HeatLossModuleState {
 
     pub fn export_xlsx(&mut self, path: &str) {
         let bytes =
-            SoryntelApplication::export_heat_loss_workbook_xlsx(&self.wb, self.result.as_ref());
+            HeatLossUseCases::export_heat_loss_workbook_xlsx(&self.wb, self.result.as_ref());
         match crate::storage::write_atomic(path, bytes) {
             Ok(_) => {
                 self.status_msg = format!("📊 Exportado Excel a {path}");
@@ -395,23 +391,23 @@ impl HeatLossModuleState {
                     ui.separator();
                     ui.label(egui::RichText::new("HSC Examples (Ch. 12.2.1)").strong().small());
                     if ui.button("🔥 Smelting1.htr8 (Fig. 1 — 1200/1400/1600°C)").clicked() {
-                        self.load_preset(preset_smelting1());
+                        self.load_preset(HeatLossUseCases::preset(HeatLossPreset::Smelting1));
                         ui.close_menu();
                     }
                     if ui.button("🔥 Radiator.htr8 (Fig. 2 — 40/50/60°C)").clicked() {
-                        self.load_preset(preset_radiator());
+                        self.load_preset(HeatLossUseCases::preset(HeatLossPreset::Radiator));
                         ui.close_menu();
                     }
                     if ui.button("💧 Hotwatertank.htr8 (Fig. 4 — 1.378 kW)").clicked() {
-                        self.load_preset(preset_hotwatertank());
+                        self.load_preset(HeatLossUseCases::preset(HeatLossPreset::HotWaterTank));
                         ui.close_menu();
                     }
                     if ui.button("📦 SimpleCase.htr8 (735 W)").clicked() {
-                        self.load_preset(preset_simple_case());
+                        self.load_preset(HeatLossUseCases::preset(HeatLossPreset::SimpleCase));
                         ui.close_menu();
                     }
                     if ui.button("🏭 OilFurnace.htr8 (Internal Gas Radiation)").clicked() {
-                        self.load_preset(preset_oil_furnace());
+                        self.load_preset(HeatLossUseCases::preset(HeatLossPreset::OilFurnace));
                         ui.close_menu();
                     }
                 });
@@ -619,19 +615,19 @@ impl HeatLossModuleState {
                     }
                     ui.separator();
                     if ui.small_button("🏭 OilFurnace").clicked() {
-                        self.load_preset(preset_oil_furnace());
+                        self.load_preset(HeatLossUseCases::preset(HeatLossPreset::OilFurnace));
                     }
                     if ui.small_button("📦 SimpleCase").clicked() {
-                        self.load_preset(preset_simple_case());
+                        self.load_preset(HeatLossUseCases::preset(HeatLossPreset::SimpleCase));
                     }
                     if ui.small_button("💧 Hotwatertank").clicked() {
-                        self.load_preset(preset_hotwatertank());
+                        self.load_preset(HeatLossUseCases::preset(HeatLossPreset::HotWaterTank));
                     }
                     if ui.small_button("🔥 Radiator").clicked() {
-                        self.load_preset(preset_radiator());
+                        self.load_preset(HeatLossUseCases::preset(HeatLossPreset::Radiator));
                     }
                     if ui.small_button("🔥 Smelting1").clicked() {
-                        self.load_preset(preset_smelting1());
+                        self.load_preset(HeatLossUseCases::preset(HeatLossPreset::Smelting1));
                     }
                 });
             });
@@ -958,7 +954,7 @@ impl HeatLossModuleState {
                                 });
                             });
                             if let Some(ng) = pending_geom {
-                                SoryntelApplication::apply_heat_loss_geometry_transition(
+                                HeatLossUseCases::apply_heat_loss_geometry_transition(
                                     &mut self.wb,
                                     s_idx,
                                     ng,
@@ -2780,7 +2776,7 @@ impl HeatLossModuleState {
         match self.diagram_kind {
             DiagramKind::TemperatureProfile => {
                 if let Ok((tot, ser)) =
-                    SoryntelApplication::generate_heat_loss_temperature_profile(&self.wb)
+                    HeatLossUseCases::generate_heat_loss_temperature_profile(&self.wb)
                 {
                     self.profile_total_w = tot;
                     self.profile_series = ser;
@@ -2788,7 +2784,7 @@ impl HeatLossModuleState {
             }
             DiagramKind::ParameterSweep => {
                 let s_idx = self.wb.active_sheet.min(self.wb.sheets.len() - 1);
-                if let Ok(pts) = SoryntelApplication::generate_heat_loss_parameter_sweep(
+                if let Ok(pts) = HeatLossUseCases::generate_heat_loss_parameter_sweep(
                     &self.wb,
                     s_idx,
                     self.sweep_param,
@@ -2800,7 +2796,7 @@ impl HeatLossModuleState {
                 }
             }
             DiagramKind::OptimumInsulation => {
-                if let Ok((pts, best)) = SoryntelApplication::generate_heat_loss_optimum_insulation(
+                if let Ok((pts, best)) = HeatLossUseCases::generate_heat_loss_optimum_insulation(
                     &self.wb,
                     &self.opt_spec,
                 ) {
@@ -3072,7 +3068,7 @@ impl HeatLossModuleState {
                                             self.wb.active_sheet.min(self.wb.sheets.len() - 1);
                                         for (fn_i, fp) in self.conv_functions.iter().enumerate() {
                                             let hc_val =
-                                                SoryntelApplication::evaluate_heat_loss_hc_function(
+                                                HeatLossUseCases::evaluate_heat_loss_hc_function(
                                                     &fp.terms,
                                                     self.conv_test_speed,
                                                 );
@@ -3185,7 +3181,7 @@ impl HeatLossModuleState {
                                     if ui.button(crate::i18n::text("common.008")).clicked() {
                                         let fluid = self.fluids[self.conv_selected_fluid].clone();
                                         if let Ok(diag) =
-                                            SoryntelApplication::evaluate_heat_loss_convection(
+                                            HeatLossUseCases::evaluate_heat_loss_convection(
                                                 &fluid,
                                                 col.convection_regime,
                                                 col.convection_geometry,
@@ -3210,7 +3206,7 @@ impl HeatLossModuleState {
                                     if ui.button(crate::i18n::text("common.026")).clicked() {
                                         let fluid = self.fluids[self.conv_selected_fluid].clone();
                                         if let Ok(diag) =
-                                            SoryntelApplication::evaluate_heat_loss_convection(
+                                            HeatLossUseCases::evaluate_heat_loss_convection(
                                                 &fluid,
                                                 col.convection_regime,
                                                 col.convection_geometry,
@@ -3402,7 +3398,7 @@ impl HeatLossModuleState {
                                 });
                             ui.add_space(4.0);
                             if ui.small_button("Load OilFurnace Flue Gas Preset").clicked() {
-                                self.gas_input.composition = preset_oil_furnace_gas();
+                                self.gas_input.composition = HeatLossUseCases::preset_oil_furnace_gas();
                                 self.gas_input.t_gas_k = 1200.0 + 273.15;
                                 self.gas_input.t_surface_k = 500.0 + 273.15;
                             }
@@ -3594,7 +3590,7 @@ impl HeatLossModuleState {
                             ui.horizontal(|ui| {
                                 if ui.button(crate::i18n::text("common.008")).clicked() {
                                     if let Ok(res) =
-                                        SoryntelApplication::calculate_heat_loss_gas_radiation(
+                                        HeatLossUseCases::calculate_heat_loss_gas_radiation(
                                             &self.gas_input,
                                         )
                                     {
@@ -3633,7 +3629,7 @@ impl HeatLossModuleState {
                                     .on_hover_text("Iterar emisividad entre 0 °C y 3000 °C cada 50 °C (Ch. 12.3.7)")
                                     .clicked()
                                 {
-                                    let tbl = SoryntelApplication::generate_heat_loss_iterative_gas_radiation_table(
+                                    let tbl = HeatLossUseCases::generate_heat_loss_iterative_gas_radiation_table(
                                         self.gas_input.pressure_bar,
                                         self.gas_input.optical_depth_m,
                                         &self.gas_input.composition,
@@ -3767,7 +3763,7 @@ impl HeatLossModuleState {
                             });
                             if p_changed || self.particle_detailed_res.is_none() {
                                 self.particle_detailed_res =
-                                    SoryntelApplication::evaluate_heat_loss_particle_suspension_detailed(
+                                    HeatLossUseCases::evaluate_heat_loss_particle_suspension_detailed(
                                         &self.particle_spec,
                                     )
                                     .ok();
@@ -3831,7 +3827,7 @@ impl HeatLossModuleState {
                         }
                         if ui.button(crate::i18n::text("common.008")).clicked() {
                             self.particle_detailed_res =
-                                SoryntelApplication::evaluate_heat_loss_particle_suspension_detailed(
+                                HeatLossUseCases::evaluate_heat_loss_particle_suspension_detailed(
                                     &self.particle_spec,
                                 )
                                 .ok();
@@ -4013,10 +4009,10 @@ impl HeatLossModuleState {
                                     max_iterations: row.max_iters.max(20),
                                     tolerance: 1e-4,
                                 };
-                                match SoryntelApplication::solve_heat_loss_target(&self.wb, &spec) {
+                                match HeatLossUseCases::solve_heat_loss_target(&self.wb, &spec) {
                                     Ok(tr) => {
                                         self.target_rows[r_idx].test_val = tr.solution_value;
-                                        soryntel_thermo::heat_loss::target::apply_variable(
+                                        HeatLossUseCases::apply_target_variable(
                                             &mut self.wb,
                                             s_idx,
                                             row.var,
@@ -4051,10 +4047,10 @@ impl HeatLossModuleState {
                                         tolerance: 1e-4,
                                     };
                                     if let Ok(tr) =
-                                        SoryntelApplication::solve_heat_loss_target(&self.wb, &spec)
+                                        HeatLossUseCases::solve_heat_loss_target(&self.wb, &spec)
                                     {
                                         self.target_rows[r_idx].test_val = tr.solution_value;
-                                        soryntel_thermo::heat_loss::target::apply_variable(
+                                        HeatLossUseCases::apply_target_variable(
                                             &mut self.wb,
                                             s_idx,
                                             row.var,
@@ -4419,7 +4415,7 @@ impl HeatLossModuleState {
                         self.selected_material_idx = self.material_db.materials.len() - 1;
                     }
                     if ui.button("⚡ Auto Calculate Properties").clicked() {
-                        let _ = SoryntelApplication::recalculate_material_auto_properties(
+                        let _ = MiscUseCases::recalculate_material_auto_properties(
                             &mut self.material_db,
                             self.selected_material_idx,
                         );
@@ -4444,7 +4440,7 @@ impl HeatLossModuleState {
                 ui.separator();
 
                 let mut comp_changed = false;
-                let resolved = SoryntelApplication::resolve_material_composition(
+                let resolved = MiscUseCases::resolve_material_composition(
                     &self.material_db,
                     self.selected_material_idx,
                 )
@@ -4734,7 +4730,7 @@ impl HeatLossModuleState {
                                             },
                                         );
                                         if auto_toggled {
-                                            let _ = SoryntelApplication::recalculate_material_auto_properties(
+                                            let _ = MiscUseCases::recalculate_material_auto_properties(
                                                 &mut self.material_db,
                                                 self.selected_material_idx,
                                             );
@@ -4903,7 +4899,7 @@ impl HeatLossModuleState {
                             }
                             MaterialRightTopTab::CpChart => {
                                 // Fig. 3 Right: Heat Capacity (J/(kg*K)) vs Temperature (K)
-                                let pts_vec = SoryntelApplication::sample_material_cp_curve(
+                                let pts_vec = MiscUseCases::sample_material_cp_curve(
                                     &self.material_db,
                                     self.selected_material_idx,
                                     25,
@@ -4924,7 +4920,7 @@ impl HeatLossModuleState {
                 });
 
                 if comp_changed {
-                    let _ = SoryntelApplication::recalculate_material_auto_properties(
+                    let _ = MiscUseCases::recalculate_material_auto_properties(
                         &mut self.material_db,
                         self.selected_material_idx,
                     );

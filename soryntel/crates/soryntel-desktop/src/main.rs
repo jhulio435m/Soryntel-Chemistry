@@ -483,15 +483,18 @@ impl SoryntelDesktopApp {
         let db = services.legacy_db();
         let reaction_state = reaction_ui::ReactionModuleState::new(db);
         let aqua_state = aqua_ui::AquaModuleState::new(db);
-        let balance_state = balance_ui::BalanceModuleState::new(db);
+        let balance_state = balance_ui::BalanceModuleState::new(services.catalog());
         let heat_loss_state = heat_loss_ui::HeatLossModuleState::new();
         let equilibrium_state = equilibrium_ui::EquilibriumUiState::default();
         let exergy_state = exergy_ui::ExergyModuleState::new(db);
+        // TODO(hex): AppServices no expone aún el catálogo como `&dyn EstimateCatalog` /
+        // `&dyn SpeciesWindowCatalog`; `legacy_db()` se pasa como puerto por coerción.
         let estimate_state = estimate_ui::EstimateModuleState::new(db);
         let ehph_state = ehph_ui::EhPhModuleState::new(db);
         let diagrams_state = diagrams_ui::DiagramsModuleState::new(db);
         let phase_stability_state = phase_stability_ui::PhaseStabilityModuleState::new(db);
-        let species_converter_state = species_converter_ui::SpeciesConverterModuleState::new(db);
+        let species_converter_state =
+            species_converter_ui::SpeciesConverterModuleState::new(services.catalog());
         let benson_state = benson_ui::BensonModuleState::new(db);
         let elements_state = elements_ui::ElementsModuleState::default();
         let water_state = water_ui::WaterModuleState::new(db);
@@ -587,13 +590,13 @@ impl eframe::App for SoryntelDesktopApp {
                             self.balance_state.set_area_heat_loss_w(
                                 area,
                                 q_w,
-                                self.services.legacy_db(),
+                                self.services.catalog(),
                             );
                         }
                     }
                     let _ = std::fs::remove_file(&export_path);
                 }
-                self.balance_state.ui(ctx, self.services.legacy_db());
+                self.balance_state.ui(ctx, self.services.catalog());
                 return;
             }
             WindowMode::HeatLoss => {
@@ -621,6 +624,7 @@ impl eframe::App for SoryntelDesktopApp {
                 return;
             }
             WindowMode::Estimate => {
+                // `&mut ThermoDatabase` → `&mut dyn EstimateCatalog` (ver TODO(hex) en `new`).
                 self.estimate_state.ui(ctx, self.services.legacy_db_mut());
                 return;
             }
@@ -639,7 +643,7 @@ impl eframe::App for SoryntelDesktopApp {
             }
             WindowMode::SpeciesConverter => {
                 self.species_converter_state
-                    .ui(ctx, self.services.legacy_db());
+                    .ui(ctx, self.services.catalog());
                 return;
             }
             WindowMode::Benson => {
@@ -647,7 +651,7 @@ impl eframe::App for SoryntelDesktopApp {
                 return;
             }
             WindowMode::Elements => {
-                self.elements_state.ui(ctx, self.services.legacy_db());
+                self.elements_state.ui(ctx, self.services.catalog());
                 return;
             }
             WindowMode::Water => {
@@ -687,6 +691,7 @@ impl eframe::App for SoryntelDesktopApp {
                 return;
             }
             WindowMode::Species => {
+                // `&mut ThermoDatabase` → `&mut dyn SpeciesWindowCatalog` (ver TODO(hex) en `new`).
                 if let Some(f) = self.species_state.ui(ctx, self.services.legacy_db_mut()) {
                     let _ = crate::storage::write_atomic(
                         crate::ui_common::temp_file_path("soryntel_import_formula.txt"),
@@ -758,7 +763,7 @@ impl SoryntelDesktopApp {
         launcher_ui::render_hsc10_header(
             ctx,
             &mut self.launcher_ui_state,
-            self.services.legacy_db().len(),
+            soryntel_application::use_cases::CatalogUseCases::species_count(self.services.catalog()),
         );
         let footer_cmd =
             launcher_ui::render_hsc10_footer(ctx, &mut self.launcher_ui_state, open_count);
@@ -804,7 +809,7 @@ impl SoryntelDesktopApp {
                 ctx,
                 &mut self.launcher_ui_state,
                 &tiles,
-                self.services.legacy_db().len(),
+                soryntel_application::use_cases::CatalogUseCases::species_count(self.services.catalog()),
             ) {
                 launcher_ui::LauncherCommand::OpenModule(m) => self.launch_module_by_key(m),
                 launcher_ui::LauncherCommand::KillAll => self.kill_all_children(),
@@ -1067,7 +1072,7 @@ impl SoryntelDesktopApp {
         ];
 
         let mut pending_action: Option<(&'static str, bool)> = None;
-        let species_count = self.services.legacy_db().len();
+        let species_count = soryntel_application::use_cases::CatalogUseCases::species_count(self.services.catalog());
         let search_q = self.launcher_ui_state.cards_search.trim().to_lowercase();
 
         egui::CentralPanel::default()

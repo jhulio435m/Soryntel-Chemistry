@@ -8,17 +8,25 @@ use crate::ui_common::temp_file_path;
 use eframe::egui;
 use egui_plot::{Bar, BarChart, Legend, Line, Plot, PlotPoints, Points};
 use serde::{Deserialize, Serialize};
-use soryntel_db::ThermoDatabase;
-use soryntel_thermo::estimate::{
-    build_estimated_species_with_intervals, classic_hsc_estimate_rows, compute_parity_stats,
-    default_fig1_rows, evaluate_estimate_row, fig5_oxides_rows, fit_kelley_cp, generate_cp_curve,
-    parse_estimate_formula, EstimateRow, EstimateSpeciesType, FunctionalGroup, OrganicGroup,
+use soryntel_application::use_cases::{CatalogUseCases, MiscUseCases};
+use soryntel_core::{
+    ChemicalSpecies, KelleyCoefficients, OwnDbEditorPort, Phase, SpeciesBrowserPort,
+    SpeciesCatalogPort, SpeciesDatabaseAdminPort, SpeciesMetadata, SpeciesRepository,
+    SpeciesThermoInterval,
 };
-use soryntel_thermo::{
-    evaluate_species_si, ChemicalSpecies, KelleyCoefficients, Phase, SpeciesCatalogPort,
-    SpeciesMetadata, SpeciesRepository, SpeciesThermoInterval,
-};
+use soryntel_thermo::estimate::{EstimateRow, EstimateSpeciesType, FunctionalGroup, OrganicGroup};
 use std::collections::BTreeSet;
+
+/// Puertos que usa HSC Estimate: consulta de especies de referencia, recorrido del catálogo
+/// para la nube de paridad, escritura en OwnDB y persistencia del fichero OwnDB.
+pub trait EstimateCatalog:
+    SpeciesCatalogPort + SpeciesBrowserPort + OwnDbEditorPort + SpeciesDatabaseAdminPort
+{
+}
+impl<T> EstimateCatalog for T where
+    T: SpeciesCatalogPort + SpeciesBrowserPort + OwnDbEditorPort + SpeciesDatabaseAdminPort + ?Sized
+{
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EstimatePlotMode {
@@ -149,13 +157,12 @@ pub struct EstimateModuleState {
 }
 
 impl EstimateModuleState {
-    pub fn new(db: &ThermoDatabase) -> Self {
-        let mut rows = default_fig1_rows();
+    pub fn new(db: &dyn EstimateCatalog) -> Self {
+        let mut rows = MiscUseCases::estimate_default_rows();
         for r in &mut rows {
-            evaluate_estimate_row(r, db);
+            MiscUseCases::evaluate_estimate(db, r);
         }
-        let own_db_path = db
-            .status_summary()
+        let own_db_path = CatalogUseCases::status(db)
             .own_path
             .map(|p| p.to_string_lossy().into_owned())
             .unwrap_or_else(|| temp_file_path("soryntel_owndb6.HSC"));
@@ -219,9 +226,9 @@ impl EstimateModuleState {
         }
     }
 
-    fn recalc_all(&mut self, db: &ThermoDatabase) {
+    fn recalc_all(&mut self, db: &dyn EstimateCatalog) {
         for r in &mut self.rows {
-            evaluate_estimate_row(r, db);
+            MiscUseCases::evaluate_estimate(db, r);
         }
     }
 
@@ -317,14 +324,14 @@ impl EstimateModuleState {
         out
     }
 
-    fn insert_evaluated_rows(&mut self, at_idx: usize, mut to_paste: Vec<EstimateRow>, db: &ThermoDatabase) {
+    fn insert_evaluated_rows(&mut self, at_idx: usize, mut to_paste: Vec<EstimateRow>, db: &dyn EstimateCatalog) {
         if to_paste.is_empty() {
             return;
         }
         let pos = at_idx.min(self.rows.len());
         let count = to_paste.len();
         for (offset, r) in to_paste.iter_mut().enumerate() {
-            evaluate_estimate_row(r, db);
+            MiscUseCases::evaluate_estimate(db, r);
             self.rows.insert(pos + offset, r.clone());
         }
         self.selected_rows.clear();
@@ -335,7 +342,7 @@ impl EstimateModuleState {
         self.status_msg = format!("Pegadas {count} filas");
     }
 
-    fn paste_at_row(&mut self, at_idx: usize, ctx: &egui::Context, db: &ThermoDatabase) {
+    fn paste_at_row(&mut self, at_idx: usize, ctx: &egui::Context, db: &dyn EstimateCatalog) {
         let mut to_paste = self.clipboard_rows.clone();
         if to_paste.is_empty() {
             let clip_text = ctx.input(|i| {
@@ -357,7 +364,7 @@ impl EstimateModuleState {
         self.insert_evaluated_rows(at_idx, to_paste, db);
     }
 
-    pub fn open_cp_data_for_row(&mut self, row_idx: usize, db: &ThermoDatabase) {
+    pub fn open_cp_data_for_row(&mut self, row_idx: usize, db: &dyn EstimateCatalog) {
         let Some(row) = self.rows.get(row_idx).cloned() else {
             return;
         };
@@ -372,7 +379,7 @@ impl EstimateModuleState {
         self.show_cp_data_win = true;
     }
 
-    fn regenerate_cp_points(&mut self, db: &ThermoDatabase) {
+    fn regenerate_cp_points(&mut self, db: &dyn EstimateCatalog) {
         let Some(mut row) = self.rows.get(self.cp_target_row).cloned() else {
             return;
         };
@@ -380,7 +387,7 @@ impl EstimateModuleState {
         row.organic_group = self.cp_org_group;
         let t_lo = self.cp_tmin_k.max(1.0);
         let t_hi = self.cp_tmax_k.max(t_lo + 1.0);
-        self.cp_points = generate_cp_curve(&row, db, t_lo, t_hi, self.cp_steps);
+        self.cp_points = MiscUseCases::estimate_cp_curve(db, &row, t_lo, t_hi, self.cp_steps);
 
         let db_sp = db.get_species(row.formula.trim());
         self.cp_exp_points = self
@@ -389,11 +396,11 @@ impl EstimateModuleState {
             .map(|&(t, _)| {
                 db_sp
                     .as_ref()
-                    .and_then(|sp| evaluate_species_si(sp, t, false, false).ok().map(|p| p.0.cp))
+                    .and_then(|sp| MiscUseCases::estimate_species_point(sp, t).map(|p| p.cp))
             })
             .collect();
 
-        let fitted = fit_kelley_cp(&self.cp_points);
+        let fitted = MiscUseCases::estimate_fit_kelley(&self.cp_points);
         self.cp_kelley = fitted;
         self.cp_ranges = vec![CpFittedRange {
             tmin_k: t_lo,
@@ -417,7 +424,7 @@ impl EstimateModuleState {
         if sub_pts.len() < 4 {
             sub_pts = self.cp_points.clone();
         }
-        let fitted = fit_kelley_cp(&sub_pts);
+        let fitted = MiscUseCases::estimate_fit_kelley(&sub_pts);
         self.cp_ranges[idx].kelley = fitted;
         if idx == self.cp_active_range {
             self.cp_kelley = fitted;
@@ -441,16 +448,16 @@ impl EstimateModuleState {
         self.cp_kelley.cp(t)
     }
 
-    fn prepare_db_review(&mut self, row_idx: usize, ranges: Vec<(f64, f64, KelleyCoefficients)>, db: &ThermoDatabase) {
+    fn prepare_db_review(&mut self, row_idx: usize, ranges: Vec<(f64, f64, KelleyCoefficients)>, db: &dyn EstimateCatalog) {
         let Some(row) = self.rows.get(row_idx).cloned() else {
             return;
         };
         if row.formula.trim().is_empty() {
             return;
         }
-        let sp = build_estimated_species_with_intervals(&row, ranges, "HSC Estimate");
+        let sp = MiscUseCases::estimate_build_species(&row, ranges, "HSC Estimate");
         let existing_meta = db.get_species_metadata(&sp.formula);
-        let (_, charge, _) = parse_estimate_formula(&sp.formula).unwrap_or_default();
+        let (_, charge, _) = MiscUseCases::estimate_parse_formula(&sp.formula).unwrap_or_default();
         let raw_ph = match sp.phase {
             Phase::Gas => "g",
             Phase::Liquid => "l",
@@ -461,9 +468,9 @@ impl EstimateModuleState {
 
         let mut ref_row = row.clone();
         ref_row.temp_c = 25.0;
-        evaluate_estimate_row(&mut ref_row, db);
+        MiscUseCases::evaluate_estimate(db, &mut ref_row);
 
-        let pt298 = evaluate_species_si(&sp, 298.15, false, false).ok().map(|x| x.0);
+        let pt298 = MiscUseCases::estimate_species_point(&sp, 298.15);
         self.db_review = DbReviewDraft {
             open: true,
             formula: sp.formula.clone(),
@@ -501,7 +508,7 @@ impl EstimateModuleState {
         };
     }
 
-    pub fn save_db_review_to_owndb(&mut self, db: &mut ThermoDatabase) -> Result<(), String> {
+    pub fn save_db_review_to_owndb(&mut self, db: &mut dyn EstimateCatalog) -> Result<(), String> {
         let formula = self.db_review.formula.trim().to_string();
         if formula.is_empty() {
             return Err("La fórmula no puede estar vacía".into());
@@ -538,14 +545,9 @@ impl EstimateModuleState {
             reliability_class: self.db_review.reliability_class.clamp(1, 10),
         };
         let raw_ph = self.db_review.raw_phase_code.clone();
-        db.upsert_own_dataset(sp, meta, raw_ph);
+        CatalogUseCases::save_own_species(db, sp, meta, raw_ph);
         let save_path = self.own_db_path.trim().to_string();
-        if !save_path.is_empty() {
-            if let Some(parent) = std::path::Path::new(&save_path).parent() {
-                let _ = std::fs::create_dir_all(parent);
-            }
-            db.save_own_hsc(&save_path).map_err(|e| e.to_string())?;
-        }
+        CatalogUseCases::save_own_db_creating_dirs(db, &save_path)?;
         self.cached_db_scope = None;
         self.recalc_all(db);
         self.status_msg = format!("Especie '{formula}' guardada en OwnDB ({save_path})");
@@ -586,7 +588,7 @@ impl EstimateModuleState {
         Ok(non_empty.len())
     }
 
-    pub fn load_sheet_from_path(&mut self, path: &str, db: &ThermoDatabase) -> Result<usize, String> {
+    pub fn load_sheet_from_path(&mut self, path: &str, db: &dyn EstimateCatalog) -> Result<usize, String> {
         let raw = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
         let mut loaded = if let Ok(bundle) = serde_json::from_str::<EstimateSheetFile>(&raw) {
             bundle.rows
@@ -613,7 +615,7 @@ impl EstimateModuleState {
             rows
         };
         for r in &mut loaded {
-            evaluate_estimate_row(r, db);
+            MiscUseCases::evaluate_estimate(db, r);
         }
         let n = loaded.len();
         if loaded.is_empty() {
@@ -624,7 +626,7 @@ impl EstimateModuleState {
         Ok(n)
     }
 
-    pub fn ui(&mut self, ctx: &egui::Context, db: &mut ThermoDatabase) {
+    pub fn ui(&mut self, ctx: &egui::Context, db: &mut dyn EstimateCatalog) {
         if !ctx.wants_keyboard_input() {
             let (ev_copy, ev_cut, ev_paste) = ctx.input(|i| {
                 let mut cp = false;
@@ -695,14 +697,14 @@ impl EstimateModuleState {
                                 }
                                 ui.separator();
                                 if ui.button("Load Fig. 1 Example").clicked() {
-                                    self.rows = default_fig1_rows();
+                                    self.rows = MiscUseCases::estimate_default_rows();
                                     self.recalc_all(db);
                                     self.select_single(0);
                                     self.status_msg = "Ejemplo Fig. 1 cargado".to_string();
                                     ui.close_menu();
                                 }
                                 if ui.button("Load Fig. 5 Oxides & Sulfates Example").clicked() {
-                                    self.rows = fig5_oxides_rows();
+                                    self.rows = MiscUseCases::estimate_fig5_oxides_rows();
                                     self.recalc_all(db);
                                     self.selected_rows.clear();
                                     for i in 0..8 {
@@ -713,7 +715,7 @@ impl EstimateModuleState {
                                     ui.close_menu();
                                 }
                                 if ui.button("Load Classic Example (Na2SO4, MgO*Al2O3, POP)").clicked() {
-                                    self.rows = classic_hsc_estimate_rows();
+                                    self.rows = MiscUseCases::estimate_classic_rows();
                                     self.recalc_all(db);
                                     self.select_single(0);
                                     self.status_msg =
@@ -726,14 +728,14 @@ impl EstimateModuleState {
                                     r.species_type = EstimateSpeciesType::Organic;
                                     r.organic_group = OrganicGroup::Alkenes;
                                     r.functional_group = FunctionalGroup::None;
-                                    evaluate_estimate_row(&mut r, db);
+                                    MiscUseCases::evaluate_estimate(db, &mut r);
                                     self.rows = vec![r, EstimateRow::new("")];
                                     self.select_single(0);
                                     ui.close_menu();
                                 }
                                 if ui.button("Load Fig. 3 Example (FeVO4)").clicked() {
                                     let mut r = EstimateRow::new("FeVO4");
-                                    evaluate_estimate_row(&mut r, db);
+                                    MiscUseCases::evaluate_estimate(db, &mut r);
                                     self.rows = vec![r, EstimateRow::new("")];
                                     self.select_single(0);
                                     ui.close_menu();
@@ -778,7 +780,7 @@ impl EstimateModuleState {
                                     for idx in &targets {
                                         if let Some(r) = self.rows.get_mut(*idx) {
                                             r.species_type = next_type;
-                                            evaluate_estimate_row(r, db);
+                                            MiscUseCases::evaluate_estimate(db, r);
                                         }
                                     }
                                 }
@@ -852,7 +854,7 @@ impl EstimateModuleState {
                                             if fg_changed {
                                                 r.functional_group = next_fg;
                                             }
-                                            evaluate_estimate_row(r, db);
+                                            MiscUseCases::evaluate_estimate(db, r);
                                         }
                                     }
                                 }
@@ -1021,7 +1023,7 @@ impl EstimateModuleState {
                                 )
                                 .changed()
                             {
-                                evaluate_estimate_row(row, db);
+                                MiscUseCases::evaluate_estimate(db, row);
                             }
                         }
                     }
@@ -1047,7 +1049,7 @@ impl EstimateModuleState {
                         } else {
                             self.quick_temp
                         };
-                        evaluate_estimate_row(&mut r, db);
+                        MiscUseCases::evaluate_estimate(db, &mut r);
                         let insert_pos = self
                             .rows
                             .iter()
@@ -1181,7 +1183,7 @@ impl EstimateModuleState {
         }
     }
 
-    fn render_spreadsheet(&mut self, ctx: &egui::Context, ui: &mut egui::Ui, db: &mut ThermoDatabase) {
+    fn render_spreadsheet(&mut self, ctx: &egui::Context, ui: &mut egui::Ui, db: &mut dyn EstimateCatalog) {
         let max_elems = self
             .rows
             .iter()
@@ -1723,7 +1725,7 @@ impl EstimateModuleState {
 
         if let Some(idx) = action.recalc_idx {
             if let Some(row) = self.rows.get_mut(idx) {
-                evaluate_estimate_row(row, db);
+                MiscUseCases::evaluate_estimate(db, row);
             }
         }
         if action.cut {
@@ -1773,7 +1775,7 @@ impl EstimateModuleState {
         }
     }
 
-    fn render_db_picker(&mut self, ctx: &egui::Context, db: &ThermoDatabase) {
+    fn render_db_picker(&mut self, ctx: &egui::Context, db: &dyn EstimateCatalog) {
         let mut open = self.show_db_picker;
         let mut insert_formula: Option<String> = None;
 
@@ -1787,7 +1789,7 @@ impl EstimateModuleState {
                 });
                 ui.separator();
 
-                let matches = db.search(self.db_search.trim(), 150);
+                let matches = CatalogUseCases::search_species(db, self.db_search.trim(), 150);
                 egui::ScrollArea::vertical().max_height(290.0).show(ui, |ui| {
                     for sp in matches {
                         ui.horizontal(|ui| {
@@ -1811,14 +1813,14 @@ impl EstimateModuleState {
         self.show_db_picker = open;
         if let Some(f) = insert_formula {
             let mut r = EstimateRow::new(f);
-            evaluate_estimate_row(&mut r, db);
+            MiscUseCases::evaluate_estimate(db, &mut r);
             let idx = self.selected_row.unwrap_or(0).min(self.rows.len());
             self.rows.insert(idx, r);
             self.select_single(idx);
         }
     }
 
-    fn ensure_db_scatter_cache(&mut self, db: &ThermoDatabase) {
+    fn ensure_db_scatter_cache(&mut self, db: &dyn EstimateCatalog) {
         if matches!(
             self.scatter_scope,
             EstimateScatterScope::SheetRows | EstimateScatterScope::SelectedRows
@@ -1828,7 +1830,7 @@ impl EstimateModuleState {
         if self.cached_db_scope == Some(self.scatter_scope) {
             return;
         }
-        let species_list = db.search("", 20_000);
+        let species_list = MiscUseCases::estimate_reference_species(db);
         let mut evaluated = Vec::new();
         for sp in species_list {
             if sp.formula == "e-" || sp.formula == "e(-)" {
@@ -1849,7 +1851,7 @@ impl EstimateModuleState {
                 continue;
             }
             let mut row = EstimateRow::new(sp.formula);
-            evaluate_estimate_row(&mut row, db);
+            MiscUseCases::evaluate_estimate(db, &mut row);
             if row.mw > 0.0 && row.db_vals.is_some() {
                 evaluated.push(row);
             }
@@ -1858,7 +1860,7 @@ impl EstimateModuleState {
         self.cached_db_scope = Some(self.scatter_scope);
     }
 
-    fn render_graphics_window(&mut self, ctx: &egui::Context, db: &ThermoDatabase) {
+    fn render_graphics_window(&mut self, ctx: &egui::Context, db: &dyn EstimateCatalog) {
         self.ensure_db_scatter_cache(db);
         let mut open = self.show_graphics_win;
         let mut close_clicked = false;
@@ -1971,7 +1973,7 @@ impl EstimateModuleState {
                     2 => "Cp - Heat Capacity",
                     _ => "ΔG - Gibbs Energy",
                 };
-                let stats = compute_parity_stats(active_pairs);
+                let stats = MiscUseCases::estimate_parity_stats(active_pairs);
                 let is_large = !matches!(
                     self.scatter_scope,
                     EstimateScatterScope::SheetRows | EstimateScatterScope::SelectedRows
@@ -2275,7 +2277,7 @@ impl EstimateModuleState {
         self.show_graphics_win = open && !close_clicked;
     }
 
-    fn render_cp_range_dialog(&mut self, ctx: &egui::Context, db: &ThermoDatabase) {
+    fn render_cp_range_dialog(&mut self, ctx: &egui::Context, db: &dyn EstimateCatalog) {
         let mut open = self.show_cp_range_dialog;
         let mut run_fit = false;
         let mut close_now = false;
@@ -2334,7 +2336,7 @@ impl EstimateModuleState {
         }
     }
 
-    fn render_cp_data_window(&mut self, ctx: &egui::Context, db: &mut ThermoDatabase) {
+    fn render_cp_data_window(&mut self, ctx: &egui::Context, db: &mut dyn EstimateCatalog) {
         let mut open = self.show_cp_data_win;
         let mut do_update_species = false;
         let mut do_fit = false;
@@ -2586,7 +2588,7 @@ impl EstimateModuleState {
         }
     }
 
-    fn render_db_review_window(&mut self, ctx: &egui::Context, db: &mut ThermoDatabase) {
+    fn render_db_review_window(&mut self, ctx: &egui::Context, db: &mut dyn EstimateCatalog) {
         let mut open = self.db_review.open;
         let mut do_save = false;
         let mut do_cancel = false;
@@ -2714,7 +2716,7 @@ impl EstimateModuleState {
         }
     }
 
-    fn render_file_io_modal(&mut self, ctx: &egui::Context, db: &ThermoDatabase) {
+    fn render_file_io_modal(&mut self, ctx: &egui::Context, db: &dyn EstimateCatalog) {
         let mut open = self.show_file_io_modal;
         let mut close_now = false;
         let title = if self.file_io_save_mode {
@@ -2804,6 +2806,8 @@ fn series_palette_color(idx: usize) -> egui::Color32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use soryntel_db::ThermoDatabase;
+    use soryntel_thermo::estimate::evaluate_estimate_row;
 
     #[test]
     fn cp_range_fit_update_and_persist_to_owndb_roundtrip() {

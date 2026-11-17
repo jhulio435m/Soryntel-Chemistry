@@ -2,7 +2,8 @@
 //!
 //! Hexagonal UI Adapter: all thermodynamic calculations, cyclic formula evaluation, adiabatic Brent
 //! root-finding, Target Goal-Seek (`F8`), 1D Diagram sweeps, unit conversions, stream scaling,
-//! and `.bal8` / `.xlsx` persistence are delegated to `SoryntelApplication`.
+//! and `.bal8` / `.xlsx` persistence are delegated to the `soryntel_application::use_cases` (`BalanceUseCases`,
+//! `HeatLossUseCases`, `CatalogUseCases`) over a `SpeciesCatalogPort`.
 
 use crate::excel_grid::{
     col_letter, header_cell, row_num_cell, section_cell, text_cell, widget_cell,
@@ -10,9 +11,8 @@ use crate::excel_grid::{
 };
 use eframe::egui;
 use egui_plot::{Legend, Line, Plot, PlotPoints, Points, Text as PlotText};
-use soryntel_application::SoryntelApplication;
-use soryntel_core::{BalanceEnergyUnit, TemperatureUnit};
-use soryntel_db::ThermoDatabase;
+use soryntel_application::use_cases::{BalanceUseCases, CatalogUseCases, HeatLossUseCases};
+use soryntel_core::{BalanceEnergyUnit, SpeciesCatalogPort, TemperatureUnit};
 use soryntel_thermo::balance_engine::{
     BalanceArea, BalanceUserSheet, BalanceWorkbook, DiagramResult, SpeciesRow, StreamGroup,
     TargetRow,
@@ -80,14 +80,14 @@ pub struct BalanceModuleState {
 
 impl BalanceModuleState {
     /// Inject steady-state heat loss (in Watts) from Module 3 into the specified BalanceArea.
-    pub fn set_area_heat_loss_w(&mut self, area_idx: usize, q_w: f64, db: &ThermoDatabase) {
+    pub fn set_area_heat_loss_w(&mut self, area_idx: usize, q_w: f64, db: &dyn SpeciesCatalogPort) {
         if let Some(area) = self.wb.areas.get_mut(area_idx) {
-            let energy_per_h = SoryntelApplication::heat_flow_w_to_balance_energy_per_hour(
+            let energy_per_h = HeatLossUseCases::heat_flow_w_to_balance_energy_per_hour(
                 q_w,
                 self.wb.energy_unit,
             );
             area.heat_losses = energy_per_h;
-            let _ = SoryntelApplication::evaluate_balance_workbook(db, &mut self.wb);
+            let _ = BalanceUseCases::evaluate_balance_workbook(db, &mut self.wb);
             self.status_msg = format!(
                 "Importado desde Módulo 3 -> Area {}: {:.3} {}/h ({:.3} kW)",
                 area_idx + 1,
@@ -99,9 +99,9 @@ impl BalanceModuleState {
         }
     }
 
-    pub fn new(db: &ThermoDatabase) -> Self {
-        let mut wb = SoryntelApplication::balance_preset_cuconv1();
-        let _ = SoryntelApplication::evaluate_balance_workbook(db, &mut wb);
+    pub fn new(db: &dyn SpeciesCatalogPort) -> Self {
+        let mut wb = BalanceUseCases::balance_preset_cuconv1();
+        let _ = BalanceUseCases::evaluate_balance_workbook(db, &mut wb);
         let n_targets = wb.target_rows.len();
         Self {
             wb,
@@ -145,8 +145,8 @@ impl BalanceModuleState {
         }
     }
 
-    pub fn load_preset(&mut self, mut wb: BalanceWorkbook, db: &ThermoDatabase) {
-        match SoryntelApplication::evaluate_balance_workbook(db, &mut wb) {
+    pub fn load_preset(&mut self, mut wb: BalanceWorkbook, db: &dyn SpeciesCatalogPort) {
+        match BalanceUseCases::evaluate_balance_workbook(db, &mut wb) {
             Ok(()) => {
                 self.selected_target_rows = vec![true; wb.target_rows.len()];
                 self.status_msg = format!(
@@ -167,10 +167,10 @@ impl BalanceModuleState {
         }
     }
 
-    pub fn load_ch4_cooling_preset(&mut self, db: &ThermoDatabase) {
-        self.load_preset(SoryntelApplication::balance_preset_ch4_cooling_water(), db);
+    pub fn load_ch4_cooling_preset(&mut self, db: &dyn SpeciesCatalogPort) {
+        self.load_preset(BalanceUseCases::balance_preset_ch4_cooling_water(), db);
         self.active_tab = ActiveSheetTab::Out(0);
-        if let Ok(res) = SoryntelApplication::run_balance_diagram_sweep(db, &self.wb) {
+        if let Ok(res) = BalanceUseCases::run_balance_diagram_sweep(db, &self.wb) {
             self.diagram_auto_scale = false;
             self.diagram_x_min = 1.0;
             self.diagram_x_max = 12.0;
@@ -183,8 +183,8 @@ impl BalanceModuleState {
         }
     }
 
-    pub fn recalculate(&mut self, db: &ThermoDatabase) {
-        match SoryntelApplication::evaluate_balance_workbook(db, &mut self.wb) {
+    pub fn recalculate(&mut self, db: &dyn SpeciesCatalogPort) {
+        match BalanceUseCases::evaluate_balance_workbook(db, &mut self.wb) {
             Ok(()) => {
                 self.status_msg = format!(
                     "Balance recalculado ({} iteraciones, convergencia={}).",
@@ -200,7 +200,7 @@ impl BalanceModuleState {
     }
 
     pub fn save_bal8(&mut self, path: &str) {
-        match SoryntelApplication::serialize_bal8_workbook(&self.wb).and_then(|json| {
+        match BalanceUseCases::serialize_bal8_workbook(&self.wb).and_then(|json| {
             crate::storage::write_atomic(path, json)
                 .map_err(|e| soryntel_core::SoryntelError::DatabaseError(e.to_string()))
         }) {
@@ -215,10 +215,10 @@ impl BalanceModuleState {
         }
     }
 
-    pub fn load_bal8(&mut self, path: &str, db: &ThermoDatabase) {
+    pub fn load_bal8(&mut self, path: &str, db: &dyn SpeciesCatalogPort) {
         match std::fs::read_to_string(path)
             .map_err(|e| soryntel_core::SoryntelError::DatabaseError(e.to_string()))
-            .and_then(|raw| SoryntelApplication::deserialize_bal8_workbook(&raw))
+            .and_then(|raw| BalanceUseCases::deserialize_bal8_workbook(&raw))
         {
             Ok(wb) => {
                 self.load_preset(wb, db);
@@ -232,7 +232,7 @@ impl BalanceModuleState {
     }
 
     pub fn export_xlsx(&mut self, path: &str) {
-        let bytes = SoryntelApplication::export_balance_workbook_xlsx(&self.wb);
+        let bytes = BalanceUseCases::export_balance_workbook_xlsx(&self.wb);
         match crate::storage::write_atomic(path, bytes) {
             Ok(_) => {
                 self.status_msg = format!("Exportado Excel (.xlsx) en {path}");
@@ -245,7 +245,7 @@ impl BalanceModuleState {
         }
     }
 
-    pub fn run_selected_targets(&mut self, db: &ThermoDatabase, all: bool) {
+    pub fn run_selected_targets(&mut self, db: &dyn SpeciesCatalogPort, all: bool) {
         if self.selected_target_rows.len() != self.wb.target_rows.len() {
             self.selected_target_rows
                 .resize(self.wb.target_rows.len(), true);
@@ -259,7 +259,7 @@ impl BalanceModuleState {
                 .filter_map(|(i, &s)| if s { Some(i) } else { None })
                 .collect()
         };
-        match SoryntelApplication::iterate_balance_target_rows(db, &mut self.wb, &indices) {
+        match BalanceUseCases::iterate_balance_target_rows(db, &mut self.wb, &indices) {
             Ok(()) => {
                 self.status_msg = format!(
                     "Target iteration completada ({} fila(s) resueltas).",
@@ -292,13 +292,13 @@ impl BalanceModuleState {
         }
     }
 
-    pub fn paste_linked_stream(&mut self, db: &ThermoDatabase) {
+    pub fn paste_linked_stream(&mut self, db: &dyn SpeciesCatalogPort) {
         let Some((src_area, src_is_out, src_s_idx)) = self.copied_stream_ref else {
             self.status_msg = "Primero selecciona un Stream y usa Edit -> Copy Stream.".into();
             self.status_ok = false;
             return;
         };
-        let Some(pasted) = SoryntelApplication::build_balance_linked_paste_stream(
+        let Some(pasted) = BalanceUseCases::build_balance_linked_paste_stream(
             &self.wb, src_area, src_is_out, src_s_idx,
         ) else {
             return;
@@ -328,7 +328,7 @@ impl BalanceModuleState {
         self.status_ok = true;
     }
 
-    pub fn ui(&mut self, ctx: &egui::Context, db: &ThermoDatabase) {
+    pub fn ui(&mut self, ctx: &egui::Context, db: &dyn SpeciesCatalogPort) {
         // F8 shortcut for Target Iteration (Ch. 11.7 Step 8)
         if ctx.input(|i| i.key_pressed(egui::Key::F8)) {
             self.run_selected_targets(db, false);
@@ -364,23 +364,23 @@ impl BalanceModuleState {
                         ui.close_menu();
                     }
                     if ui.button("📘 CUCONV1.bal8 (Copper Converter, Figs. 1–5)").clicked() {
-                        self.load_preset(SoryntelApplication::balance_preset_cuconv1(), db);
+                        self.load_preset(BalanceUseCases::balance_preset_cuconv1(), db);
                         ui.close_menu();
                     }
                     if ui.button("🔥 BUTANE.bal8 (Adiabatic Flame, Fig. 2)").clicked() {
-                        self.load_preset(SoryntelApplication::balance_preset_butane(), db);
+                        self.load_preset(BalanceUseCases::balance_preset_butane(), db);
                         ui.close_menu();
                     }
                     if ui.button("🏭 CUSMELT.bal8 (Copper Smelting)").clicked() {
-                        self.load_preset(SoryntelApplication::balance_preset_cusmelt(), db);
+                        self.load_preset(BalanceUseCases::balance_preset_cusmelt(), db);
                         ui.close_menu();
                     }
                     if ui.button("💧 H2O.bal8 (Steam Evaporator)").clicked() {
-                        self.load_preset(SoryntelApplication::balance_preset_h2o(), db);
+                        self.load_preset(BalanceUseCases::balance_preset_h2o(), db);
                         ui.close_menu();
                     }
                     if ui.button("⛓ FSF_process.bal8 (5-Area Flash Smelting, Figs. 10–14)").clicked() {
-                        self.load_preset(SoryntelApplication::balance_preset_fsf_process(), db);
+                        self.load_preset(BalanceUseCases::balance_preset_fsf_process(), db);
                         ui.close_menu();
                     }
                 });
@@ -513,7 +513,7 @@ impl BalanceModuleState {
                     for u in [TemperatureUnit::Celsius, TemperatureUnit::Kelvin] {
                         let sel = self.wb.temp_unit == u;
                         if ui.radio(sel, u.label()).clicked() && !sel {
-                            SoryntelApplication::convert_balance_temperature_unit(&mut self.wb, u);
+                            BalanceUseCases::convert_balance_temperature_unit(&mut self.wb, u);
                             self.recalculate(db);
                             ui.close_menu();
                         }
@@ -527,7 +527,7 @@ impl BalanceModuleState {
                     ] {
                         let sel = self.wb.energy_unit == eu;
                         if ui.radio(sel, eu.label()).clicked() && !sel {
-                            SoryntelApplication::convert_balance_energy_unit(&mut self.wb, eu);
+                            BalanceUseCases::convert_balance_energy_unit(&mut self.wb, eu);
                             self.recalculate(db);
                             ui.close_menu();
                         }
@@ -579,19 +579,19 @@ impl BalanceModuleState {
                         self.load_ch4_cooling_preset(db);
                     }
                     if ui.small_button("⛓ FSF_process").clicked() {
-                        self.load_preset(SoryntelApplication::balance_preset_fsf_process(), db);
+                        self.load_preset(BalanceUseCases::balance_preset_fsf_process(), db);
                     }
                     if ui.small_button("💧 H2O").clicked() {
-                        self.load_preset(SoryntelApplication::balance_preset_h2o(), db);
+                        self.load_preset(BalanceUseCases::balance_preset_h2o(), db);
                     }
                     if ui.small_button("🏭 CUSMELT").clicked() {
-                        self.load_preset(SoryntelApplication::balance_preset_cusmelt(), db);
+                        self.load_preset(BalanceUseCases::balance_preset_cusmelt(), db);
                     }
                     if ui.small_button("🔥 BUTANE").clicked() {
-                        self.load_preset(SoryntelApplication::balance_preset_butane(), db);
+                        self.load_preset(BalanceUseCases::balance_preset_butane(), db);
                     }
                     if ui.small_button("📘 CUCONV1").clicked() {
-                        self.load_preset(SoryntelApplication::balance_preset_cuconv1(), db);
+                        self.load_preset(BalanceUseCases::balance_preset_cuconv1(), db);
                     }
                     ui.label(egui::RichText::new(crate::i18n::text("common.045")).small());
                 });
@@ -798,7 +798,7 @@ impl BalanceModuleState {
         self.render_modals(ctx, db);
     }
 
-    fn render_tools_sidebar(&mut self, ui: &mut egui::Ui, db: &ThermoDatabase) {
+    fn render_tools_sidebar(&mut self, ui: &mut egui::Ui, db: &dyn SpeciesCatalogPort) {
         egui::ScrollArea::both().show(ui, |ui| {
             ui.label(
                 egui::RichText::new(crate::i18n::text("review.116"))
@@ -974,11 +974,11 @@ impl BalanceModuleState {
                 });
                 let mut changed = false;
                 if let Some(u) = new_t_unit {
-                    SoryntelApplication::convert_balance_temperature_unit(&mut self.wb, u);
+                    BalanceUseCases::convert_balance_temperature_unit(&mut self.wb, u);
                     changed = true;
                 }
                 if let Some(eu) = new_e_unit {
-                    SoryntelApplication::convert_balance_energy_unit(&mut self.wb, eu);
+                    BalanceUseCases::convert_balance_energy_unit(&mut self.wb, eu);
                     changed = true;
                 }
                 changed |= ui
@@ -1200,7 +1200,7 @@ impl BalanceModuleState {
         });
     }
 
-    fn render_bottom_sheet_tabs(&mut self, ui: &mut egui::Ui, _db: &ThermoDatabase) {
+    fn render_bottom_sheet_tabs(&mut self, ui: &mut egui::Ui, _db: &dyn SpeciesCatalogPort) {
         egui::Frame::none()
             .fill(egui::Color32::from_rgb(232, 236, 242))
             .inner_margin(egui::Margin::symmetric(4.0, 2.0))
@@ -1415,7 +1415,7 @@ impl BalanceModuleState {
         ui: &mut egui::Ui,
         area_idx: usize,
         is_out: bool,
-        db: &ThermoDatabase,
+        db: &dyn SpeciesCatalogPort,
     ) {
         let t_lbl = self.wb.temp_unit.label();
         let e_lbl = self.wb.energy_unit.label();
@@ -1547,7 +1547,7 @@ impl BalanceModuleState {
                             .on_hover_text("Editar total kmol del grupo (escala especies proporcionalmente)")
                             .changed()
                         {
-                            SoryntelApplication::scale_balance_stream_kmol(st, s_kmol);
+                            BalanceUseCases::scale_balance_stream_kmol(st, s_kmol);
                             need_recalc = true;
                         }
                     });
@@ -1565,7 +1565,7 @@ impl BalanceModuleState {
                             .on_hover_text("Editar total kg del grupo (escala especies proporcionalmente)")
                             .changed()
                         {
-                            SoryntelApplication::scale_balance_stream_kg(st, s_kg);
+                            BalanceUseCases::scale_balance_stream_kg(st, s_kg);
                             need_recalc = true;
                         }
                     });
@@ -1583,7 +1583,7 @@ impl BalanceModuleState {
                             .on_hover_text("Editar total Nm³ del grupo (escala especies proporcionalmente)")
                             .changed()
                         {
-                            SoryntelApplication::scale_balance_stream_nm3(st, s_nm3);
+                            BalanceUseCases::scale_balance_stream_nm3(st, s_nm3);
                             need_recalc = true;
                         }
                     });
@@ -1728,7 +1728,7 @@ impl BalanceModuleState {
                                 )
                                 .changed()
                             {
-                                SoryntelApplication::set_balance_species_kg(sp, kg_val);
+                                BalanceUseCases::set_balance_species_kg(sp, kg_val);
                                 need_recalc = true;
                             }
                         });
@@ -1745,7 +1745,7 @@ impl BalanceModuleState {
                                 )
                                 .changed()
                             {
-                                SoryntelApplication::set_balance_species_nm3(db, sp, nm3_val);
+                                BalanceUseCases::set_balance_species_nm3(db, sp, nm3_val);
                                 need_recalc = true;
                             }
                         });
@@ -1865,7 +1865,7 @@ impl BalanceModuleState {
         let Some(area) = self.wb.areas.get(area_idx) else {
             return;
         };
-        let comps = SoryntelApplication::compute_balance_stream_compositions(area, is_out);
+        let comps = BalanceUseCases::compute_balance_stream_compositions(area, is_out);
         let t_lbl = self.wb.temp_unit.label();
         let title = if is_out {
             format!("OUT{}\nCompositions", area_idx + 1)
@@ -2004,7 +2004,7 @@ impl BalanceModuleState {
     }
 
     /// Render a custom user sheet (`FEED` Fig. 6, `Process flow` Fig. 13, `Analysis` Fig. 14) with Red Font Shield support.
-    fn render_user_sheet(&mut self, ui: &mut egui::Ui, u_idx: usize, db: &ThermoDatabase) {
+    fn render_user_sheet(&mut self, ui: &mut egui::Ui, u_idx: usize, db: &dyn SpeciesCatalogPort) {
         let shield = self.wb.red_font_shield;
         let Some(us) = self.wb.user_sheets.get_mut(u_idx) else {
             return;
@@ -2083,7 +2083,7 @@ impl BalanceModuleState {
     }
 
     /// Render the `Target` sheet inline in the CentralPanel matching Fig. 7.
-    fn render_target_sheet_inline(&mut self, ui: &mut egui::Ui, db: &ThermoDatabase) {
+    fn render_target_sheet_inline(&mut self, ui: &mut egui::Ui, db: &dyn SpeciesCatalogPort) {
         let salmon = egui::Color32::from_rgb(245, 200, 160);
         let dark = egui::Color32::from_rgb(24, 24, 27);
         let red_txt = egui::Color32::from_rgb(185, 28, 28);
@@ -2275,7 +2275,7 @@ impl BalanceModuleState {
         }
     }
 
-    fn render_modals(&mut self, ctx: &egui::Context, db: &ThermoDatabase) {
+    fn render_modals(&mut self, ctx: &egui::Context, db: &dyn SpeciesCatalogPort) {
         // 1. Temperature Balance Modal (Fig. 2)
         if let Some(t_adiab) = self.temp_bal_modal {
             let mut close = false;
@@ -2406,7 +2406,7 @@ impl BalanceModuleState {
                 });
             self.show_diagram_settings = open;
             if run_plot {
-                match SoryntelApplication::run_balance_diagram_sweep(db, &self.wb) {
+                match BalanceUseCases::run_balance_diagram_sweep(db, &self.wb) {
                     Ok(res) => {
                         if self.diagram_auto_scale {
                             self.diagram_x_min = self.wb.diagram_config.x_min;
@@ -2659,7 +2659,7 @@ impl BalanceModuleState {
                     });
             }
             if rerun_sweep_inside {
-                if let Ok(res) = SoryntelApplication::run_balance_diagram_sweep(db, &self.wb) {
+                if let Ok(res) = BalanceUseCases::run_balance_diagram_sweep(db, &self.wb) {
                     if !self.diagram_auto_scale {
                         self.diagram_x_min = self.wb.diagram_config.x_min;
                         self.diagram_x_max = self.wb.diagram_config.x_max;
@@ -2676,7 +2676,7 @@ impl BalanceModuleState {
         if self.show_heat_flow_modal {
             let mut open = self.show_heat_flow_modal;
             let e_unit = self.wb.energy_unit;
-            let h_loss_est = SoryntelApplication::estimate_reactor_natural_convection_loss(
+            let h_loss_est = HeatLossUseCases::estimate_reactor_natural_convection_loss(
                 self.hf_area_m2,
                 self.hf_t_surface_c,
                 self.hf_t_room_c,
@@ -2792,7 +2792,7 @@ impl BalanceModuleState {
                         );
                     });
                     ui.separator();
-                    let list = db.search(&self.add_species_query, 80);
+                    let list = CatalogUseCases::search_species(db, &self.add_species_query, 80);
                     egui::ScrollArea::vertical().max_height(260.0).show(ui, |ui| {
                         egui::Grid::new("bal_add_sp_grid")
                             .striped(true)
@@ -2857,8 +2857,8 @@ impl BalanceModuleState {
         }
     }
 
-    fn trigger_temp_balance(&mut self, db: &ThermoDatabase) {
-        match SoryntelApplication::solve_balance_adiabatic_temperature(
+    fn trigger_temp_balance(&mut self, db: &dyn SpeciesCatalogPort) {
+        match BalanceUseCases::solve_balance_adiabatic_temperature(
             db,
             &self.wb,
             self.active_area,
@@ -2873,7 +2873,7 @@ impl BalanceModuleState {
         }
     }
 
-    fn insert_stream_in_active(&mut self, db: &ThermoDatabase) {
+    fn insert_stream_in_active(&mut self, db: &dyn SpeciesCatalogPort) {
         let is_out = matches!(self.active_tab, ActiveSheetTab::Out(_));
         if let Some(area) = self.wb.areas.get_mut(self.active_area) {
             let streams = if is_out {
@@ -2889,7 +2889,7 @@ impl BalanceModuleState {
         self.recalculate(db);
     }
 
-    fn delete_selected_stream(&mut self, db: &ThermoDatabase) {
+    fn delete_selected_stream(&mut self, db: &dyn SpeciesCatalogPort) {
         let is_out = matches!(self.active_tab, ActiveSheetTab::Out(_));
         if let (Some(area), Some(s_idx)) =
             (self.wb.areas.get_mut(self.active_area), self.selected_stream_idx)
@@ -2908,7 +2908,7 @@ impl BalanceModuleState {
         self.recalculate(db);
     }
 
-    fn delete_selected_row(&mut self, db: &ThermoDatabase) {
+    fn delete_selected_row(&mut self, db: &dyn SpeciesCatalogPort) {
         let is_out = matches!(self.active_tab, ActiveSheetTab::Out(_));
         if let (Some(area), Some(s_idx), Some(r_idx)) = (
             self.wb.areas.get_mut(self.active_area),
@@ -2930,7 +2930,7 @@ impl BalanceModuleState {
         self.recalculate(db);
     }
 
-    fn apply_formula_bar_edit(&mut self, db: &ThermoDatabase) {
+    fn apply_formula_bar_edit(&mut self, db: &dyn SpeciesCatalogPort) {
         if let ActiveSheetTab::User(u_idx) = self.active_tab {
             if let (Some(us), Some((r, c))) =
                 (self.wb.user_sheets.get_mut(u_idx), self.selected_user_cell)
@@ -2977,6 +2977,7 @@ impl BalanceModuleState {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use soryntel_db::ThermoDatabase;
 
     #[test]
     fn balance_ui_renders_all_tabs_and_supports_paste_stream_and_bal8_roundtrip() {

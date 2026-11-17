@@ -17,22 +17,45 @@
 
 use eframe::egui;
 use egui_plot::{Line, Plot, PlotPoints, Points};
-use soryntel_application::SoryntelApplication;
-use soryntel_core::{CAL_TO_JOULE, T_REF_K};
-use soryntel_db::hsc_binary::ReferenceEntry;
-use soryntel_db::ThermoDatabase;
+use soryntel_application::use_cases::CatalogUseCases;
+use soryntel_core::catalog::{
+    DbMergeConflict, DbSource, ElementSearchMode, KeywordSearchField, MergeConflictDecision,
+    PhaseFilterFlags, ReferenceEntry, SpeciesCatalogEntry,
+};
+use soryntel_core::{
+    ChemicalSpecies, HscFileToolsPort, KelleyCoefficients, OwnDbEditorPort, Phase,
+    ReferenceLibraryPort, SpeciesBrowserPort, SpeciesCatalogPort, SpeciesDatabaseAdminPort,
+    SpeciesMetadata, SpeciesThermoInterval, CAL_TO_JOULE, T_REF_K,
+};
 use soryntel_thermo::elements::PERIODIC_ELEMENTS;
 use soryntel_thermo::species::{
-    color_spec, parse_carbon_limits, CpDataPoint, CpFitMask, CpFitResult, DbMergeConflict,
-    DbSource, ElementSearchMode, ExternalCpTemplate, GibbsCoeffsInput, GibbsConvertOutput,
-    KeywordSearchField, MergeConflictDecision, PhaseFilterFlags, SpeciesCatalogEntry,
+    CpDataPoint, CpFitMask, CpFitResult, ExternalCpTemplate, GibbsCoeffsInput, GibbsConvertOutput,
     HSC_COLOR_PALETTE,
 };
-use soryntel_thermo::{
-    ChemicalSpecies, KelleyCoefficients, Phase, SpeciesCatalogPort, SpeciesMetadata,
-    SpeciesRepository, SpeciesThermoInterval,
-};
 use std::collections::{BTreeMap, BTreeSet};
+
+/// Puertos que necesita la ventana de bases de datos: consulta resuelta, administración de
+/// MainDB/OwnDB, navegador por capas, edición de OwnDB, diccionario `.REF` y herramientas
+/// de ficheros `.HSC`.
+pub trait SpeciesWindowCatalog:
+    SpeciesCatalogPort
+    + SpeciesDatabaseAdminPort
+    + SpeciesBrowserPort
+    + OwnDbEditorPort
+    + ReferenceLibraryPort
+    + HscFileToolsPort
+{
+}
+impl<T> SpeciesWindowCatalog for T where
+    T: SpeciesCatalogPort
+        + SpeciesDatabaseAdminPort
+        + SpeciesBrowserPort
+        + OwnDbEditorPort
+        + ReferenceLibraryPort
+        + HscFileToolsPort
+        + ?Sized
+{
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SpeciesViewTab {
@@ -212,8 +235,8 @@ pub struct SpeciesModuleState {
 }
 
 impl SpeciesModuleState {
-    pub fn new(db: &ThermoDatabase) -> Self {
-        let summary = db.status_summary();
+    pub fn new(db: &dyn SpeciesWindowCatalog) -> Self {
+        let summary = CatalogUseCases::status(db);
         let default_main = summary
             .main_path
             .as_ref()
@@ -361,11 +384,12 @@ impl SpeciesModuleState {
         self.status_is_err = is_err;
     }
 
-    /// Execute active search mode against `ThermoDatabase`.
-    pub fn refresh_search(&mut self, db: &ThermoDatabase) {
-        self.phase_filters.carbon_counts = parse_carbon_limits(&self.carbon_limit_text);
+    /// Execute active search mode against the species browser port.
+    pub fn refresh_search(&mut self, db: &dyn SpeciesWindowCatalog) {
+        self.phase_filters.carbon_counts = CatalogUseCases::parse_carbon_filter(&self.carbon_limit_text);
         let res = match self.query_mode {
-            BrowserQueryMode::Keyword => db.search_advanced(
+            BrowserQueryMode::Keyword => CatalogUseCases::browse_keyword(
+                db,
                 &self.keyword_text,
                 self.keyword_field,
                 self.source_filter,
@@ -389,7 +413,8 @@ impl SpeciesModuleState {
                 } else {
                     ElementSearchMode::Some
                 };
-                db.search_elements_filtered(
+                CatalogUseCases::browse_elements(
+                    db,
                     &elems,
                     mode,
                     self.source_filter,
@@ -398,7 +423,8 @@ impl SpeciesModuleState {
                 )
             }
             BrowserQueryMode::Stoichiometry => {
-                match db.search_stoichiometry(
+                match CatalogUseCases::browse_stoichiometry(
+                    db,
                     &self.stoich_text,
                     self.fix_ratio,
                     self.source_filter,
@@ -466,7 +492,7 @@ impl SpeciesModuleState {
         };
     }
 
-    fn save_editor_to_owndb(&mut self, db: &mut ThermoDatabase) {
+    fn save_editor_to_owndb(&mut self, db: &mut dyn SpeciesWindowCatalog) {
         let formula = self.editor.formula.trim().to_string();
         if formula.is_empty() {
             self.set_status("Formula cannot be empty when saving to OwnDB.", true);
@@ -477,7 +503,7 @@ impl SpeciesModuleState {
 
         let mut mw = parse_f(&self.editor.mw_str);
         let mut charge = 0;
-        if let Ok((calc_mw, _, z)) = SoryntelApplication::species_compute_mw(&formula) {
+        if let Ok((calc_mw, _, z)) = CatalogUseCases::species_compute_mw(&formula) {
             if mw <= 0.0 {
                 mw = calc_mw;
                 self.editor.mw_str = format!("{mw:.4}");
@@ -544,7 +570,7 @@ impl SpeciesModuleState {
             reliability_class: self.editor.reliability_class.clamp(1, 10),
         };
         let raw_ph = self.editor.raw_phase_code.clone();
-        db.upsert_own_dataset(sp, meta, raw_ph);
+        CatalogUseCases::save_own_species(db, sp, meta, raw_ph);
         self.selected_formula = Some(formula.clone());
         self.selected_source = Some(DbSource::Own);
         self.refresh_search(db);
@@ -555,7 +581,7 @@ impl SpeciesModuleState {
     }
 
     /// Main UI entry point. Returns optional formula imported for Reaction Equations module.
-    pub fn ui(&mut self, ctx: &egui::Context, db: &mut ThermoDatabase) -> Option<String> {
+    pub fn ui(&mut self, ctx: &egui::Context, db: &mut dyn SpeciesWindowCatalog) -> Option<String> {
         if self.results_dirty {
             self.refresh_search(db);
         }
@@ -592,7 +618,7 @@ impl SpeciesModuleState {
         self.import_to_reaction_formula.take()
     }
 
-    fn show_menu_bar(&mut self, ctx: &egui::Context, db: &mut ThermoDatabase) {
+    fn show_menu_bar(&mut self, ctx: &egui::Context, db: &mut dyn SpeciesWindowCatalog) {
         egui::TopBottomPanel::top("species_top_menu").show(ctx, |ui| {
             egui::menu::bar(ui, |ui| {
                 ui.menu_button(crate::i18n::text("common.001"), |ui| {
@@ -602,14 +628,14 @@ impl SpeciesModuleState {
                     }
                     if ui.button("Save OwnDB (.HSC)").clicked() {
                         let path = self.own_path_input.clone();
-                        match db.save_own_hsc(&path) {
+                        match CatalogUseCases::save_own_db(db, &path) {
                             Ok(n) => self.set_status(format!("Saved {n} OwnDB datasets -> {path}"), false),
                             Err(e) => self.set_status(format!("{e}"), true),
                         }
                         ui.close_menu();
                     }
                     if ui.button("Export Resolved View -> CSV").clicked() {
-                        let csv = db.export_csv(self.source_filter);
+                        let csv = CatalogUseCases::export_csv(db, self.source_filter);
                         match crate::storage::write_atomic(&self.csv_io_path, csv) {
                             Ok(_) => self.set_status(format!("Exported CSV -> {}", self.csv_io_path), false),
                             Err(e) => self.set_status(format!("CSV write failed: {e}"), true),
@@ -630,7 +656,7 @@ impl SpeciesModuleState {
                     }
                     if ui.button("Delete Selected from OwnDB").clicked() {
                         if let Some(f) = self.selected_formula.clone() {
-                            if db.delete_own_species(&f) {
+                            if CatalogUseCases::delete_own_species(db, &f) {
                                 self.refresh_search(db);
                                 self.set_status(format!("Deleted '{f}' from OwnDB."), false);
                             } else {
@@ -678,16 +704,15 @@ impl SpeciesModuleState {
                     }
                     ui.separator();
                     if ui.button("Sort OwnDB Alphabetically").clicked() {
-                        db.sort_database(DbSource::Own);
+                        CatalogUseCases::sort_layer(db, DbSource::Own);
                         self.refresh_search(db);
                         self.set_status("OwnDB sorted canonically.", false);
                         ui.close_menu();
                     }
                     if ui.button("Refresh Active .CAT Indexes").clicked() {
-                        let m_res = db.refresh_catalogue(DbSource::Main);
-                        let o_res = db.refresh_catalogue(DbSource::Own);
+                        let (main_ok, own_ok) = CatalogUseCases::refresh_catalogues(db);
                         self.set_status(
-                            format!("Catalogue refresh — Main: {:?}, Own: {:?}", m_res.is_ok(), o_res.is_ok()),
+                            format!("Catalogue refresh — Main: {main_ok:?}, Own: {own_ok:?}"),
                             false,
                         );
                         ui.close_menu();
@@ -732,8 +757,8 @@ impl SpeciesModuleState {
         });
     }
 
-    fn show_status_footer(&self, ctx: &egui::Context, db: &ThermoDatabase) {
-        let sum = db.status_summary();
+    fn show_status_footer(&self, ctx: &egui::Context, db: &dyn SpeciesWindowCatalog) {
+        let sum = CatalogUseCases::status(db);
         egui::TopBottomPanel::bottom("species_status_footer").show(ctx, |ui| {
             ui.horizontal(|ui| {
                 let col = if self.status_is_err {
@@ -759,7 +784,7 @@ impl SpeciesModuleState {
         });
     }
 
-    fn load_selected_into_editor(&mut self, db: &ThermoDatabase) {
+    fn load_selected_into_editor(&mut self, db: &dyn SpeciesWindowCatalog) {
         if let Some(ref f) = self.selected_formula.clone() {
             let src = self.selected_source;
             if let Some(entry) = self
@@ -771,14 +796,13 @@ impl SpeciesModuleState {
                 self.load_into_editor(&entry.species, &entry.metadata, &entry.raw_phase_code);
                 return;
             }
-            if let Some(sp) = db.get_species(f) {
-                let meta = db.get_species_metadata(f).unwrap_or_default();
+            if let Some((sp, meta)) = CatalogUseCases::species_with_metadata(db, f) {
                 self.load_into_editor(&sp, &meta, "");
             }
         }
     }
 
-    fn show_browser_tab(&mut self, ui: &mut egui::Ui, db: &mut ThermoDatabase) {
+    fn show_browser_tab(&mut self, ui: &mut egui::Ui, db: &mut dyn SpeciesWindowCatalog) {
         let mut changed = false;
 
         ui.columns(3, |cols| {
@@ -1001,7 +1025,7 @@ impl SpeciesModuleState {
                 // Dataset selector when formula has alternative discontinuous literature sets (e.g. Mg(+2a))
                 if sel.dataset_count > 1 {
                     let mut chosen = 0usize;
-                    let all_sets = db.get_all_datasets_for(sel.source, &sel.formula);
+                    let all_sets = CatalogUseCases::datasets_for(db, sel.source, &sel.formula);
                     cols[2].horizontal(|ui| {
                         ui.strong(format!("Literature Datasets ({}):", all_sets.len()));
                         for (idx, ds) in all_sets.iter().enumerate() {
@@ -1016,7 +1040,7 @@ impl SpeciesModuleState {
                                 .clicked()
                             {
                                 chosen = idx;
-                                db.select_dataset(sel.source, &sel.formula, chosen);
+                                CatalogUseCases::select_dataset(db, sel.source, &sel.formula, chosen);
                                 self.refresh_search(db);
                             }
                         }
@@ -1024,7 +1048,7 @@ impl SpeciesModuleState {
                 }
 
                 // 19 binary fields summary card
-                let cspec = color_spec(sel.metadata.color_code);
+                let cspec = CatalogUseCases::species_color_spec(sel.metadata.color_code);
                 egui::Grid::new("browser_19_fields_grid")
                     .spacing([14.0, 4.0])
                     .show(&mut cols[2], |ui| {
@@ -1080,7 +1104,7 @@ impl SpeciesModuleState {
                         ui.end_row();
                     });
 
-                if let Some(aq) = SoryntelApplication::species_analyze_aqueous(&sel.species) {
+                if let Some(aq) = CatalogUseCases::species_analyze_aqueous(&sel.species) {
                     let s_scale = self.energy_scale_to_display();
                     let s_u = self.heat_cap_unit();
                     cols[2].separator();
@@ -1140,7 +1164,7 @@ impl SpeciesModuleState {
 
                 // Reference citations lookup from MainDB6.REF
                 if let Some(first_iv) = sel.species.intervals.first() {
-                    let cites = db.lookup_citations(&first_iv.reference);
+                    let cites = CatalogUseCases::citations_for(db, &first_iv.reference);
                     if !cites.is_empty() {
                         cols[2].separator();
                         cols[2].strong("Resolved Citations (MainDB6.REF)");
@@ -1163,7 +1187,7 @@ impl SpeciesModuleState {
         });
     }
 
-    fn show_editor_tab(&mut self, ui: &mut egui::Ui, db: &mut ThermoDatabase) {
+    fn show_editor_tab(&mut self, ui: &mut egui::Ui, db: &mut dyn SpeciesWindowCatalog) {
         ui.horizontal(|ui| {
             ui.strong("OwnDB Species Editor (Ch. 28.11)");
             ui.separator();
@@ -1174,7 +1198,7 @@ impl SpeciesModuleState {
                 self.editor = EditableSpeciesForm::default();
             }
             if ui.button("Calc MW").clicked() {
-                match SoryntelApplication::species_compute_mw(&self.editor.formula) {
+                match CatalogUseCases::species_compute_mw(&self.editor.formula) {
                     Ok((mw, _, _)) => {
                         self.editor.mw_str = format!("{mw:.4}");
                         self.set_status(format!("Calculated MW = {mw:.4} g/mol"), false);
@@ -1197,14 +1221,14 @@ impl SpeciesModuleState {
             if ui.button("Persist OwnDB File (.HSC)").clicked() {
                 self.save_editor_to_owndb(db);
                 let p = self.own_path_input.clone();
-                match db.save_own_hsc(&p) {
+                match CatalogUseCases::save_own_db(db, &p) {
                     Ok(n) => self.set_status(format!("Persisted {n} OwnDB datasets -> {p}"), false),
                     Err(e) => self.set_status(format!("{e}"), true),
                 }
             }
             if ui.button("Delete from OwnDB").clicked() {
                 let f = self.editor.formula.clone();
-                if db.delete_own_species(&f) {
+                if CatalogUseCases::delete_own_species(db, &f) {
                     self.refresh_search(db);
                     self.set_status(format!("Deleted '{f}' from OwnDB."), false);
                 } else {
@@ -1247,7 +1271,7 @@ impl SpeciesModuleState {
                 ui.add(egui::DragValue::new(&mut self.editor.reliability_class).range(1..=10));
                 ui.label("Color (0..53):");
                 ui.horizontal(|ui| {
-                    let c = color_spec(self.editor.color_code);
+                    let c = CatalogUseCases::species_color_spec(self.editor.color_code);
                     let (rect, _) = ui.allocate_exact_size(egui::vec2(16.0, 16.0), egui::Sense::hover());
                     ui.painter().rect_filled(rect, 2.0, egui::Color32::from_rgb(c.rgb[0], c.rgb[1], c.rgb[2]));
                     ui.painter().rect_stroke(rect, 2.0, egui::Stroke::new(1.0, egui::Color32::BLACK));
@@ -1419,7 +1443,7 @@ impl SpeciesModuleState {
             c: parse_f(&liq_row.c_disp) * inv_scale,
             d: parse_f(&liq_row.d_disp) * inv_scale,
         };
-        match SoryntelApplication::species_extrapolate_liquid_298(&solids, t_melt_k, dh_fus_j, liq_k) {
+        match CatalogUseCases::species_extrapolate_liquid_298(&solids, t_melt_k, dh_fus_j, liq_k) {
             Ok((h_l_298, s_l_298)) => {
                 let e_scale = self.energy_scale_to_display();
                 let base = self.editor.formula.trim_end_matches("(l)").to_string();
@@ -1591,7 +1615,7 @@ impl SpeciesModuleState {
             c: self.lock_c.trim().parse::<f64>().unwrap_or(0.0) * inv_scale,
             d: self.lock_d.trim().parse::<f64>().unwrap_or(0.0) * inv_scale,
         };
-        match SoryntelApplication::species_fit_cp(&pts, self.fit_mask, locked) {
+        match CatalogUseCases::species_fit_cp(&pts, self.fit_mask, locked) {
             Ok(res) => {
                 self.set_status(
                     format!("Cp fitted successfully (RMSE = {:.4} J/(mol·K), max error = {:.4}%).", res.rmse_j, res.max_abs_error_pct),
@@ -1714,7 +1738,7 @@ impl SpeciesModuleState {
         for (i, s) in self.ext_params.iter().enumerate() {
             params[i] = s.trim().parse::<f64>().unwrap_or(0.0);
         }
-        match SoryntelApplication::species_convert_cp_function(
+        match CatalogUseCases::species_convert_cp_function(
             &self.ext_expr,
             &self.ext_unit,
             t1,
@@ -1735,7 +1759,7 @@ impl SpeciesModuleState {
         }
     }
 
-    fn show_convert_gibbs_tab(&mut self, ui: &mut egui::Ui, db: &ThermoDatabase) {
+    fn show_convert_gibbs_tab(&mut self, ui: &mut egui::Ui, db: &dyn SpeciesWindowCatalog) {
         ui.horizontal(|ui| {
             ui.strong("Convert G(T) -> H, S, Cp & Delta to Normal (Ch. 28.14 Fig. 13)");
             ui.separator();
@@ -1756,7 +1780,7 @@ impl SpeciesModuleState {
             if ui.button("Delta to Normal").clicked() {
                 self.run_convert_gibbs();
                 if let Some(ref d_out) = self.gibbs_delta_out {
-                    match SoryntelApplication::species_gibbs_delta_to_normal(
+                    match CatalogUseCases::species_gibbs_delta_to_normal(
                         db,
                         &self.gibbs_formula,
                         d_out,
@@ -1874,7 +1898,7 @@ impl SpeciesModuleState {
             is_calories: self.use_calories,
             t_ref_k: T_REF_K,
         };
-        match SoryntelApplication::species_convert_gibbs(&inp) {
+        match CatalogUseCases::species_convert_gibbs(&inp) {
             Ok(out) => {
                 self.gibbs_delta_out = Some(out);
                 self.set_status("Converted G(T) polynomial to (H, S, A, B, C, D).", false);
@@ -1883,14 +1907,14 @@ impl SpeciesModuleState {
         }
     }
 
-    fn show_db_tools_tab(&mut self, ui: &mut egui::Ui, db: &mut ThermoDatabase) {
+    fn show_db_tools_tab(&mut self, ui: &mut egui::Ui, db: &mut dyn SpeciesWindowCatalog) {
         egui::ScrollArea::vertical().id_salt("db_tools_main_scroll").show(ui, |ui| {
             ui.strong("Active Databases & Paths (Ch. 28.17)");
             egui::Grid::new("db_paths_grid").spacing([10.0, 5.0]).show(ui, |ui| {
                 ui.label("MainDB (.HSC):");
                 ui.add(egui::TextEdit::singleline(&mut self.main_path_input).desired_width(420.0));
                 if ui.button("Open MainDB").clicked() {
-                    match db.load_main_hsc(&self.main_path_input) {
+                    match CatalogUseCases::open_main_db(db, &self.main_path_input) {
                         Ok((u, r)) => {
                             self.refresh_search(db);
                             self.set_status(format!("Loaded MainDB: {u} species ({r} records)."), false);
@@ -1904,7 +1928,7 @@ impl SpeciesModuleState {
                 ui.add(egui::TextEdit::singleline(&mut self.own_path_input).desired_width(420.0));
                 ui.horizontal(|ui| {
                     if ui.button("Open OwnDB").clicked() {
-                        match db.load_own_hsc(&self.own_path_input) {
+                        match CatalogUseCases::open_own_db(db, &self.own_path_input) {
                             Ok((u, r)) => {
                                 self.refresh_search(db);
                                 self.set_status(format!("Loaded OwnDB: {u} species ({r} slots)."), false);
@@ -1913,13 +1937,13 @@ impl SpeciesModuleState {
                         }
                     }
                     if ui.button("Save OwnDB").clicked() {
-                        match db.save_own_hsc(&self.own_path_input) {
+                        match CatalogUseCases::save_own_db(db, &self.own_path_input) {
                             Ok(n) => self.set_status(format!("Saved {n} OwnDB datasets."), false),
                             Err(e) => self.set_status(format!("{e}"), true),
                         }
                     }
                     if ui.button("Create New Empty OwnDB").clicked() {
-                        match db.create_empty_own_hsc(&self.own_path_input) {
+                        match CatalogUseCases::create_empty_own_db(db, &self.own_path_input) {
                             Ok(_) => {
                                 self.refresh_search(db);
                                 self.set_status(format!("Created fresh 256-byte OwnDB at {}", self.own_path_input), false);
@@ -1933,7 +1957,7 @@ impl SpeciesModuleState {
                 ui.label("Citations (.REF):");
                 ui.add(egui::TextEdit::singleline(&mut self.ref_path_input).desired_width(420.0));
                 if ui.button("Load .REF").clicked() {
-                    match db.load_ref_dictionary(&self.ref_path_input) {
+                    match CatalogUseCases::load_references(db, &self.ref_path_input) {
                         Ok(n) => self.set_status(format!("Loaded {n} citations from .REF."), false),
                         Err(e) => self.set_status(format!("{e}"), true),
                     }
@@ -1951,7 +1975,8 @@ impl SpeciesModuleState {
                 ui.horizontal(|ui| {
                     ui.checkbox(&mut self.merge_show_duplicates, "Show Duplicates");
                     if ui.button("Inspect / Merge").clicked() {
-                        match ThermoDatabase::merge_hsc_files(
+                        match CatalogUseCases::merge_hsc_files(
+                            db,
                             &self.merge_src_path,
                             &self.merge_dst_path,
                             &self.merge_decisions,
@@ -1980,7 +2005,7 @@ impl SpeciesModuleState {
                 ui.label("Output HSC 6:");
                 ui.add(egui::TextEdit::singleline(&mut self.legacy_dst_path).desired_width(300.0));
                 if ui.button("Convert Legacy -> HSC 6").clicked() {
-                    match ThermoDatabase::convert_legacy_to_hsc6(&self.legacy_src_path, &self.legacy_dst_path) {
+                    match CatalogUseCases::convert_legacy_to_hsc6(db, &self.legacy_src_path, &self.legacy_dst_path) {
                         Ok(n) => self.set_status(format!("Converted {n} datasets -> sorted HSC 6.0 + .CAT at {}", self.legacy_dst_path), false),
                         Err(e) => self.set_status(format!("Legacy convert failed: {e}"), true),
                     }
@@ -1991,17 +2016,14 @@ impl SpeciesModuleState {
                 ui.add(egui::TextEdit::singleline(&mut self.csv_io_path).desired_width(300.0));
                 ui.horizontal(|ui| {
                     if ui.button(crate::i18n::text("common.031")).clicked() {
-                        let csv = db.export_csv(self.source_filter);
+                        let csv = CatalogUseCases::export_csv(db, self.source_filter);
                         match crate::storage::write_atomic(&self.csv_io_path, csv) {
                             Ok(_) => self.set_status(format!("CSV saved -> {}", self.csv_io_path), false),
                             Err(e) => self.set_status(format!("{e}"), true),
                         }
                     }
                     if ui.button("Import CSV -> OwnDB").clicked() {
-                        match std::fs::read_to_string(&self.csv_io_path)
-                            .map_err(|e| format!("{e}"))
-                            .and_then(|s| db.import_csv_into_own(&s).map_err(|e| format!("{e}")))
-                        {
+                        match CatalogUseCases::import_csv_file_into_own(db, &self.csv_io_path) {
                             Ok(n) => {
                                 self.refresh_search(db);
                                 self.set_status(format!("Imported {n} datasets into OwnDB from CSV."), false);
@@ -2018,7 +2040,8 @@ impl SpeciesModuleState {
                 ui.horizontal(|ui| {
                     ui.strong(format!("Duplicate Species Resolution ({})", self.merge_conflicts.len()));
                     if ui.button("Apply Merge Decisions").clicked() {
-                        match ThermoDatabase::merge_hsc_files(
+                        match CatalogUseCases::merge_hsc_files(
+                            db,
                             &self.merge_src_path,
                             &self.merge_dst_path,
                             &self.merge_decisions,
@@ -2050,7 +2073,7 @@ impl SpeciesModuleState {
                 ui.strong("Bibliographic Dictionary (MainDB6.REF)");
                 ui.add(egui::TextEdit::singleline(&mut self.ref_search_query).hint_text("Filter key or author (e.g. Barin, JANAF, SGTE)"));
             });
-            let refs: Vec<ReferenceEntry> = db.search_references(&self.ref_search_query, 150);
+            let refs: Vec<ReferenceEntry> = CatalogUseCases::search_references(db, &self.ref_search_query, 150);
             egui::ScrollArea::vertical()
                 .id_salt("ref_dict_scroll")
                 .max_height(210.0)
@@ -2069,6 +2092,8 @@ impl SpeciesModuleState {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use soryntel_core::SpeciesRepository;
+    use soryntel_db::ThermoDatabase;
 
     #[test]
     fn test_species_ui_state_search_and_owndb_edit() {

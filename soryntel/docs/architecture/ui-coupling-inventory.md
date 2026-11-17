@@ -27,6 +27,62 @@ Columna **Tipo**: `búsqueda`, `lectura` (get puntual), `escritura` (muta el cat
 
 ---
 
+## 0. Estado de la migración (fase C)
+
+Convención: ✅ migrado, ⏳ pendiente. «Fuera de `cfg(test)`» se refiere a
+`grep -n "soryntel_db\|ThermoDatabase\|SoryntelApplication"` en el archivo.
+
+Bloque catálogo / balance / heat loss / misc (species, estimate, balance, mass_balance,
+heat_loss, elements, species_converter, lca, launcher):
+
+| Archivo | Estado | Qué se migró | Qué queda |
+|---|---|---|---|
+| `species_ui.rs` | ✅ | Recibe `&dyn SpeciesWindowCatalog` (trait local = `SpeciesCatalogPort + SpeciesDatabaseAdminPort + SpeciesBrowserPort + OwnDbEditorPort + ReferenceLibraryPort + HscFileToolsPort`, impl blanket). Los 21 métodos de `ThermoDatabase` (status, búsquedas por palabra clave/elementos/estequiometría, upsert/delete OwnDB, save/open/create OwnDB, open MainDB, sort, `.CAT`, datasets alternativos, citas, `.REF`, merge, legacy, CSV) pasan por `CatalogUseCases`. `color_spec` y `parse_carbon_limits` también. Tipos de catálogo importados de `soryntel_core::catalog` (`ReferenceEntry` ya no viene de `soryntel_db`). | Nada fuera de `cfg(test)`. Quedan constantes/DTO de `soryntel_thermo` (`PERIODIC_ELEMENTS`, `HSC_COLOR_PALETTE`, `CpFitMask`, `ExternalCpTemplate`, …). |
+| `estimate_ui.rs` | ✅ | Recibe `&dyn EstimateCatalog` (trait local = `SpeciesCatalogPort + SpeciesBrowserPort + OwnDbEditorPort + SpeciesDatabaseAdminPort`). `evaluate_estimate_row`, `generate_cp_curve`, `fit_kelley_cp`, `build_estimated_species_with_intervals`, `parse_estimate_formula`, filas de ejemplo, `compute_parity_stats` y `evaluate_species_si` → `MiscUseCases::estimate_*`. `search("", 20_000)` → `MiscUseCases::estimate_reference_species` (`SpeciesBrowserPort::iter_species`, mismo orden y tope). Escritura en OwnDB → `CatalogUseCases::save_own_species`; guardado → `CatalogUseCases::save_own_db_creating_dirs`; selector → `CatalogUseCases::search_species`; ruta inicial → `CatalogUseCases::status`. | Nada fuera de `cfg(test)`. Serialización `.est8`/TSV del propio sheet de la UI sigue en el módulo. |
+| `balance_ui.rs` | ✅ | `&ThermoDatabase` → `&dyn SpeciesCatalogPort`; `SoryntelApplication::*` → `BalanceUseCases` / `HeatLossUseCases`; `db.search` → `CatalogUseCases::search_species`. | Nada fuera de `cfg(test)`. `StreamGroup::new` / `SpeciesRow::new` se consideran DTO. |
+| `mass_balance_ui.rs` | ✅ (fachada) / ⏳ (dominio) | `SoryntelApplication::mb_*` → `SimulationUseCases::mb_*`. | Llamadas directas a `soryntel_thermo`: `sim::presets::empty_project` (212, 228), `evaluate_cell_uncertainty`, `default_mineral_sg`, `search_minerals_catalog` y los métodos de cálculo de `MassBalanceWorkbook` (§2.17). Necesitan métodos nuevos en `use_cases/simulation.rs` (fuera de este bloque). |
+| `heat_loss_ui.rs` | ✅ | `SoryntelApplication::*` → `HeatLossUseCases` (cálculos) y `MiscUseCases` (base de materiales). Presets → `HeatLossUseCases::preset(HeatLossPreset)` / `preset_oil_furnace_gas`; tablas integradas → `HeatLossUseCases::builtin_tables`; `MaterialDatabase::with_hsc_defaults` → `HeatLossUseCases::default_material_database`; `target::apply_variable` → `HeatLossUseCases::apply_target_variable`. | Solo DTO de `soryntel_thermo::heat_loss`. `MaterialCatalogPort` sigue siendo candidato si la base de materiales llega a persistirse. |
+| `elements_ui.rs` | ✅ | `SoryntelApplication::*` → `MiscUseCases`; `find_element_index_by_symbol` → `MiscUseCases::element_index`; `to_csv` → `MiscUseCases::export_elements_csv`; `SpeciesCatalogPort` desde `soryntel_core`. | `PERIODIC_ELEMENTS` y métodos de modelo (`diagram_property_indices`, `add_custom_row`). |
+| `species_converter_ui.rs` | ✅ | `SoryntelApplication::*` → `MiscUseCases`; `SpeciesCatalogPort` desde `soryntel_core`. | `serde_json` de `Vec<ConverterSheet>` (tipo propio de la UI, se deja en el módulo). |
+| `lca_ui.rs` | ✅ (fachada) / ⏳ (dominio) | `SoryntelApplication::sim_lca_*` → `SimulationUseCases::sim_lca_*`. | Métodos de modelo LCA, `probe_openlca_ipc`, import JSON-LD/hojas externas (§2.18). Necesitan `LcaUseCases`/`OpenLcaPort` en `simulation.rs` (fuera de este bloque). |
+| `launcher_ui.rs` | ✅ (sin acoplamientos) | — | — |
+| `main.rs` (call sites de estos módulos) | ✅ parcial | `balance_ui`, `species_converter_ui`, `elements_ui` reciben `services.catalog()`; los contadores del lanzador usan `CatalogUseCases::species_count(services.catalog())`. | `estimate_ui` y `species_ui` siguen recibiendo `services.legacy_db()` / `legacy_db_mut()` (coerción a `&dyn EstimateCatalog` / `&mut dyn SpeciesWindowCatalog`) porque `AppServices` no expone aún un accesor con esos puertos combinados. |
+
+Casos de uso añadidos en este bloque:
+
+- `CatalogUseCases` (`use_cases/catalog.rs`): `status`, `open_main_db`, `open_own_db`,
+  `save_own_db`, `save_own_db_creating_dirs`, `create_empty_own_db`, `sort_layer`,
+  `refresh_catalogues`, `parse_carbon_filter`, `browse_keyword`, `browse_elements`,
+  `browse_stoichiometry`, `all_species`, `datasets_for`, `select_dataset`,
+  `species_with_metadata`, `save_own_species`, `delete_own_species`, `export_csv`,
+  `import_csv_into_own`, `import_csv_file_into_own`, `load_references`, `citations_for`,
+  `search_references`, `merge_hsc_files`, `convert_legacy_to_hsc6`; función libre
+  `catalog_error_message(CatalogError) -> String` (devuelve el texto original del backend para
+  no cambiar los mensajes de la UI).
+- `MiscUseCases` (`use_cases/misc.rs`): `estimate_default_rows`, `estimate_classic_rows`,
+  `estimate_fig5_oxides_rows`, `estimate_parse_formula`, `estimate_cp_curve`,
+  `estimate_fit_kelley`, `estimate_build_species`, `estimate_parity_stats`,
+  `estimate_species_point`, `estimate_reference_species` (+ constante
+  `ESTIMATE_PARITY_DB_LIMIT`), `element_index`, `export_elements_csv`.
+- `HeatLossUseCases` (`use_cases/heat_loss.rs`): `preset(HeatLossPreset)`,
+  `preset_oil_furnace_gas`, `builtin_tables() -> HeatLossBuiltinTables`,
+  `default_material_database`, `apply_target_variable`.
+
+Pendiente para `AppServices` (`composition.rs`, fuera de este bloque): accesores que devuelvan el
+catálogo con los puertos combinados, p. ej. `catalog_admin(&self) -> &dyn …` y
+`catalog_admin_mut(&mut self) -> &mut (dyn SpeciesCatalogPort + SpeciesDatabaseAdminPort +
+SpeciesBrowserPort + OwnDbEditorPort + ReferenceLibraryPort + HscFileToolsPort)`. Como un
+`dyn` no puede nombrar varios traits no-auto, lo práctico es definir en `soryntel-core` (o en
+`composition.rs`) un trait combinado `SpeciesWorkspacePort` con impl blanket y devolver
+`&mut dyn SpeciesWorkspacePort`. Ojo: un `&mut dyn SpeciesWorkspacePort` no se convierte en
+`&mut dyn SpeciesWindowCatalog` por la impl blanket (solo hay upcasting hacia supertraits), así
+que al introducirlo hay que cambiar las firmas de `species_ui` / `estimate_ui` a
+`&mut dyn SpeciesWorkspacePort` (o hacer de los traits locales un alias de él); dentro, el
+upcasting a cada puerto individual sigue funcionando. Con eso se retiran los dos últimos `legacy_db*()` de estos
+módulos.
+
+---
+
 ## 1. Resumen ejecutivo
 
 ### Hallazgos principales
@@ -141,6 +197,10 @@ Tipos importados: `ThermoDatabase`; `soryntel_thermo::excel_addins::{AddInUnits,
 
 ### 2.2 `soryntel-desktop/src/species_ui.rs` (navegador y gestor de bases)
 
+> **Estado:** ✅ migrado. Todas las filas de esta tabla pasan por `CatalogUseCases` sobre
+> `&dyn SpeciesWindowCatalog`; `ReferenceEntry` y los tipos de catálogo vienen de
+> `soryntel_core::catalog`. Solo el test usa `ThermoDatabase`. Ver §0.
+
 Tipos importados: `soryntel_db::hsc_binary::ReferenceEntry`, `ThermoDatabase`;
 `soryntel_thermo::species::{DbSource, SpeciesCatalogEntry, PhaseFilterFlags, KeywordSearchField,
 ElementSearchMode, DbMergeConflict, MergeConflictDecision, CpFitMask, CpDataPoint, …}`;
@@ -202,6 +262,10 @@ EquilibriumParams, EquilibriumWorkbookFile, …}`, `Phase`, `SpeciesRepository`.
 | 4470–4474, 4536–4541 | `with_open_defaults`, `load_main_hsc(hsc_path)`, `run_calculate(&db)` | test | Tests contra un `Maindb6.HSC` real | adaptador en memoria |
 
 ### 2.4 `soryntel-desktop/src/estimate_ui.rs`
+
+> **Estado:** ✅ migrado (`&dyn EstimateCatalog`, `MiscUseCases::estimate_*`,
+> `CatalogUseCases`; `search("", 20_000)` sustituido por `iter_species` con el mismo orden y
+> tope). Ver §0.
 
 Tipos importados: `ThermoDatabase`; `soryntel_thermo::estimate::{EstimateRow, …}`,
 `KelleyCoefficients`, `Phase`.
@@ -336,6 +400,9 @@ ReactionCollectedSheet, ReactionWorkbookFile, ReactionYAxis}` (DTO).
 
 ### 2.13 `soryntel-desktop/src/balance_ui.rs`
 
+> **Estado:** ✅ migrado (`&dyn SpeciesCatalogPort`, `BalanceUseCases`, `HeatLossUseCases`,
+> `CatalogUseCases::search_species`). Ver §0.
+
 Tipos importados: `ThermoDatabase`; `soryntel_thermo::balance_engine::{BalanceWorkbook, StreamGroup,
 SpeciesRow, …}`.
 
@@ -365,6 +432,10 @@ MergedPitzerCatalog, …}`, `aqua_pitzer_data::{PitzerDatabase, PitzerTempCurve,
 
 ### 2.15 `soryntel-desktop/src/elements_ui.rs`, `species_converter_ui.rs`, `water_ui.rs` (ya con puerto)
 
+> **Estado:** ✅ `elements_ui` y `species_converter_ui` migrados (`MiscUseCases`, puerto desde
+> `soryntel_core`; añadidos `element_index` y `export_elements_csv`). Queda la serialización de
+> `ConverterSheet`, que es un tipo de la UI. `water_ui` no es de este bloque.
+
 Los tres reciben `&dyn SpeciesCatalogPort`, que se importa desde `soryntel_thermo`. Conviene
 importarlo de `soryntel_core`.
 
@@ -384,6 +455,9 @@ importarlo de `soryntel_core`.
 
 ### 2.16 `soryntel-desktop/src/heat_loss_ui.rs` (sin `ThermoDatabase`)
 
+> **Estado:** ✅ migrado (presets, tablas integradas, base de materiales y `apply_variable` →
+> `HeatLossUseCases`; la antigua fachada → `HeatLossUseCases` / `MiscUseCases`). Ver §0.
+
 | Línea | Llamada | Tipo | Qué hace | Caso de uso / firma sugerida |
 |---|---|---|---|---|
 | 166, 398–414, 622–634 | `preset_hotwatertank/smelting1/radiator/simple_case/oil_furnace()` | infra | Presets de workbook | `HeatLossUseCases::preset(kind) -> HeatLossWorkbook` |
@@ -397,6 +471,9 @@ El resto de cálculos ya pasa por `SoryntelApplication::solve_heat_loss_*` / `ge
 
 ### 2.17 `soryntel-desktop/src/mass_balance_ui.rs` (sin `ThermoDatabase`)
 
+> **Estado:** ✅ `SoryntelApplication::mb_*` → `SimulationUseCases`. ⏳ Las filas de esta tabla
+> siguen pendientes: necesitan métodos nuevos en `use_cases/simulation.rs`. Ver §0.
+
 | Línea | Llamada | Tipo | Qué hace | Caso de uso / firma sugerida |
 |---|---|---|---|---|
 | 212, 228 | `soryntel_thermo::sim::presets::empty_project()` | infra | Proyecto vacío | `SimulationUseCases::empty_project()` |
@@ -408,6 +485,10 @@ El resto de cálculos ya pasa por `SoryntelApplication::solve_heat_loss_*` / `ge
 | 652, 4159 | `serde_json` de `MassBalanceWorkbook` | archivo | Exportar/importar JSON | `MassBalanceUseCases::serialize/deserialize` |
 
 ### 2.18 `soryntel-desktop/src/lca_ui.rs` (sin `ThermoDatabase`)
+
+> **Estado:** ✅ `SoryntelApplication::sim_lca_*` → `SimulationUseCases`. ⏳ Las filas de esta
+> tabla siguen pendientes: necesitan `LcaUseCases` / `OpenLcaPort` en `use_cases/simulation.rs`.
+> Ver §0.
 
 | Línea | Llamada | Tipo | Qué hace | Caso de uso / firma sugerida |
 |---|---|---|---|---|
@@ -457,6 +538,8 @@ La ejecución ya pasa por `SoryntelApplication::sim_*`.
 ### 2.22 Archivos sin acoplamientos relevantes
 
 `excel_grid.rs` y `launcher_ui.rs` no usan nada (`launcher_ui` recibe el conteo como `usize`).
+Desde esta fase `main.rs` calcula ese conteo con
+`CatalogUseCases::species_count(services.catalog())`.
 
 ### 2.23 `soryntel-app/src/main.rs` (CLI + servidor HTTP)
 
