@@ -3,10 +3,19 @@
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
+pub mod catalog;
 pub mod ports;
 pub mod species;
 
-pub use ports::{CatalogError, SpeciesCatalogPort, SpeciesRepository};
+pub use catalog::{
+    DatabaseStatusSummary, DbMergeConflict, DbSource, ElementSearchMode, KeywordSearchField,
+    MainDbPrecedence, MergeConflictDecision, PhaseFilterFlags, ReferenceEntry,
+    SpeciesCatalogEntry, SpeciesDataset,
+};
+pub use ports::{
+    CatalogError, DatabaseLocatorPort, HscFileToolsPort, OwnDbEditorPort, ReferenceLibraryPort,
+    SpeciesBrowserPort, SpeciesCatalogPort, SpeciesDatabaseAdminPort, SpeciesRepository,
+};
 pub use species::{
     ChemicalSpecies, KelleyCoefficients, Phase, SpeciesMetadata, SpeciesThermoInterval,
     ThermoPointSI,

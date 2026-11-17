@@ -1,6 +1,5 @@
 //! Binary `.HSC` / `.REF` / `.CAT` codecs and legacy/CSV/JSON interchange helpers (HSC 2.0–6.0).
 
-use serde::{Deserialize, Serialize};
 use soryntel_core::{SoryntelError, CAL_TO_JOULE};
 use soryntel_thermo::species::{
     compute_molecular_weight, formula_sort_key, SpeciesDataset,
@@ -12,13 +11,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::fs;
 use std::path::{Path, PathBuf};
 
-/// One entry in `MainDB6.REF` (293 bytes fixed-length record).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ReferenceEntry {
-    pub key: String,
-    pub citation: String,
-    pub flag: u8,
-}
+pub use soryntel_core::catalog::ReferenceEntry;
 
 /// Decoded raw 256-byte `.HSC` binary record before interval grouping.
 #[derive(Debug, Clone)]
