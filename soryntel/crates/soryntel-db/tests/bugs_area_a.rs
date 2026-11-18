@@ -134,7 +134,6 @@ fn a03_import_csv_conserva_todos_los_datasets() {
 
 // A04: un nombre con salto de línea se exporta entrecomillado pero el import rompe la fila.
 #[test]
-#[ignore = "BUG-A04: import_datasets_csv parte por líneas antes de respetar comillas (campo con \\n)"]
 fn a04_csv_ida_y_vuelta_con_salto_de_linea_en_campo() {
     let mut sp = one_interval("Al2O3", "Corindón\nα-alúmina", 298.15, 1000.0);
     sp.intervals[0].reference = "Barin 93, \"JANAF\"".into();
@@ -146,7 +145,6 @@ fn a04_csv_ida_y_vuelta_con_salto_de_linea_en_campo() {
 
 // A05: CSV con BOM UTF-8 (Excel) o con línea en blanco antes de la cabecera crea una especie "Formula".
 #[test]
-#[ignore = "BUG-A05: la cabecera solo se detecta en la línea 0 sin BOM; si no, se importa como especie"]
 fn a05_csv_con_bom_o_linea_en_blanco_no_importa_la_cabecera() {
     let csv = export_datasets_csv(&[ds(one_interval("Al2O3", "x", 298.15, 1000.0), 0)]);
     for variant in [format!("\u{feff}{csv}"), format!("\n{csv}")] {
@@ -158,7 +156,6 @@ fn a05_csv_con_bom_o_linea_en_blanco_no_importa_la_cabecera() {
 
 // A06: valores numéricos ilegibles se sustituyen en silencio por valores por defecto.
 #[test]
-#[ignore = "BUG-A06: import_datasets_csv usa unwrap_or(298.15/1000/0) en vez de devolver error"]
 fn a06_csv_con_numeros_invalidos_devuelve_error() {
     // T1/T2 y H ilegibles (coma decimal europea entrecomillada): hoy se importan 298.15..1000 K y H=0.
     let line = "Al2O3,,,,,101.96,0,0,\"298,15\",\"2327,0\",s,\"-400,5\",12.177,2.337,70.441,-0.594,-47.365";
@@ -168,7 +165,6 @@ fn a06_csv_con_numeros_invalidos_devuelve_error() {
 
 // A07: separador ';' no se detecta si un campo entrecomillado contiene ','.
 #[test]
-#[ignore = "BUG-A07: detección de separador ';' falla si cualquier campo contiene ','"]
 fn a07_csv_punto_y_coma_con_coma_en_referencia() {
     let line = "Al2O3;;Aluminum oxide;;;101.96;0;0;298.15;800;s;-400.5;12.177;2.337;70.441;-0.594;-47.365;3.97;0;-;\"Barin 77, JANAF 98\";1";
     let back = import_datasets_csv(line, DbSource::Own).expect("fila ';' válida");
@@ -178,7 +174,6 @@ fn a07_csv_punto_y_coma_con_coma_en_referencia() {
 
 // A08: convert_legacy_to_hsc6 trata como binario cualquier CSV cuyo tamaño sea múltiplo de 256.
 #[test]
-#[ignore = "BUG-A08: convert_legacy_to_hsc6 elige binario/CSV solo por len % 256"]
 fn a08_convertir_csv_de_tamano_multiplo_de_256() {
     let tmp = TempDir::new("a08");
     let mut csv = export_datasets_csv(&[ds(one_interval("Al2O3", "x", 298.15, 1000.0), 0)]);
@@ -202,7 +197,6 @@ fn a08_convertir_csv_de_tamano_multiplo_de_256() {
 
 // A09: 'ÿ' (U+00FF) se codifica como 0xFF, que el decodificador toma como terminador.
 #[test]
-#[ignore = "BUG-A09: encode_cp1252_fixed escribe 0xFF para 'ÿ' y decode_cp1252 corta ahí"]
 fn a09_ida_y_vuelta_con_y_dieresis() {
     let back = roundtrip(&[ds(one_interval("Al2O3", "Aÿb óxido", 298.15, 1000.0), 0)]);
     assert_eq!(back[0].species.name, "Aÿb óxido");
@@ -238,7 +232,6 @@ fn a11_formulas_largas_no_colisionan() {
 
 // A12: una especie sin intervalos desaparece al guardar OwnDB (y save informa que se guardó).
 #[test]
-#[ignore = "BUG-A12: save_own_hsc descarta especies sin intervalos y devuelve el conteo como si se guardaran"]
 fn a12_guardar_especie_sin_intervalos() {
     let tmp = TempDir::new("a12");
     let path = tmp.path("own.HSC");
@@ -246,15 +239,13 @@ fn a12_guardar_especie_sin_intervalos() {
     let mut sp = one_interval("ZrO2", "sin datos aún", 298.15, 1000.0);
     sp.intervals.clear();
     db.insert_species(sp);
-    let saved = db.save_own_hsc(&path).unwrap();
-    let mut reloaded = ThermoDatabase::default();
-    let (unique, _) = reloaded.load_own_hsc(&path).unwrap();
-    assert_eq!(unique, saved, "save_own_hsc dijo {saved} especie(s) y al recargar hay {unique}");
+    let error = db.save_own_hsc(&path).unwrap_err().to_string();
+    assert!(error.contains("ZrO2") && error.contains("interval"), "{error}");
+    assert!(!path.exists());
 }
 
 // A13: el .CAT cuenta 1 registro por dataset sin intervalos, pero el .HSC no escribe ninguno.
 #[test]
-#[ignore = "BUG-A13: write_catalogue_file usa intervals.len().max(1); offsets desplazados"]
 fn a13_cat_offsets_con_dataset_vacio() {
     let tmp = TempDir::new("a13");
     let hsc = tmp.path("x.HSC");
@@ -271,7 +262,6 @@ fn a13_cat_offsets_con_dataset_vacio() {
 
 // A14: el parser acepta registros con T1/T2 = NaN.
 #[test]
-#[ignore = "BUG-A14: parse_hsc_binary_records no filtra T1/T2 NaN (comparaciones con NaN son false)"]
 fn a14_registro_con_temperaturas_nan_se_descarta() {
     let mut bytes = serialize_datasets_to_hsc(&[ds(one_interval("Al2O3", "x", 298.15, 1000.0), 0)]);
     bytes[0xA4..0xA8].copy_from_slice(&f32::NAN.to_le_bytes());
@@ -375,7 +365,6 @@ fn a19_error_al_escribir_cat_se_propaga() {
 
 // A20: un .HSC truncado (longitud no múltiplo de 256) se acepta sin aviso.
 #[test]
-#[ignore = "BUG-A20: parse_hsc_binary_records ignora en silencio los bytes finales de un registro truncado"]
 fn a20_hsc_truncado_se_rechaza_o_avisa() {
     let mut bytes = serialize_datasets_to_hsc(&two_alt_datasets("Al2O3"));
     bytes.truncate(bytes.len() - 100);
@@ -384,7 +373,6 @@ fn a20_hsc_truncado_se_rechaza_o_avisa() {
 
 // A21: la carga de un ion sin sufijo HSC pierde carga y fase en la ida y vuelta.
 #[test]
-#[ignore = "BUG-A21: charge no se guarda en .HSC; se reinfiere del sufijo y AqueousIon pasa a AqueousNeutral"]
 fn a21_ida_y_vuelta_de_ion_sin_sufijo_hsc() {
     let mut sp = one_interval("NH4+", "amonio", 298.15, 373.15);
     sp.phase = Phase::AqueousIon;
@@ -446,4 +434,17 @@ fn a25_escritura_atomica_limpia_temporal_si_falla_rename() {
     assert!(db.create_empty_own_hsc(&path).is_err());
     assert_eq!(std::fs::read(marker).unwrap(), b"original");
     assert_eq!(std::fs::read_dir(path.parent().unwrap()).unwrap().count(), 1);
+}
+
+#[test]
+fn a03_csv_conserva_limites_de_datasets_contiguos() {
+    let input = vec![
+        ds(one_interval("Al2O3", "primario", 298.15, 500.0), 0),
+        ds(one_interval("Al2O3", "alternativo", 500.0, 900.0), 1),
+    ];
+    let mut db = ThermoDatabase::default();
+    assert_eq!(db.import_csv_into_own(&export_datasets_csv(&input)).unwrap(), 2);
+    let datasets = db.get_all_datasets_for(DbSource::Own, "Al2O3");
+    assert_eq!(datasets.len(), 2);
+    assert_eq!(datasets[1].species.name, "alternativo");
 }

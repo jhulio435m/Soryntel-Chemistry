@@ -79,7 +79,6 @@ fn a31_mw_del_electron() {
 
 // A32: notación de carga con número antes del signo ("Fe2+") se interpreta como Fe2 con carga +1.
 #[test]
-#[ignore = "BUG-A32: extract_charge trata 'Fe2+' como Fe2 (+1) en vez de Fe (+2) o error de ambigüedad"]
 fn a32_carga_fe2_mas() {
     let p = parse_species("Fe2+").unwrap();
     assert_eq!((p.composition.get("Fe").copied(), p.charge), (Some(1.0), 2));
@@ -87,7 +86,6 @@ fn a32_carga_fe2_mas() {
 
 // A33: la notación HSC de iones acuosos (`Na(+a)`, `SO4(-2a)`) no se reconoce.
 #[test]
-#[ignore = "BUG-A33: parse_species rechaza la notación HSC 'X(+a)'/'X(-2a)' que usa el resto del workspace"]
 fn a33_notacion_hsc_de_iones() {
     let na = parse_species("Na(+a)").expect("Na(+a)");
     assert_eq!(na.charge, 1);
@@ -136,4 +134,18 @@ fn a36_temperatura_fuera_de_rango_se_senala() {
 #[test]
 fn bal_sigue_funcionando_en_casos_basicos() {
     assert_eq!(bal("H2 + O2 = H2O", 1.0).unwrap(), "2 H2 + O2 = 2 H2O");
+}
+
+#[test]
+fn a32_balanceo_de_iones_y_variantes_de_carga() {
+    for formula in ["Fe2+", "Fe+2", "Fe[2+]", "Fe(+2a)"] {
+        let ion = parse_species(formula).unwrap();
+        assert_eq!(ion.charge, 2);
+        assert_eq!(ion.composition.get("Fe"), Some(&1.0));
+    }
+    let sulfate = parse_species("SO42-").unwrap();
+    assert_eq!(sulfate.charge, -2);
+    assert_eq!(sulfate.composition.get("O"), Some(&4.0));
+    let balanced = bal("Fe2+ + Ce4+ = Fe3+ + Ce3+", 1.0).unwrap();
+    assert_eq!(balanced, "Fe2+ + Ce4+ = Fe3+ + Ce3+");
 }

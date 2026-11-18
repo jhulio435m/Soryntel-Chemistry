@@ -175,7 +175,7 @@ impl ThermoDatabase {
             .get(&(source, formula.to_string()))
             .copied()
             .unwrap_or(0);
-        list.get(idx).or_else(|| list.first()).cloned()
+        list.iter().find(|dataset| dataset.dataset_index == idx).or_else(|| list.first()).cloned()
     }
 
     /// Insert or update a species in the high-priority `OwnDB` layer so all calculation modules
@@ -261,12 +261,12 @@ impl ThermoDatabase {
             DbSource::Main => self
                 .main_datasets
                 .get(formula)
-                .map(|v| dataset_index < v.len())
+                .map(|v| v.iter().any(|dataset| dataset.dataset_index == dataset_index))
                 .unwrap_or(false),
             DbSource::Own => self
                 .own_datasets
                 .get(formula)
-                .map(|v| dataset_index < v.len())
+                .map(|v| v.iter().any(|dataset| dataset.dataset_index == dataset_index))
                 .unwrap_or(false),
             DbSource::OpenDefault => false,
         };
@@ -534,13 +534,22 @@ impl ThermoDatabase {
         let bytes = fs::read(src_path.as_ref()).map_err(|e| {
             SoryntelError::DatabaseError(format!("Cannot read {}: {e}", src_path.as_ref().display()))
         })?;
-        let datasets = if bytes.len() >= 256 && bytes.len() % 256 == 0 {
+        let text = std::str::from_utf8(&bytes).ok();
+        let extension = src_path.as_ref().extension().and_then(|value| value.to_str());
+        let csv = extension.is_some_and(|value| value.eq_ignore_ascii_case("csv"))
+            || text.is_some_and(|value| {
+                let first = value.trim_start_matches(|ch: char| ch == '\u{feff}' || ch.is_whitespace());
+                first.get(..8).is_some_and(|prefix| {
+                    prefix.eq_ignore_ascii_case("formula,") || prefix.eq_ignore_ascii_case("formula;")
+                })
+            });
+        let datasets = if !csv {
             let (recs, _) = parse_hsc_binary_records(&bytes)?;
             let (ord, map) = group_records_to_datasets(recs, DbSource::Main);
             ord.into_iter().filter_map(|f| map.get(&f).cloned()).flatten().collect()
         } else {
-            let txt = String::from_utf8_lossy(&bytes);
-            import_datasets_csv(&txt, DbSource::Main)?
+            let text = text.ok_or_else(|| SoryntelError::ParseError("CSV is not UTF-8".into()))?;
+            import_datasets_csv(text, DbSource::Main)?
         };
         let upgraded = upgrade_legacy_datasets(datasets);
         let out_bytes = serialize_datasets_checked(&upgraded)?;

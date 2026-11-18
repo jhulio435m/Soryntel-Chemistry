@@ -45,9 +45,12 @@ const CP1252_80_9F: [char; 32] = [
     '\u{02DC}', '\u{2122}', '\u{0161}', '\u{203A}', '\u{0153}', '\u{009D}', '\u{017E}', '\u{0178}',
 ];
 
-/// Decode a Windows-1252 (CP1252 / Latin-1) fixed-width field trimmed at NUL/0xFF and spaces.
+/// Decode a Windows-1252 (CP1252 / Latin-1) fixed-width field trimmed at NUL and spaces (all-0xFF fields are blank).
 pub fn decode_cp1252(bytes: &[u8]) -> String {
-    let end = bytes.iter().position(|&b| b == 0 || b == 0xFF).unwrap_or(bytes.len());
+    let end = bytes.iter().position(|&b| b == 0).unwrap_or(bytes.len());
+    if bytes[..end].iter().all(|&byte| byte == 0xFF) {
+        return String::new();
+    }
     let mut out = String::with_capacity(end);
     for &b in &bytes[..end] {
         let ch = if (0x80..=0x9F).contains(&b) {
@@ -83,14 +86,13 @@ pub fn encode_cp1252_fixed(text: &str, width: usize) -> Vec<u8> {
     buf
 }
 
-fn decode_printable_ascii_or_dash(bytes: &[u8]) -> String {
-    let end = bytes.iter().position(|&b| b == 0 || b == 0xFF).unwrap_or(bytes.len());
-    let slice = &bytes[..end];
-    if slice.is_empty() || !slice.iter().all(|&b| (0x20..=0x7E).contains(&b)) {
-        return "-".into();
+fn decode_solubility(bytes: &[u8]) -> String {
+    let text = decode_cp1252(bytes);
+    if text.is_empty() || text.chars().any(char::is_control) {
+        "-".into()
+    } else {
+        text
     }
-    let s = String::from_utf8_lossy(slice).trim().to_string();
-    if s.is_empty() { "-".into() } else { s }
 }
 
 #[inline]
@@ -134,6 +136,29 @@ pub fn infer_charge(formula: &str) -> i32 {
             }
         }
     }
+    if let Some(index) = formula.rfind(['+', '-']) {
+        let (base, suffix) = formula.split_at(index);
+        if !base.is_empty() && !base.ends_with(['(', '[', '*']) {
+            if suffix == "+" || suffix == "-" {
+                // A bare sign after a polyatomic formula leaves its subscripts intact (NH4+).
+                let element = base.trim_end_matches(|ch: char| ch.is_ascii_digit());
+                let magnitude = if !element.is_empty()
+                    && element.as_bytes()[0].is_ascii_uppercase()
+                    && element.as_bytes()[1..].iter().all(u8::is_ascii_lowercase)
+                    && element.len() <= 2
+                    && element.len() < base.len()
+                {
+                    base[element.len()..].parse::<i32>().unwrap_or(0)
+                } else {
+                    1
+                };
+                return if suffix == "-" { -magnitude } else { magnitude };
+            }
+            if let Ok(charge) = suffix.parse::<i32>() {
+                return charge;
+            }
+        }
+    }
     0
 }
 
@@ -172,6 +197,13 @@ pub fn phase_to_hsc_code(phase: Phase, raw_hint: &str) -> &'static str {
 /// Returns `(valid_records, total_256_slots)`.
 pub fn parse_hsc_binary_records(buf: &[u8]) -> Result<(Vec<RawHscRecord>, usize), SoryntelError> {
     let n_recs = buf.len() / 256;
+    let offset = n_recs * 256;
+    if buf.len() != offset {
+        return Err(SoryntelError::DatabaseError(format!(
+            "Incomplete HSC record at offset {offset}: {} bytes available, expected 256 (file size {})",
+            buf.len() - offset, buf.len()
+        )));
+    }
     if n_recs == 0 {
         return Err(SoryntelError::DatabaseError(
             "File is smaller than a single 256-byte HSC record".into(),
@@ -184,7 +216,7 @@ pub fn parse_hsc_binary_records(buf: &[u8]) -> Result<(Vec<RawHscRecord>, usize)
         let t1 = read_f32(rec, 0xA4) as f64;
         let t2 = read_f32(rec, 0xA8) as f64;
         // HSC OWNDB6.HSC uses sentinel `'0'` records when empty
-        if formula.is_empty() || (formula == "0" && t2 <= t1) || t2 <= t1 || t1 < 0.0 {
+        if formula.is_empty() || formula == "0" || !t1.is_finite() || !t2.is_finite() || t2 <= t1 || t1 < 0.0 {
             continue;
         }
         let structural_formula = decode_cp1252(&rec[0x18..0x38]);
@@ -203,7 +235,7 @@ pub fn parse_hsc_binary_records(buf: &[u8]) -> Result<(Vec<RawHscRecord>, usize)
         let d_cal = read_f32(rec, 0xC2) as f64;
         let density = read_f32(rec, 0xC6) as f64;
         let color_code = read_i16(rec, 0xCA);
-        let solubility = decode_printable_ascii_or_dash(&rec[0xCC..0xDA]);
+        let solubility = decode_solubility(&rec[0xCC..0xDA]);
         let reference = decode_cp1252(&rec[0xDA..0xFE]);
         let reliability_class = read_i16(rec, 0xFE);
 
@@ -273,44 +305,50 @@ pub fn group_records_to_datasets(
         }
         chunks.push(&recs[start..]);
 
-        let charge = infer_charge(formula);
-        let mut ds_list = Vec::with_capacity(chunks.len());
-        for (ds_idx, chunk) in chunks.into_iter().enumerate() {
-            let first = &chunk[0];
-            let meta = merge_chunk_metadata(chunk);
-            let intervals: Vec<SpeciesThermoInterval> = chunk
-                .iter()
-                .map(|r| SpeciesThermoInterval {
-                    t_min: r.t1,
-                    t_max: r.t2,
-                    phase: r.phase,
-                    kelley: r.kelley_j,
-                    h_or_delta_h_tr: r.h_j,
-                    s_or_delta_s_tr: r.s_j,
-                    reference: r.reference.clone(),
-                })
-                .collect();
-            let sp = ChemicalSpecies {
-                formula: formula.clone(),
-                name: first.name.clone(),
-                phase: first.phase,
-                molecular_weight: first.mw,
-                density_g_cm3: first.density,
-                charge,
-                intervals,
-            };
-            ds_list.push(SpeciesDataset {
-                source,
-                species: sp,
-                metadata: meta,
-                dataset_index: ds_idx,
-                raw_phase_code: first.raw_phase.clone(),
-            });
-        }
+        let ds_list = chunks.into_iter().enumerate()
+            .map(|(index, chunk)| build_dataset(chunk, source, index))
+            .collect();
         datasets_map.insert(formula.clone(), ds_list);
     }
 
     (order, datasets_map)
+}
+
+fn build_dataset(
+    chunk: &[RawHscRecord],
+    source: soryntel_thermo::species::DbSource,
+    dataset_index: usize,
+) -> SpeciesDataset {
+    let first = &chunk[0];
+    let meta = merge_chunk_metadata(chunk);
+    let intervals: Vec<SpeciesThermoInterval> = chunk
+        .iter()
+        .map(|r| SpeciesThermoInterval {
+            t_min: r.t1,
+            t_max: r.t2,
+            phase: r.phase,
+            kelley: r.kelley_j,
+            h_or_delta_h_tr: r.h_j,
+            s_or_delta_s_tr: r.s_j,
+            reference: r.reference.clone(),
+        })
+        .collect();
+    let sp = ChemicalSpecies {
+        formula: first.formula.clone(),
+        name: first.name.clone(),
+        phase: first.phase,
+        molecular_weight: first.mw,
+        density_g_cm3: first.density,
+        charge: infer_charge(&first.formula),
+        intervals,
+    };
+    SpeciesDataset {
+        source,
+        species: sp,
+        metadata: meta,
+        dataset_index,
+        raw_phase_code: first.raw_phase.clone(),
+    }
 }
 
 fn merge_chunk_metadata(recs: &[RawHscRecord]) -> SpeciesMetadata {
@@ -379,6 +417,27 @@ pub fn serialize_datasets_checked(datasets: &[SpeciesDataset]) -> Result<Vec<u8>
     for ds in datasets {
         let sp = &ds.species;
         let meta = &ds.metadata;
+        if sp.intervals.is_empty() {
+            invalid.insert(format!("{} (no intervals)", sp.formula));
+        }
+        if sp.phase == Phase::AqueousIon && (sp.charge == 0 || infer_charge(&sp.formula) != sp.charge) {
+            invalid.insert(format!("{} (ionic charge cannot be recovered from formula)", sp.formula));
+        }
+        for interval in &sp.intervals {
+            let numbers = [
+                interval.t_min, interval.t_max,
+                interval.h_or_delta_h_tr / (1000.0 * CAL_TO_JOULE),
+                interval.s_or_delta_s_tr / CAL_TO_JOULE,
+                interval.kelley.a / CAL_TO_JOULE, interval.kelley.b / CAL_TO_JOULE,
+                interval.kelley.c / CAL_TO_JOULE, interval.kelley.d / CAL_TO_JOULE,
+                sp.molecular_weight, sp.density_g_cm3, meta.melting_point_k, meta.boiling_point_k,
+            ];
+            if numbers.into_iter().any(|value| !(value as f32).is_finite())
+                || interval.t_min < 0.0 || (interval.t_min as f32) >= (interval.t_max as f32)
+            {
+                invalid.insert(format!("{} (numeric values outside HSC range)", sp.formula));
+            }
+        }
         let fields = [
             ("formula", sp.formula.as_str(), 24),
             ("structural formula", meta.structural_formula.as_str(), 32),
@@ -493,8 +552,10 @@ pub fn write_catalogue_file(hsc_path: &Path, datasets: &[SpeciesDataset]) -> Res
     let mut rec_idx = 1usize;
     for ds in datasets {
         let key = formula_sort_key(&ds.species.formula).0;
-        flat.push((key, rec_idx));
-        rec_idx += ds.species.intervals.len().max(1);
+        if !ds.species.intervals.is_empty() {
+            flat.push((key, rec_idx));
+            rec_idx += ds.species.intervals.len();
+        }
     }
 
     // Standard HSC6 element prefix buckets + ASCII CAT output
@@ -522,7 +583,7 @@ pub fn write_catalogue_file(hsc_path: &Path, datasets: &[SpeciesDataset]) -> Res
 /// Export datasets to UTF-8 CSV containing all 19 HSC record columns (calories/Kelvin canonical units).
 pub fn export_datasets_csv(datasets: &[SpeciesDataset]) -> String {
     let mut out = String::from(
-        "Formula,StructuralFormula,ChemicalName,CommonName,CAS,MW,Mp_K,Bp_K,T1_K,T2_K,Phase,H_kcal,S_cal,CpA_cal,CpB_cal,CpC_cal,CpD_cal,Density_g_cm3,Color,Solubility,Reference,Reliability\n",
+        "Formula,StructuralFormula,ChemicalName,CommonName,CAS,MW,Mp_K,Bp_K,T1_K,T2_K,Phase,H_kcal,S_cal,CpA_cal,CpB_cal,CpC_cal,CpD_cal,Density_g_cm3,Color,Solubility,Reference,Reliability,DatasetIndex\n",
     );
     for ds in datasets {
         let sp = &ds.species;
@@ -535,23 +596,24 @@ pub fn export_datasets_csv(datasets: &[SpeciesDataset]) -> String {
                 csv_escape(&sp.name),
                 csv_escape(&meta.common_name),
                 csv_escape(&meta.cas_number),
-                format!("{:.4}", sp.molecular_weight),
-                format!("{:.3}", meta.melting_point_k),
-                format!("{:.3}", meta.boiling_point_k),
-                format!("{:.2}", iv.t_min),
-                format!("{:.2}", iv.t_max),
+                (sp.molecular_weight).to_string(),
+                (meta.melting_point_k).to_string(),
+                (meta.boiling_point_k).to_string(),
+                (iv.t_min).to_string(),
+                (iv.t_max).to_string(),
                 ph.to_string(),
-                format!("{:.4}", iv.h_or_delta_h_tr / (1000.0 * CAL_TO_JOULE)),
-                format!("{:.4}", iv.s_or_delta_s_tr / CAL_TO_JOULE),
-                format!("{:.4}", iv.kelley.a / CAL_TO_JOULE),
-                format!("{:.4}", iv.kelley.b / CAL_TO_JOULE),
-                format!("{:.4}", iv.kelley.c / CAL_TO_JOULE),
-                format!("{:.4}", iv.kelley.d / CAL_TO_JOULE),
-                format!("{:.4}", if idx == 0 { sp.density_g_cm3 } else { 0.0 }),
+                (iv.h_or_delta_h_tr / (1000.0 * CAL_TO_JOULE)).to_string(),
+                (iv.s_or_delta_s_tr / CAL_TO_JOULE).to_string(),
+                (iv.kelley.a / CAL_TO_JOULE).to_string(),
+                (iv.kelley.b / CAL_TO_JOULE).to_string(),
+                (iv.kelley.c / CAL_TO_JOULE).to_string(),
+                (iv.kelley.d / CAL_TO_JOULE).to_string(),
+                (if idx == 0 { sp.density_g_cm3 } else { 0.0 }).to_string(),
                 meta.color_code.to_string(),
                 csv_escape(&meta.solubility),
                 csv_escape(&iv.reference),
                 meta.reliability_class.max(1).to_string(),
+                ds.dataset_index.to_string(),
             ];
             out.push_str(&row.join(","));
             out.push('\n');
@@ -562,18 +624,35 @@ pub fn export_datasets_csv(datasets: &[SpeciesDataset]) -> String {
 
 /// Import datasets from CSV exported by `export_datasets_csv` (or HSC 2.0–style comma/semicolon table).
 pub fn import_datasets_csv(csv_text: &str, source: soryntel_thermo::species::DbSource) -> Result<Vec<SpeciesDataset>, SoryntelError> {
+    let csv_text = csv_text.trim_start_matches('\u{feff}');
+    let sep = csv_separator(csv_text.trim_start());
     let mut records = Vec::new();
-    for (line_no, raw_line) in csv_text.lines().enumerate() {
-        let line = raw_line.trim();
-        if line.is_empty() || (line_no == 0 && line.to_ascii_lowercase().starts_with("formula")) {
+    let mut explicit = BTreeMap::<(String, usize), Vec<RawHscRecord>>::new();
+    let mut explicit_order = Vec::new();
+    for (position, (line_no, cols)) in csv_rows(csv_text, sep)?.into_iter().enumerate() {
+        if position == 0 && cols[0].trim().trim_start_matches('\u{feff}').eq_ignore_ascii_case("formula") {
             continue;
         }
-        let sep = if line.contains(';') && !line.contains(',') { ';' } else { ',' };
-        let cols = split_csv_line(line, sep);
+        let invalid = |column| SoryntelError::ParseError(format!(
+            "CSV line {line_no}, column {}: invalid number", column + 1
+        ));
+        let number = |column: usize, default: f64| {
+            match cols.get(column).map(|value| value.trim()).filter(|value| !value.is_empty()) {
+                None => Ok(default),
+                Some(value) => value.parse::<f64>().ok().filter(|n| n.is_finite())
+                    .ok_or_else(|| invalid(column)),
+            }
+        };
+        let integer = |column: usize, default: i16| {
+            match cols.get(column).map(|value| value.trim()).filter(|value| !value.is_empty()) {
+                None => Ok(default),
+                Some(value) => value.parse::<i16>().map_err(|_| invalid(column)),
+            }
+        };
         if cols.len() < 17 {
             return Err(SoryntelError::ParseError(format!(
                 "CSV line {} has {} columns (expected >= 17)",
-                line_no + 1,
+                line_no,
                 cols.len()
             )));
         }
@@ -581,19 +660,19 @@ pub fn import_datasets_csv(csv_text: &str, source: soryntel_thermo::species::DbS
         if formula.is_empty() {
             continue;
         }
-        let t1 = cols[8].trim().parse::<f64>().unwrap_or(298.15);
-        let t2 = cols[9].trim().parse::<f64>().unwrap_or(1000.0);
-        if t2 <= t1 {
-            continue;
+        let t1 = number(8, 298.15)?;
+        let t2 = number(9, 1000.0)?;
+        if t1 < 0.0 || t2 <= t1 {
+            return Err(SoryntelError::ParseError(format!("CSV line {line_no}, columns 9–10: invalid temperature interval")));
         }
-        let mw_parsed = cols[5].trim().parse::<f64>().unwrap_or(0.0);
+        let mw_parsed = number(5, 0.0)?;
         let mw = if mw_parsed > 0.0 {
             mw_parsed
         } else {
             compute_molecular_weight(&formula).map(|(m, _, _)| m).unwrap_or(0.0)
         };
         let raw_phase = cols[10].trim().to_string();
-        records.push(RawHscRecord {
+        let record = RawHscRecord {
             phase: map_phase(&raw_phase, &formula),
             formula,
             structural_formula: cols[1].trim().to_string(),
@@ -601,29 +680,45 @@ pub fn import_datasets_csv(csv_text: &str, source: soryntel_thermo::species::DbS
             common_name: cols[3].trim().to_string(),
             cas_number: cols[4].trim().to_string(),
             mw,
-            mp_k: cols[6].trim().parse().unwrap_or(0.0),
-            bp_k: cols[7].trim().parse().unwrap_or(0.0),
+            mp_k: number(6, 0.0)?,
+            bp_k: number(7, 0.0)?,
             t1,
             t2,
             raw_phase,
-            h_j: cols[11].trim().parse::<f64>().unwrap_or(0.0) * 1000.0 * CAL_TO_JOULE,
-            s_j: cols[12].trim().parse::<f64>().unwrap_or(0.0) * CAL_TO_JOULE,
+            h_j: number(11, 0.0)? * 1000.0 * CAL_TO_JOULE,
+            s_j: number(12, 0.0)? * CAL_TO_JOULE,
             kelley_j: KelleyCoefficients {
-                a: cols[13].trim().parse::<f64>().unwrap_or(0.0) * CAL_TO_JOULE,
-                b: cols[14].trim().parse::<f64>().unwrap_or(0.0) * CAL_TO_JOULE,
-                c: cols[15].trim().parse::<f64>().unwrap_or(0.0) * CAL_TO_JOULE,
-                d: cols[16].trim().parse::<f64>().unwrap_or(0.0) * CAL_TO_JOULE,
+                a: number(13, 0.0)? * CAL_TO_JOULE,
+                b: number(14, 0.0)? * CAL_TO_JOULE,
+                c: number(15, 0.0)? * CAL_TO_JOULE,
+                d: number(16, 0.0)? * CAL_TO_JOULE,
             },
-            density: cols.get(17).and_then(|s| s.trim().parse().ok()).unwrap_or(0.0),
-            color_code: cols.get(18).and_then(|s| s.trim().parse().ok()).unwrap_or(0),
+            density: number(17, 0.0)?,
+            color_code: integer(18, 0)?,
             solubility: cols
                 .get(19)
                 .map(|s| s.trim().to_string())
                 .filter(|s| !s.is_empty())
                 .unwrap_or_else(|| "-".into()),
             reference: cols.get(20).map(|s| s.trim().to_string()).unwrap_or_default(),
-            reliability_class: cols.get(21).and_then(|s| s.trim().parse().ok()).unwrap_or(1),
-        });
+            reliability_class: integer(21, 1)?,
+        };
+        if let Some(raw) = cols.get(22).filter(|raw| !raw.trim().is_empty()) {
+            let index = raw.trim().parse::<usize>().map_err(|_| invalid(22))?;
+            let key = (record.formula.clone(), index);
+            explicit.entry(key.clone()).or_insert_with(|| {
+                explicit_order.push(key);
+                Vec::new()
+            }).push(record);
+        } else {
+            records.push(record);
+        }
+    }
+    if !records.is_empty() && !explicit.is_empty() {
+        return Err(SoryntelError::ParseError("CSV mixes rows with and without DatasetIndex".into()));
+    }
+    if !explicit.is_empty() {
+        return Ok(explicit_order.into_iter().map(|key| build_dataset(&explicit[&key], source, key.1)).collect());
     }
     let (order, map) = group_records_to_datasets(records, source);
     let mut out = Vec::new();
@@ -664,34 +759,95 @@ pub fn upgrade_legacy_datasets(mut datasets: Vec<SpeciesDataset>) -> Vec<Species
 }
 
 fn csv_escape(s: &str) -> String {
-    if s.contains(',') || s.contains('"') || s.contains('\n') {
+    if s.contains(',') || s.contains('"') || s.contains(['\n', '\r']) {
         format!("\"{}\"", s.replace('"', "\"\""))
     } else {
         s.to_string()
     }
 }
 
-fn split_csv_line(line: &str, sep: char) -> Vec<String> {
-    let mut out = Vec::new();
-    let mut cur = String::new();
-    let mut in_quotes = false;
-    let mut chars = line.chars().peekable();
-    while let Some(c) = chars.next() {
-        if c == '"' {
-            if in_quotes && chars.peek() == Some(&'"') {
-                cur.push('"');
-                chars.next();
-            } else {
-                in_quotes = !in_quotes;
-            }
-        } else if c == sep && !in_quotes {
-            out.push(std::mem::take(&mut cur));
-        } else {
-            cur.push(c);
+fn csv_separator(text: &str) -> char {
+    let mut quoted = false;
+    let mut commas = 0;
+    let mut semicolons = 0;
+    for ch in text.chars() {
+        match ch {
+            '"' => quoted = !quoted,
+            ',' if !quoted => commas += 1,
+            ';' if !quoted => semicolons += 1,
+            '\n' | '\r' if !quoted => break,
+            _ => {}
         }
     }
-    out.push(cur);
-    out
+    if semicolons > commas { ';' } else { ',' }
+}
+
+fn csv_rows(text: &str, separator: char) -> Result<Vec<(usize, Vec<String>)>, SoryntelError> {
+    let mut rows = Vec::new();
+    let mut fields = Vec::new();
+    let mut field = String::new();
+    let mut chars = text.chars().peekable();
+    let mut quoted = false;
+    let mut closed_quote = false;
+    let mut line = 1;
+    let mut row_start = 1;
+    while let Some(ch) = chars.next() {
+        match ch {
+            '"' if quoted && chars.peek() == Some(&'"') => {
+                chars.next();
+                field.push('"');
+            }
+            '"' if quoted => {
+                quoted = false;
+                closed_quote = true;
+            }
+            '"' if field.trim().is_empty() && !closed_quote => {
+                field.clear();
+                quoted = true;
+            }
+            ch if quoted => {
+                if ch == '\n' {
+                    line += 1;
+                }
+                field.push(ch);
+            }
+            ch if ch == separator => {
+                fields.push(std::mem::take(&mut field));
+                closed_quote = false;
+            }
+            '\n' | '\r' => {
+                if ch == '\r' && chars.peek() == Some(&'\n') {
+                    chars.next();
+                }
+                if !fields.is_empty() || !field.trim().is_empty() {
+                    fields.push(std::mem::take(&mut field));
+                    rows.push((row_start, std::mem::take(&mut fields)));
+                } else {
+                    field.clear();
+                }
+                line += 1;
+                row_start = line;
+                closed_quote = false;
+            }
+            ch if ch == '"' || (closed_quote && !ch.is_whitespace()) => {
+                return Err(SoryntelError::ParseError(format!(
+                    "CSV line {line}, column {}: unexpected character after or inside quotes", fields.len() + 1
+                )));
+            }
+            ch if !closed_quote => field.push(ch),
+            _ => {}
+        }
+    }
+    if quoted {
+        return Err(SoryntelError::ParseError(format!(
+            "CSV line {row_start}, column {}: unclosed quote", fields.len() + 1
+        )));
+    }
+    if !fields.is_empty() || !field.trim().is_empty() {
+        fields.push(field);
+        rows.push((row_start, fields));
+    }
+    Ok(rows)
 }
 
 /// Merge two flat dataset vectors ordered canonically; returns `(merged, conflicts)`.

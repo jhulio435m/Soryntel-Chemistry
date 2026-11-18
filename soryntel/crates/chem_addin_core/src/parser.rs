@@ -17,6 +17,10 @@ static UNSIGNED_NUM_PREFIX_RE: LazyLock<Regex> = LazyLock::new(|| {
 static BRACKET_CHARGE_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"^(.+?)\(([+-]\d+|\d*[+-])\)$").expect("valid bracket charge regex")
 });
+static HSC_CHARGE_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^(.+)\(([+-]\d*)a\)$").expect("valid HSC charge regex"));
+static SQUARE_CHARGE_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^(.+)\[([+-]\d+|\d*[+-])\]$").expect("valid square charge regex"));
 static CARET_CHARGE_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"^(.+?)\^(\d*[+-]|[+-]\d+)$").expect("valid caret charge regex")
 });
@@ -123,6 +127,12 @@ pub fn parse_species(input: &str) -> Result<ParsedSpecies> {
     let trimmed = input.trim();
     if trimmed.is_empty() {
         return Err(ChemAddinError::InvalidFormula("<empty>".to_string()));
+    }
+
+    if let Some(caps) = HSC_CHARGE_RE.captures(trimmed) {
+        let mut parsed = parse_species(&format!("{}[{}](aq)", &caps[1], &caps[2]))?;
+        parsed.raw = trimmed.to_string();
+        return Ok(parsed);
     }
 
     // 1. Peel optional trailing phase suffix such as (g), (l), (s), (aq).
@@ -364,7 +374,7 @@ fn split_reaction_terms(side: &str) -> Result<Vec<String>> {
 }
 
 fn extract_charge(s: &str) -> Result<(&str, i32)> {
-    if let Some(caps) = BRACKET_CHARGE_RE.captures(s) {
+    if let Some(caps) = BRACKET_CHARGE_RE.captures(s).or_else(|| SQUARE_CHARGE_RE.captures(s)) {
         let base = caps.get(1).expect("base").as_str().trim();
         let charge_raw = caps.get(2).expect("charge").as_str();
         let charge = parse_charge_token(charge_raw, s)?;
@@ -386,6 +396,22 @@ fn extract_charge(s: &str) -> Result<(&str, i32)> {
             let base = &s[..idx];
             if !base.ends_with('*') && !base.ends_with('(') && !base.ends_with('[') {
                 let sign = if suffix.starts_with('-') { -1 } else { 1 };
+                if suffix.len() == 1 {
+                    // A monatomic ion uses the full trailing digit run (Fe2+). For
+                    // a polyatomic ion the final digit is its charge, e.g. SO42-.
+                    // Brackets disambiguate subscripts and multidigit charges.
+                    let stem = base.trim_end_matches(|ch: char| ch.is_ascii_digit());
+                    let digits = &base[stem.len()..];
+                    if !digits.is_empty() && !stem.is_empty() {
+                        let split = if atomic_weight(stem).is_some() { stem.len() } else { base.len() - 1 };
+                        let magnitude = base[split..].parse::<i32>()
+                            .map_err(|_| ChemAddinError::InvalidFormula(s.into()))?;
+                        if magnitude == 0 {
+                            return Err(ChemAddinError::InvalidFormula(s.into()));
+                        }
+                        return Ok((&base[..split], sign * magnitude));
+                    }
+                }
                 let mag: i32 = if suffix.len() == 1 {
                     1
                 } else {
