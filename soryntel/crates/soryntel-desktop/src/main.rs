@@ -146,74 +146,115 @@ fn kill_child(slot: &mut Option<std::process::Child>) {
     }
 }
 
-fn main() -> eframe::Result<()> {
-    rust_i18n::set_locale("es");
+/// Módulos aceptados por `--module` (y sus alias).
+const MODULE_ARGS: &[(&str, WindowMode)] = &[
+    ("launcher", WindowMode::Launcher),
+    ("reaction", WindowMode::Reaction),
+    ("balance", WindowMode::Balance),
+    ("heatloss", WindowMode::HeatLoss),
+    ("equilibrium", WindowMode::Equilibrium),
+    ("exergy", WindowMode::Exergy),
+    ("estimate", WindowMode::Estimate),
+    ("ehph", WindowMode::EhPh),
+    ("diagrams", WindowMode::Diagrams),
+    ("phase_stability", WindowMode::PhaseStability),
+    ("species_converter", WindowMode::SpeciesConverter),
+    ("benson", WindowMode::Benson),
+    ("elements", WindowMode::Elements),
+    ("water", WindowMode::Water),
+    ("units", WindowMode::Units),
+    ("excel_addins", WindowMode::ExcelAddIns),
+    ("addins", WindowMode::ExcelAddIns),
+    ("geo", WindowMode::ExcelAddIns),
+    ("aqua", WindowMode::Aqua),
+    ("sim", WindowMode::Sim),
+    ("flowsheet", WindowMode::Sim),
+    ("lca", WindowMode::Lca),
+    ("sim_lca", WindowMode::Lca),
+    ("mass_balance", WindowMode::MassBalance),
+    ("mas", WindowMode::MassBalance),
+    ("species", WindowMode::Species),
+    ("databases", WindowMode::Species),
+    ("browser", WindowMode::Species),
+];
 
-    // Load external user-supplied HSC database in read-only mode if provided via --hsc-db or default path
-    let args: Vec<String> = std::env::args().collect();
-    let mut custom_db = None;
-    let mut window_mode = WindowMode::Launcher;
-    let mut bridge_port: Option<u16> = None;
-    let mut eval_cli: Option<Vec<String>> = None;
-    let mut i = 1;
+struct CliOptions {
+    custom_db: Option<String>,
+    window_mode: WindowMode,
+    bridge_port: Option<u16>,
+    eval_cli: Option<Vec<String>>,
+}
+
+/// Interpreta los argumentos (sin el nombre del programa). Un `--module` desconocido o un
+/// `--hsc-db`/`--module` sin valor es un error, en lugar de abrir el launcher en silencio.
+fn parse_cli_args(args: &[String]) -> Result<CliOptions, String> {
+    let mut options = CliOptions {
+        custom_db: None,
+        window_mode: WindowMode::Launcher,
+        bridge_port: None,
+        eval_cli: None,
+    };
+    let mut i = 0;
     while i < args.len() {
         let a = args[i].as_str();
-        if a == "--hsc-db" && i + 1 < args.len() {
-            custom_db = Some(args[i + 1].clone());
+        if a == "--hsc-db" {
+            let value = args.get(i + 1).filter(|v| !v.starts_with("--"));
+            let Some(value) = value else {
+                return Err("--hsc-db necesita la ruta de MainDB".into());
+            };
+            options.custom_db = Some(value.clone());
             i += 2;
         } else if let Some(val) = a.strip_prefix("--hsc-db=") {
-            custom_db = Some(val.to_string());
+            if val.is_empty() {
+                return Err("--hsc-db necesita la ruta de MainDB".into());
+            }
+            options.custom_db = Some(val.to_string());
             i += 1;
         } else if a == "--addin-bridge" {
-            let p = args
-                .get(i + 1)
-                .and_then(|s| s.parse::<u16>().ok())
-                .unwrap_or(8765);
-            bridge_port = Some(p);
-            if args
-                .get(i + 1)
-                .and_then(|s| s.parse::<u16>().ok())
-                .is_some()
-            {
-                i += 2;
-            } else {
-                i += 1;
-            }
+            let port = args.get(i + 1).and_then(|s| s.parse::<u16>().ok());
+            options.bridge_port = Some(port.unwrap_or(8765));
+            i += if port.is_some() { 2 } else { 1 };
         } else if let Some(val) = a.strip_prefix("--addin-bridge=") {
-            bridge_port = Some(val.parse::<u16>().unwrap_or(8765));
+            options.bridge_port = Some(val.parse::<u16>().unwrap_or(8765));
             i += 1;
         } else if a == "--addin-eval" && i + 1 < args.len() {
-            eval_cli = Some(args[i + 1..].to_vec());
+            options.eval_cli = Some(args[i + 1..].to_vec());
             break;
-        } else if a == "--module" && i + 1 < args.len() {
-            window_mode = match args[i + 1].as_str() {
-                "reaction" => WindowMode::Reaction,
-                "balance" => WindowMode::Balance,
-                "heatloss" => WindowMode::HeatLoss,
-                "equilibrium" => WindowMode::Equilibrium,
-                "exergy" => WindowMode::Exergy,
-                "estimate" => WindowMode::Estimate,
-                "ehph" => WindowMode::EhPh,
-                "diagrams" => WindowMode::Diagrams,
-                "phase_stability" => WindowMode::PhaseStability,
-                "species_converter" => WindowMode::SpeciesConverter,
-                "benson" => WindowMode::Benson,
-                "elements" => WindowMode::Elements,
-                "water" => WindowMode::Water,
-                "units" => WindowMode::Units,
-                "excel_addins" | "addins" => WindowMode::ExcelAddIns,
-                "aqua" => WindowMode::Aqua,
-                "sim" | "flowsheet" => WindowMode::Sim,
-                "lca" | "sim_lca" => WindowMode::Lca,
-                "mass_balance" | "mas" => WindowMode::MassBalance,
-                "species" | "databases" | "browser" => WindowMode::Species,
-                _ => WindowMode::Launcher,
+        } else if a == "--module" || a.starts_with("--module=") {
+            let (value, step) = match a.strip_prefix("--module=") {
+                Some(v) => (Some(v), 1),
+                None => (args.get(i + 1).map(String::as_str), 2),
             };
-            i += 2;
+            let Some(value) = value.filter(|v| !v.is_empty()) else {
+                return Err("--module necesita el nombre de un módulo".into());
+            };
+            options.window_mode = MODULE_ARGS
+                .iter()
+                .find(|(name, _)| *name == value)
+                .map(|(_, mode)| *mode)
+                .ok_or_else(|| {
+                    let valid: Vec<&str> = MODULE_ARGS.iter().map(|(name, _)| *name).collect();
+                    format!("módulo desconocido «{value}». Valores válidos: {}", valid.join(", "))
+                })?;
+            i += step;
         } else {
             i += 1;
         }
     }
+    Ok(options)
+}
+
+fn main() -> eframe::Result<()> {
+    rust_i18n::set_locale("es");
+
+    let args: Vec<String> = std::env::args().collect();
+    let CliOptions { custom_db, window_mode, bridge_port, eval_cli } = match parse_cli_args(&args[1..]) {
+        Ok(options) => options,
+        Err(message) => {
+            eprintln!("soryntel-desktop: {message}");
+            std::process::exit(2);
+        }
+    };
     let services = AppServices::load(custom_db.as_deref());
 
     if let Some(port) = bridge_port {
@@ -1685,6 +1726,27 @@ mod tests {
         // Tras cerrarse, el módulo puede volver a abrirse.
         assert!(launch_into_slot(&mut slot, spawn));
         kill_child(&mut slot);
+    }
+
+    #[test]
+    fn cli_rejects_unknown_module_and_missing_values() {
+        let args = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        let ok = parse_cli_args(&args(&["--module", "geo", "--hsc-db", "/db ñ/Maindb6.HSC"])).unwrap();
+        assert!(ok.window_mode == WindowMode::ExcelAddIns);
+        assert_eq!(ok.custom_db.as_deref(), Some("/db ñ/Maindb6.HSC"));
+        assert!(parse_cli_args(&args(&["--module=balance"])).unwrap().window_mode == WindowMode::Balance);
+        let err = parse_cli_args(&args(&["--module", "equilibirum"])).err().unwrap();
+        assert!(err.contains("equilibirum") && err.contains("equilibrium"), "{err}");
+        assert!(parse_cli_args(&args(&["--module"])).is_err());
+        assert!(parse_cli_args(&args(&["--hsc-db"])).is_err());
+        assert!(parse_cli_args(&args(&["--hsc-db", "--module", "reaction"])).is_err());
+        assert!(parse_cli_args(&args(&[])).unwrap().window_mode == WindowMode::Launcher);
+        // Cada módulo que el launcher puede abrir se acepta en --module.
+        for m in ["reaction", "balance", "heatloss", "equilibrium", "exergy", "estimate", "ehph", "diagrams",
+                  "phase_stability", "species_converter", "benson", "elements", "water", "units",
+                  "excel_addins", "aqua", "sim", "lca", "mass_balance", "species"] {
+            assert!(parse_cli_args(&args(&["--module", m])).is_ok(), "{m}");
+        }
     }
 
     #[test]
