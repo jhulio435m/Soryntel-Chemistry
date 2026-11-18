@@ -4,7 +4,6 @@ use crate::excel_grid::{
     col_letter, header_cell, row_num_cell, text_cell, widget_cell, EXCEL_GRID_BORDER,
     EXCEL_HEADER_BORDER, EXCEL_READONLY_BG,
 };
-use crate::ui_common::temp_file_path;
 use eframe::egui;
 use egui_plot::{Bar, BarChart, Legend, Line, Plot, PlotPoints, Points};
 use serde::{Deserialize, Serialize};
@@ -83,7 +82,7 @@ impl Default for DbReviewDraft {
             s298_j_molk: 50.0,
             cp298_j_molk: 40.0,
             dg298_kj_mol: 0.0,
-            reference: "HSC Estimate".to_string(),
+            reference: "Estimate".to_string(),
             reliability_class: 4,
             intervals: Vec::new(),
         }
@@ -154,8 +153,9 @@ impl EstimateModuleState {
         }
         let own_db_path = CatalogUseCases::status(db)
             .own_path
+            .or_else(crate::composition::default_own_db_path)
             .map(|p| p.to_string_lossy().into_owned())
-            .unwrap_or_else(|| temp_file_path("soryntel_owndb6.HSC"));
+            .unwrap_or_default();
 
         let mut selected_rows = BTreeSet::new();
         selected_rows.insert(0);
@@ -204,7 +204,7 @@ impl EstimateModuleState {
             cp_target_row: 0,
             db_review: DbReviewDraft::default(),
             own_db_path,
-            sheet_file_path: temp_file_path("soryntel_estimate_sheet.est8"),
+            sheet_file_path: String::new(),
             show_file_io_modal: false,
             file_io_save_mode: true,
             show_help_modal: false,
@@ -212,7 +212,7 @@ impl EstimateModuleState {
             quick_species: "POP".to_string(),
             quick_temp: 25.0,
             quick_is_kelvin: false,
-            status_msg: "Listo · HSC Estimate (Neumann-Kopp, Latimer, Benson/Joback)".to_string(),
+            status_msg: "Listo · Estimate (Neumann-Kopp, Latimer, Benson/Joback)".to_string(),
         }
     }
 
@@ -249,14 +249,52 @@ impl EstimateModuleState {
         }
     }
 
+    /// Índices seleccionados que existen en la hoja actual (nunca fuera de rango).
     fn target_indices_for_edit(&self) -> Vec<usize> {
-        if !self.selected_rows.is_empty() {
+        let mut out: Vec<usize> = if !self.selected_rows.is_empty() {
             self.selected_rows.iter().copied().collect()
         } else if let Some(idx) = self.selected_row {
             vec![idx]
         } else {
             Vec::new()
+        };
+        out.retain(|&i| i < self.rows.len());
+        out
+    }
+
+    /// Inserta una fila y desplaza la selección para que siga señalando las mismas filas.
+    fn insert_row_at(&mut self, idx: usize, row: EstimateRow) -> usize {
+        let idx = idx.min(self.rows.len());
+        self.rows.insert(idx, row);
+        self.selected_rows = self
+            .selected_rows
+            .iter()
+            .map(|&i| if i >= idx { i + 1 } else { i })
+            .collect();
+        self.selected_row = self.selected_row.map(|i| if i >= idx { i + 1 } else { i });
+        idx
+    }
+
+    /// Elimina una fila (si hay más de una) y reajusta la selección: la fila borrada deja de
+    /// estar seleccionada y las posteriores se desplazan una posición.
+    fn remove_row_at(&mut self, idx: usize) -> bool {
+        if idx >= self.rows.len() || self.rows.len() <= 1 {
+            return false;
         }
+        self.rows.remove(idx);
+        self.selected_rows = self
+            .selected_rows
+            .iter()
+            .filter(|&&i| i != idx)
+            .map(|&i| if i > idx { i - 1 } else { i })
+            .filter(|&i| i < self.rows.len())
+            .collect();
+        self.selected_row = match self.selected_row {
+            Some(i) if i == idx => self.selected_rows.iter().next().copied(),
+            Some(i) if i > idx => Some(i - 1),
+            other => other.filter(|&i| i < self.rows.len()),
+        };
+        true
     }
 
     fn copy_selected_rows(&mut self, ctx: &egui::Context) {
@@ -277,18 +315,22 @@ impl EstimateModuleState {
     }
 
     fn cut_selected_rows(&mut self, ctx: &egui::Context) {
-        self.copy_selected_rows(ctx);
         let mut indices = self.target_indices_for_edit();
+        if indices.is_empty() {
+            return;
+        }
+        self.copy_selected_rows(ctx);
         indices.sort_unstable();
-        indices.reverse();
-        for i in indices {
-            if i < self.rows.len() && self.rows.len() > 1 {
-                self.rows.remove(i);
-            } else if let Some(r) = self.rows.get_mut(0) {
-                *r = EstimateRow::new("");
+        let first = indices[0];
+        for &i in indices.iter().rev() {
+            if !self.remove_row_at(i) {
+                // Única fila restante (y seleccionada): se vacía en lugar de eliminarla.
+                if let Some(r) = self.rows.get_mut(i) {
+                    *r = EstimateRow::new("");
+                }
             }
         }
-        self.select_single(0);
+        self.select_single(first.min(self.rows.len().saturating_sub(1)));
     }
 
     fn parse_rows_from_text(&self, txt: &str) -> Vec<EstimateRow> {
@@ -305,7 +347,7 @@ impl EstimateModuleState {
             }
             let mut r = EstimateRow::new(formula);
             if let Some(t_str) = parts.next() {
-                if let Ok(v) = t_str.trim().parse::<f64>() {
+                if let Ok(v) = crate::ui_common::parse_user_number(t_str) {
                     r.temp_c = v;
                 }
             }
@@ -445,7 +487,7 @@ impl EstimateModuleState {
         if row.formula.trim().is_empty() {
             return;
         }
-        let sp = MiscUseCases::estimate_build_species(&row, ranges, "HSC Estimate");
+        let sp = MiscUseCases::estimate_build_species(&row, ranges, "Estimate");
         let existing_meta = db.get_species_metadata(&sp.formula);
         let (_, charge, _) = MiscUseCases::estimate_parse_formula(&sp.formula).unwrap_or_default();
         let raw_ph = match sp.phase {
@@ -492,7 +534,7 @@ impl EstimateModuleState {
                 .map(|p| p.cp)
                 .unwrap_or_else(|| ref_row.est_cp_j_molk.unwrap_or(40.0)),
             dg298_kj_mol: ref_row.est_dg_kj_mol.unwrap_or(0.0),
-            reference: "HSC Estimate".to_string(),
+            reference: "Estimate".to_string(),
             reliability_class: 4,
             intervals: sp.intervals,
         };
@@ -506,6 +548,10 @@ impl EstimateModuleState {
         if self.db_review.intervals.is_empty() {
             return Err("Debe existir al menos un rango de temperatura".into());
         }
+        // Se prepara el archivo OwnDB antes de tocar la capa en memoria: si hay que abrirlo o
+        // crearlo, eso no debe descartar la especie que se va a guardar.
+        let save_path = crate::composition::prepare_own_db_target(db, &self.own_db_path)?;
+        self.own_db_path = save_path.to_string_lossy().into_owned();
         let mut intervals = self.db_review.intervals.clone();
         for (i, iv) in intervals.iter_mut().enumerate() {
             iv.phase = self.db_review.phase;
@@ -536,8 +582,8 @@ impl EstimateModuleState {
         };
         let raw_ph = self.db_review.raw_phase_code.clone();
         CatalogUseCases::save_own_species(db, sp, meta, raw_ph);
-        let save_path = self.own_db_path.trim().to_string();
-        CatalogUseCases::save_own_db_creating_dirs(db, &save_path)?;
+        crate::composition::persist_own_db(db, &save_path)?;
+        let save_path = save_path.display();
         self.cached_db_scope = None;
         self.recalc_all(db);
         self.status_msg = format!("Especie '{formula}' guardada en OwnDB ({save_path})");
@@ -596,7 +642,7 @@ impl EstimateModuleState {
                 }
                 let mut r = EstimateRow::new(formula);
                 if let Some(temp_s) = parts.next() {
-                    if let Ok(v) = temp_s.trim().parse::<f64>() {
+                    if let Ok(v) = crate::ui_common::parse_user_number(temp_s) {
                         r.temp_c = v;
                     }
                 }
@@ -616,8 +662,9 @@ impl EstimateModuleState {
         Ok(n)
     }
 
-    pub fn ui(&mut self, ctx: &egui::Context, db: &mut dyn SpeciesWorkspacePort) {
-        if !ctx.wants_keyboard_input() {
+    pub fn ui(&mut self, root_ui: &mut egui::Ui, db: &mut dyn SpeciesWorkspacePort) {
+        let ctx = &root_ui.ctx().clone();
+        if !ctx.egui_wants_keyboard_input() {
             let (ev_copy, ev_cut, ev_paste) = ctx.input(|i| {
                 let mut cp = false;
                 let mut ct = false;
@@ -655,14 +702,14 @@ impl EstimateModuleState {
         }
 
         // Top Ribbon Toolbar (Main | Estimation Settings | Units | Tools | Help)
-        egui::TopBottomPanel::top("estimate_ribbon")
+        egui::Panel::top("estimate_ribbon")
             .frame(
-                egui::Frame::none()
+                egui::Frame::NONE
                     .fill(egui::Color32::from_rgb(236, 240, 246))
                     .stroke(egui::Stroke::new(1.0, EXCEL_HEADER_BORDER))
-                    .inner_margin(egui::Margin::symmetric(8.0, 6.0)),
+                    .inner_margin(egui::Margin::symmetric(8, 6)),
             )
-            .show(ctx, |ui| {
+            .show(root_ui, |ui| {
                 ui.horizontal_wrapped(|ui| {
                     // Main: File
                     ui.vertical(|ui| {
@@ -673,17 +720,17 @@ impl EstimateModuleState {
                                     self.rows = vec![EstimateRow::new("")];
                                     self.select_single(0);
                                     self.status_msg = "Hoja nueva".to_string();
-                                    ui.close_menu();
+                                    ui.close_kind(egui::UiKind::Menu);
                                 }
                                 if ui.button("Open Sheet (.est8 / .tsv)...").clicked() {
                                     self.file_io_save_mode = false;
                                     self.show_file_io_modal = true;
-                                    ui.close_menu();
+                                    ui.close_kind(egui::UiKind::Menu);
                                 }
                                 if ui.button("Save Sheet (.est8 / .tsv / .csv)...").clicked() {
                                     self.file_io_save_mode = true;
                                     self.show_file_io_modal = true;
-                                    ui.close_menu();
+                                    ui.close_kind(egui::UiKind::Menu);
                                 }
                                 ui.separator();
                                 if ui.button("Load Fig. 1 Example").clicked() {
@@ -691,7 +738,7 @@ impl EstimateModuleState {
                                     self.recalc_all(db);
                                     self.select_single(0);
                                     self.status_msg = "Ejemplo Fig. 1 cargado".to_string();
-                                    ui.close_menu();
+                                    ui.close_kind(egui::UiKind::Menu);
                                 }
                                 if ui.button("Load Fig. 5 Oxides & Sulfates Example").clicked() {
                                     self.rows = MiscUseCases::estimate_fig5_oxides_rows();
@@ -702,7 +749,7 @@ impl EstimateModuleState {
                                     }
                                     self.selected_row = Some(0);
                                     self.status_msg = "Ejemplo Fig. 5 cargado (Li2O..CaO seleccionados)".to_string();
-                                    ui.close_menu();
+                                    ui.close_kind(egui::UiKind::Menu);
                                 }
                                 if ui.button("Load Classic Example (Na2SO4, MgO*Al2O3, POP)").clicked() {
                                     self.rows = MiscUseCases::estimate_classic_rows();
@@ -711,7 +758,7 @@ impl EstimateModuleState {
                                     self.status_msg =
                                         "Ejemplo clásico H, S, Cp Estimate cargado (11 especies)"
                                             .to_string();
-                                    ui.close_menu();
+                                    ui.close_kind(egui::UiKind::Menu);
                                 }
                                 if ui.button("Load Fig. 2 Example (C2H4(g))").clicked() {
                                     let mut r = EstimateRow::new("C2H4(g)");
@@ -721,14 +768,14 @@ impl EstimateModuleState {
                                     MiscUseCases::evaluate_estimate(db, &mut r);
                                     self.rows = vec![r, EstimateRow::new("")];
                                     self.select_single(0);
-                                    ui.close_menu();
+                                    ui.close_kind(egui::UiKind::Menu);
                                 }
                                 if ui.button("Load Fig. 3 Example (FeVO4)").clicked() {
                                     let mut r = EstimateRow::new("FeVO4");
                                     MiscUseCases::evaluate_estimate(db, &mut r);
                                     self.rows = vec![r, EstimateRow::new("")];
                                     self.select_single(0);
-                                    ui.close_menu();
+                                    ui.close_kind(egui::UiKind::Menu);
                                 }
                                 ui.separator();
                                 if ui.button(crate::i18n::text("common.016")).clicked() {
@@ -897,57 +944,57 @@ impl EstimateModuleState {
                                     self.plot_mode = EstimatePlotMode::Parity;
                                     self.scatter_scope = default_sheet_scope;
                                     self.show_graphics_win = true;
-                                    ui.close_menu();
+                                    ui.close_kind(egui::UiKind::Menu);
                                 }
                                 if ui.button(crate::i18n::text("common.069")).clicked() {
                                     self.plot_mode = EstimatePlotMode::ParityIndividual;
                                     self.scatter_scope = default_sheet_scope;
                                     self.show_graphics_win = true;
-                                    ui.close_menu();
+                                    ui.close_kind(egui::UiKind::Menu);
                                 }
                                 ui.separator();
                                 if ui.button("Database Scatter (Gas Species)").clicked() {
                                     self.plot_mode = EstimatePlotMode::Parity;
                                     self.scatter_scope = EstimateScatterScope::GasDb;
                                     self.show_graphics_win = true;
-                                    ui.close_menu();
+                                    ui.close_kind(egui::UiKind::Menu);
                                 }
                                 if ui.button("Database Scatter (Aqueous Species)").clicked() {
                                     self.plot_mode = EstimatePlotMode::Parity;
                                     self.scatter_scope = EstimateScatterScope::AqueousDb;
                                     self.show_graphics_win = true;
-                                    ui.close_menu();
+                                    ui.close_kind(egui::UiKind::Menu);
                                 }
-                                if ui.button("Database Scatter (All Maindb6)").clicked() {
+                                if ui.button("Database Scatter (All catálogo principal)").clicked() {
                                     self.plot_mode = EstimatePlotMode::Parity;
                                     self.scatter_scope = EstimateScatterScope::AllDb;
                                     self.show_graphics_win = true;
-                                    ui.close_menu();
+                                    ui.close_kind(egui::UiKind::Menu);
                                 }
                                 ui.separator();
                                 if ui.button(crate::i18n::text("common.070")).clicked() {
                                     self.plot_mode = EstimatePlotMode::Comparison;
                                     self.scatter_scope = default_sheet_scope;
                                     self.show_graphics_win = true;
-                                    ui.close_menu();
+                                    ui.close_kind(egui::UiKind::Menu);
                                 }
                                 if ui.button(crate::i18n::text("common.071")).clicked() {
                                     self.plot_mode = EstimatePlotMode::Differences;
                                     self.scatter_scope = default_sheet_scope;
                                     self.show_graphics_win = true;
-                                    ui.close_menu();
+                                    ui.close_kind(egui::UiKind::Menu);
                                 }
                                 ui.separator();
                                 if ui.button(crate::i18n::text("common.072")).clicked() {
                                     let idx = self.selected_row.unwrap_or(0);
                                     self.open_cp_data_for_row(idx, db);
-                                    ui.close_menu();
+                                    ui.close_kind(egui::UiKind::Menu);
                                 }
                             });
-                            if ui.button("🗄\nBrowse HSC\nDatabase").clicked() {
+                            if ui.button("🗄\nBrowse\nDatabase").clicked() {
                                 self.show_db_picker = true;
                             }
-                            ui.menu_button("💾\nSave to HSC\nDatabase ▾", |ui| {
+                            ui.menu_button("💾\nSave to\nDatabase ▾", |ui| {
                                 if ui.button(crate::i18n::text("common.073")).clicked() {
                                     let idx = self.selected_row.unwrap_or(0);
                                     if let Some(row) = self.rows.get(idx).cloned() {
@@ -962,12 +1009,12 @@ impl EstimateModuleState {
                                             self.prepare_db_review(idx, vec![(298.15, 300.0, kel)], db);
                                         }
                                     }
-                                    ui.close_menu();
+                                    ui.close_kind(egui::UiKind::Menu);
                                 }
                                 if ui.button(crate::i18n::text("common.074")).clicked() {
                                     self.cp_target_row = self.selected_row.unwrap_or(0);
                                     self.show_cp_range_dialog = true;
-                                    ui.close_menu();
+                                    ui.close_kind(egui::UiKind::Menu);
                                 }
                             });
                         });
@@ -992,14 +1039,14 @@ impl EstimateModuleState {
             });
 
         // Formula Bar + Quick Estimate strip
-        egui::TopBottomPanel::top("estimate_formula_bar")
+        egui::Panel::top("estimate_formula_bar")
             .frame(
-                egui::Frame::none()
+                egui::Frame::NONE
                     .fill(egui::Color32::from_rgb(245, 246, 248))
                     .stroke(egui::Stroke::new(1.0, EXCEL_GRID_BORDER))
-                    .inner_margin(egui::Margin::symmetric(8.0, 4.0)),
+                    .inner_margin(egui::Margin::symmetric(8, 4)),
             )
-            .show(ctx, |ui| {
+            .show(root_ui, |ui| {
                 ui.horizontal_wrapped(|ui| {
                     let row_num = self.selected_row.unwrap_or(0) + 4;
                     ui.label(egui::RichText::new(format!("A{row_num}")).monospace().strong());
@@ -1045,7 +1092,7 @@ impl EstimateModuleState {
                             .iter()
                             .position(|x| x.formula.trim().is_empty())
                             .unwrap_or(self.rows.len());
-                        self.rows.insert(insert_pos, r);
+                        let insert_pos = self.insert_row_at(insert_pos, r);
                         self.select_single(insert_pos);
                         self.status_msg = format!("Estimado '{}'", self.quick_species.trim());
                     }
@@ -1053,24 +1100,19 @@ impl EstimateModuleState {
             });
 
         // Bottom Sheet Tab Bar
-        egui::TopBottomPanel::bottom("estimate_bottom_bar")
+        egui::Panel::bottom("estimate_bottom_bar")
             .frame(
-                egui::Frame::none()
+                egui::Frame::NONE
                     .fill(egui::Color32::from_rgb(235, 237, 240))
                     .stroke(egui::Stroke::new(1.0, EXCEL_HEADER_BORDER))
-                    .inner_margin(egui::Margin::symmetric(8.0, 4.0)),
+                    .inner_margin(egui::Margin::symmetric(8, 4)),
             )
-            .show(ctx, |ui| {
+            .show(root_ui, |ui| {
                 ui.horizontal(|ui| {
-                    ui.label(
-                        egui::RichText::new("|◀  ◀  ▶  ▶|")
-                            .size(10.5)
-                            .color(egui::Color32::from_rgb(107, 114, 128)),
-                    );
-                    egui::Frame::none()
+                    egui::Frame::NONE
                         .fill(egui::Color32::WHITE)
                         .stroke(egui::Stroke::new(1.0, EXCEL_HEADER_BORDER))
-                        .inner_margin(egui::Margin::symmetric(10.0, 2.0))
+                        .inner_margin(egui::Margin::symmetric(10, 2))
                         .show(ui, |ui| {
                             ui.label(egui::RichText::new("Sheet1").strong().size(11.5));
                         });
@@ -1093,8 +1135,8 @@ impl EstimateModuleState {
 
         // Main Spreadsheet Area
         egui::CentralPanel::default()
-            .frame(egui::Frame::none().fill(egui::Color32::WHITE))
-            .show(ctx, |ui| {
+            .frame(egui::Frame::NONE.fill(egui::Color32::WHITE))
+            .show(root_ui, |ui| {
                 self.render_spreadsheet(ctx, ui, db);
             });
 
@@ -1145,14 +1187,14 @@ impl EstimateModuleState {
             self.show_paste_modal = open && !close_now;
         }
         if self.show_help_modal {
-            egui::Window::new("Help — HSC Estimate")
+            egui::Window::new("Help — Estimate")
                 .collapsible(false)
                 .resizable(true)
                 .show(ctx, |ui| {
                     ui.label("• Escribe una fórmula en la columna A (ej. FeVO4, MgSO4*2H2O, NaBO3*4H2O, H2Sn(OH)6, (C2H5)2O, Fe0.998O, FeS2(M), C(D), OH(-a)).");
                     ui.label("• Limitaciones (Sec. 16.3): sin superíndices/subíndices; el último paréntesis se reserva para fase/polimorfo/carga (usa AlO2H / AlOOH / AlO*OH, no AlO*(OH)).");
                     ui.label("• Selecciona varias filas (Ctrl+Click / Shift+Click) y pulsa Graphics para Parity / Individual Series / Comparison / Differences.");
-                    ui.label("• Save to HSC Database > Cp at 25°C o Cp Range -> Fit Cp -> Update Species -> Save guarda realmente en OwnDB.");
+                    ui.label("• Save to Database > Cp at 25°C o Cp Range -> Fit Cp -> Update Species -> Save guarda realmente en OwnDB.");
                     ui.add_space(8.0);
                     if ui.button("Cerrar").clicked() {
                         self.show_help_modal = false;
@@ -1160,11 +1202,11 @@ impl EstimateModuleState {
                 });
         }
         if self.show_about_modal {
-            egui::Window::new("About — HSC Estimate")
+            egui::Window::new("About — Estimate")
                 .collapsible(false)
                 .resizable(false)
                 .show(ctx, |ui| {
-                    ui.strong("HSC H, S, C Estimates Module (Soryntel Chemistry)");
+                    ui.strong("Estimación de H, S y Cp (Soryntel Chemistry)");
                     ui.label("Neumann-Kopp Cp + Einstein-Kelley Curvature, Latimer Entropy, Oxo/Halide/Hydrate Enthalpy, Benson Organics & 4-Param Kelley Fit.");
                     if ui.button(crate::i18n::text("common.002")).clicked() {
                         self.show_about_modal = false;
@@ -1327,60 +1369,60 @@ impl EstimateModuleState {
                         resp.context_menu(|ui| {
                             if ui.button(crate::i18n::text("common.075")).clicked() {
                                 act.cut = true;
-                                ui.close_menu();
+                                ui.close_kind(egui::UiKind::Menu);
                             }
                             if ui.button(crate::i18n::text("common.029")).clicked() {
                                 act.copy = true;
-                                ui.close_menu();
+                                ui.close_kind(egui::UiKind::Menu);
                             }
                             if ui.button(crate::i18n::text("common.076")).clicked() {
                                 act.paste_at = Some(r_idx);
-                                ui.close_menu();
+                                ui.close_kind(egui::UiKind::Menu);
                             }
                             ui.separator();
                             if ui.button(crate::i18n::text("common.077")).clicked() {
                                 act.insert_at = Some(r_idx);
-                                ui.close_menu();
+                                ui.close_kind(egui::UiKind::Menu);
                             }
                             if ui.button(crate::i18n::text("common.078")).clicked() {
                                 act.delete_at = Some(r_idx);
-                                ui.close_menu();
+                                ui.close_kind(egui::UiKind::Menu);
                             }
                             ui.separator();
-                            if ui.button("Browse HSC Database...").clicked() {
+                            if ui.button("Browse Database...").clicked() {
                                 act.open_db_picker = true;
-                                ui.close_menu();
+                                ui.close_kind(egui::UiKind::Menu);
                             }
                             ui.menu_button("Graphics...", |ui| {
                                 if ui.button(crate::i18n::text("common.068")).clicked() {
                                     act.open_graph = Some(EstimatePlotMode::Parity);
-                                    ui.close_menu();
+                                    ui.close_kind(egui::UiKind::Menu);
                                 }
                                 if ui.button(crate::i18n::text("common.069")).clicked() {
                                     act.open_graph = Some(EstimatePlotMode::ParityIndividual);
-                                    ui.close_menu();
+                                    ui.close_kind(egui::UiKind::Menu);
                                 }
                                 if ui.button(crate::i18n::text("common.070")).clicked() {
                                     act.open_graph = Some(EstimatePlotMode::Comparison);
-                                    ui.close_menu();
+                                    ui.close_kind(egui::UiKind::Menu);
                                 }
                                 if ui.button(crate::i18n::text("common.071")).clicked() {
                                     act.open_graph = Some(EstimatePlotMode::Differences);
-                                    ui.close_menu();
+                                    ui.close_kind(egui::UiKind::Menu);
                                 }
                                 if ui.button(crate::i18n::text("common.072")).clicked() {
                                     act.open_cp_est_at = Some(r_idx);
-                                    ui.close_menu();
+                                    ui.close_kind(egui::UiKind::Menu);
                                 }
                             });
-                            ui.menu_button("Save to HSC Database", |ui| {
+                            ui.menu_button("Save to Database", |ui| {
                                 if ui.button(crate::i18n::text("common.073")).clicked() {
                                     act.save_cp25_at = Some(r_idx);
-                                    ui.close_menu();
+                                    ui.close_kind(egui::UiKind::Menu);
                                 }
                                 if ui.button(crate::i18n::text("common.074")).clicked() {
                                     act.open_cp_range_at = Some(r_idx);
-                                    ui.close_menu();
+                                    ui.close_kind(egui::UiKind::Menu);
                                 }
                             });
                         });
@@ -1604,7 +1646,7 @@ impl EstimateModuleState {
                         });
                     }
                 });
-            self.h_scroll_offset = body_out.state.offset.x;
+            self.h_scroll_offset = body_out.state.clamped_offset().x;
         } else if self.freeze_col_a && self.freeze_title_rows {
             let left_w = row_num_w + col_widths[0];
             ui.horizontal_top(|ui| {
@@ -1644,8 +1686,8 @@ impl EstimateModuleState {
                                 draw_col_a_row(ui, self, r_idx, &mut action);
                             }
                         });
-                    if (left_out.state.offset.y - old_v).abs() > 0.1 {
-                        next_v = left_out.state.offset.y;
+                    if (left_out.state.clamped_offset().y - old_v).abs() > 0.1 {
+                        next_v = left_out.state.clamped_offset().y;
                     }
                 });
                 let body_out = egui::ScrollArea::both()
@@ -1658,9 +1700,9 @@ impl EstimateModuleState {
                             draw_cols_b_plus_row(ui, self, r_idx, &mut action);
                         }
                     });
-                self.h_scroll_offset = body_out.state.offset.x;
-                if (body_out.state.offset.y - old_v).abs() > 0.1 {
-                    next_v = body_out.state.offset.y;
+                self.h_scroll_offset = body_out.state.clamped_offset().x;
+                if (body_out.state.clamped_offset().y - old_v).abs() > 0.1 {
+                    next_v = body_out.state.clamped_offset().y;
                 }
             });
             self.v_scroll_offset = next_v.max(0.0);
@@ -1692,8 +1734,8 @@ impl EstimateModuleState {
                                 draw_col_a_row(ui, self, r_idx, &mut action);
                             }
                         });
-                    if (left_out.state.offset.y - old_v).abs() > 0.1 {
-                        next_v = left_out.state.offset.y;
+                    if (left_out.state.clamped_offset().y - old_v).abs() > 0.1 {
+                        next_v = left_out.state.clamped_offset().y;
                     }
                 });
                 let body_out = egui::ScrollArea::both()
@@ -1706,8 +1748,8 @@ impl EstimateModuleState {
                             draw_cols_b_plus_row(ui, self, r_idx, &mut action);
                         }
                     });
-                if (body_out.state.offset.y - old_v).abs() > 0.1 {
-                    next_v = body_out.state.offset.y;
+                if (body_out.state.clamped_offset().y - old_v).abs() > 0.1 {
+                    next_v = body_out.state.clamped_offset().y;
                 }
             });
             self.v_scroll_offset = next_v.max(0.0);
@@ -1728,12 +1770,10 @@ impl EstimateModuleState {
             self.paste_at_row(pos, ctx, db);
         }
         if let Some(idx) = action.insert_at {
-            self.rows.insert(idx, EstimateRow::new(""));
+            self.insert_row_at(idx, EstimateRow::new(""));
         }
         if let Some(idx) = action.delete_at {
-            if self.rows.len() > 1 {
-                self.rows.remove(idx);
-            }
+            self.remove_row_at(idx);
         }
         if action.open_db_picker {
             self.show_db_picker = true;
@@ -1769,7 +1809,7 @@ impl EstimateModuleState {
         let mut open = self.show_db_picker;
         let mut insert_formula: Option<String> = None;
 
-        egui::Window::new("Browse HSC Database — Insert Species")
+        egui::Window::new("Browse Database — Insert Species")
             .open(&mut open)
             .default_size([480.0, 400.0])
             .show(ctx, |ui| {
@@ -1804,8 +1844,7 @@ impl EstimateModuleState {
         if let Some(f) = insert_formula {
             let mut r = EstimateRow::new(f);
             MiscUseCases::evaluate_estimate(db, &mut r);
-            let idx = self.selected_row.unwrap_or(0).min(self.rows.len());
-            self.rows.insert(idx, r);
+            let idx = self.insert_row_at(self.selected_row.unwrap_or(0), r);
             self.select_single(idx);
         }
     }
@@ -1863,7 +1902,7 @@ impl EstimateModuleState {
             Vec::new()
         };
 
-        egui::Window::new("HSC Estimate — Graphics")
+        egui::Window::new("Estimate — Graphics")
             .open(&mut open)
             .default_size([920.0, 590.0])
             .show(ctx, |ui| {
@@ -1999,10 +2038,10 @@ impl EstimateModuleState {
                             } else {
                                 EXCEL_HEADER_BORDER
                             };
-                            let frame_resp = egui::Frame::none()
+                            let frame_resp = egui::Frame::NONE
                                 .fill(egui::Color32::WHITE)
                                 .stroke(egui::Stroke::new(if is_active { 1.8 } else { 1.0 }, border_col))
-                                .inner_margin(egui::Margin::same(6.0))
+                                .inner_margin(egui::Margin::same(6))
                                 .show(ui, |ui| {
                                     ui.set_width(card_w - 14.0);
                                     if ui
@@ -2090,35 +2129,34 @@ impl EstimateModuleState {
                                         match self.plot_mode {
                                             EstimatePlotMode::Parity => {
                                                 plot_ui.line(
-                                                    Line::new(PlotPoints::from(vec![
+                                                    Line::new("", PlotPoints::from(vec![
                                                         [min_v, min_v],
                                                         [max_v, max_v],
-                                                    ]))
+                                                    ])).id("parity_reference")
                                                     .color(egui::Color32::from_rgb(22, 163, 74)),
                                                 );
                                                 let pts: Vec<[f64; 2]> =
                                                     pairs.iter().map(|p| [p.2, p.1]).collect();
                                                 plot_ui.points(
-                                                    Points::new(PlotPoints::from(pts))
+                                                    Points::new("", PlotPoints::from(pts)).id("parity_results")
                                                         .radius(pt_radius)
                                                         .color(pt_color),
                                                 );
                                             }
                                             EstimatePlotMode::ParityIndividual => {
                                                 plot_ui.line(
-                                                    Line::new(PlotPoints::from(vec![
+                                                    Line::new("", PlotPoints::from(vec![
                                                         [min_v, min_v],
                                                         [max_v, max_v],
-                                                    ]))
+                                                    ])).id("parity_reference")
                                                     .color(egui::Color32::from_rgb(22, 163, 74)),
                                                 );
                                                 for (i, &(name, est, dbv)) in pairs.iter().enumerate() {
                                                     let col = series_palette_color(i);
                                                     plot_ui.points(
-                                                        Points::new(PlotPoints::from(vec![[dbv, est]]))
+                                                        Points::new(name.to_string(), PlotPoints::from(vec![[dbv, est]]))
                                                             .radius(pt_radius + 1.0)
-                                                            .color(col)
-                                                            .name(name),
+                                                            .color(col),
                                                     );
                                                 }
                                             }
@@ -2135,20 +2173,18 @@ impl EstimateModuleState {
                                                         .map(|(i, p)| Bar::new(i as f64 + 0.18, p.2).width(0.32))
                                                         .collect();
                                                     plot_ui.bar_chart(
-                                                        BarChart::new(est_bars)
-                                                            .color(egui::Color32::from_rgb(37, 99, 235))
-                                                            .name("Estimate"),
+                                                        BarChart::new("Estimate", est_bars)
+                                                            .color(egui::Color32::from_rgb(37, 99, 235)),
                                                     );
                                                     plot_ui.bar_chart(
-                                                        BarChart::new(db_bars)
-                                                            .color(egui::Color32::from_rgb(234, 88, 12))
-                                                            .name("Database"),
+                                                        BarChart::new("Database", db_bars)
+                                                            .color(egui::Color32::from_rgb(234, 88, 12)),
                                                     );
                                                 } else {
                                                     let est_pts: Vec<[f64; 2]> = pairs.iter().enumerate().map(|(i, p)| [i as f64, p.1]).collect();
                                                     let db_pts: Vec<[f64; 2]> = pairs.iter().enumerate().map(|(i, p)| [i as f64, p.2]).collect();
-                                                    plot_ui.points(Points::new(PlotPoints::from(est_pts)).radius(pt_radius).name("Estimate"));
-                                                    plot_ui.points(Points::new(PlotPoints::from(db_pts)).radius(pt_radius).name("Database"));
+                                                    plot_ui.points(Points::new("Estimate", PlotPoints::from(est_pts)).radius(pt_radius));
+                                                    plot_ui.points(Points::new("Database", PlotPoints::from(db_pts)).radius(pt_radius));
                                                 }
                                             }
                                             EstimatePlotMode::Differences => {
@@ -2158,14 +2194,14 @@ impl EstimateModuleState {
                                                     .map(|(i, p)| [i as f64, p.1 - p.2])
                                                     .collect();
                                                 plot_ui.line(
-                                                    Line::new(PlotPoints::from(vec![
+                                                    Line::new("", PlotPoints::from(vec![
                                                         [0.0, 0.0],
                                                         [(pairs.len().saturating_sub(1)) as f64, 0.0],
-                                                    ]))
+                                                    ])).id("zero_difference")
                                                     .color(egui::Color32::from_rgb(156, 163, 175)),
                                                 );
                                                 plot_ui.points(
-                                                    Points::new(PlotPoints::from(diff_pts))
+                                                    Points::new("", PlotPoints::from(diff_pts)).id("property_differences")
                                                         .radius(pt_radius)
                                                         .color(pt_color),
                                                 );
@@ -2218,10 +2254,10 @@ impl EstimateModuleState {
                     });
 
                     if self.show_chart_properties {
-                        egui::Frame::none()
+                        egui::Frame::NONE
                             .fill(egui::Color32::from_rgb(245, 246, 248))
                             .stroke(egui::Stroke::new(1.0, EXCEL_HEADER_BORDER))
-                            .inner_margin(egui::Margin::same(8.0))
+                            .inner_margin(egui::Margin::same(8))
                             .show(ui, |ui| {
                                 ui.set_width(prop_w - 16.0);
                                 ui.label(egui::RichText::new("Chart Properties").strong().size(12.5));
@@ -2358,7 +2394,7 @@ impl EstimateModuleState {
                 / (self.cp_points.len() as f64)
         };
 
-        egui::Window::new("HSC Cp Data")
+        egui::Window::new("Cp Data")
             .open(&mut open)
             .default_size([920.0, 560.0])
             .show(ctx, |ui| {
@@ -2528,13 +2564,11 @@ impl EstimateModuleState {
                                         .map(|&(t, _)| [t, self.fitted_cp_at_t(t)])
                                         .collect();
                                     plot_ui.line(
-                                        Line::new(PlotPoints::from(est_pts))
-                                            .name("Experimental/Est")
+                                        Line::new("Experimental/Est", PlotPoints::from(est_pts))
                                             .color(egui::Color32::from_rgb(22, 163, 74)),
                                     );
                                     plot_ui.line(
-                                        Line::new(PlotPoints::from(fit_pts))
-                                            .name("Fitted")
+                                        Line::new("Fitted", PlotPoints::from(fit_pts))
                                             .color(egui::Color32::from_rgb(37, 99, 235)),
                                     );
                                 });
@@ -2706,50 +2740,36 @@ impl EstimateModuleState {
         }
     }
 
-    fn render_file_io_modal(&mut self, ctx: &egui::Context, db: &dyn SpeciesWorkspacePort) {
-        let mut open = self.show_file_io_modal;
-        let mut close_now = false;
-        let title = if self.file_io_save_mode {
-            "Save Estimate Sheet"
-        } else {
-            "Open Estimate Sheet"
+    /// Abrir o guardar la hoja con el diálogo nativo (confirma la sobrescritura al guardar).
+    fn render_file_io_modal(&mut self, _ctx: &egui::Context, db: &dyn SpeciesWorkspacePort) {
+        if !self.show_file_io_modal {
+            return;
+        }
+        self.show_file_io_modal = false;
+        let save = self.file_io_save_mode;
+        let title = if save { "Guardar hoja Estimate (.est8 / .tsv / .csv)" } else { "Abrir hoja Estimate" };
+        let current = Some(std::path::PathBuf::from(&self.sheet_file_path)).filter(|p| p.is_absolute());
+        let Some(path) = crate::storage::choose_file(save, title, "est8", "estimate.est8", current.as_deref()) else {
+            return;
         };
-        egui::Window::new(title)
-            .open(&mut open)
-            .collapsible(false)
-            .show(ctx, |ui| {
-                ui.horizontal(|ui| {
-                    ui.label("Path:");
-                    ui.add(egui::TextEdit::singleline(&mut self.sheet_file_path).desired_width(360.0));
-                });
-                ui.horizontal(|ui| {
-                    let action_lbl = if self.file_io_save_mode { "Save" } else { "Open" };
-                    if ui.button(action_lbl).clicked() {
-                        let p = self.sheet_file_path.clone();
-                        if self.file_io_save_mode {
-                            match self.save_sheet_to_path(&p) {
-                                Ok(n) => {
-                                    self.status_msg = format!("Hoja guardada ({n} especies) -> {p}");
-                                    close_now = true;
-                                }
-                                Err(e) => self.status_msg = format!("Error guardando hoja: {e}"),
-                            }
-                        } else {
-                            match self.load_sheet_from_path(&p, db) {
-                                Ok(n) => {
-                                    self.status_msg = format!("Hoja abierta ({n} especies) <- {p}");
-                                    close_now = true;
-                                }
-                                Err(e) => self.status_msg = format!("Error abriendo hoja: {e}"),
-                            }
-                        }
-                    }
-                    if ui.button(crate::i18n::text("common.000")).clicked() {
-                        close_now = true;
-                    }
-                });
-            });
-        self.show_file_io_modal = open && !close_now;
+        let p = path.to_string_lossy().into_owned();
+        if save {
+            match self.save_sheet_to_path(&p) {
+                Ok(n) => {
+                    self.status_msg = format!("Hoja guardada ({n} especies) -> {p}");
+                    self.sheet_file_path = p;
+                }
+                Err(e) => self.status_msg = format!("Error guardando hoja: {e}"),
+            }
+        } else {
+            match self.load_sheet_from_path(&p, db) {
+                Ok(n) => {
+                    self.status_msg = format!("Hoja abierta ({n} especies) <- {p}");
+                    self.sheet_file_path = p;
+                }
+                Err(e) => self.status_msg = format!("Error abriendo hoja: {e}"),
+            }
+        }
     }
 }
 
@@ -2796,6 +2816,7 @@ fn series_palette_color(idx: usize) -> egui::Color32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ui_common::temp_file_path;
     use soryntel_db::ThermoDatabase;
     use soryntel_core::SpeciesRepository;
     use soryntel_application::use_cases::MiscUseCases;
@@ -2828,7 +2849,7 @@ mod tests {
         state.prepare_db_review(0, ranges, &db);
         assert!(state.db_review.open);
         assert_eq!(state.db_review.formula, "Na2WO4(g)");
-        assert_eq!(state.db_review.reference, "HSC Estimate");
+        assert_eq!(state.db_review.reference, "Estimate");
 
         state.save_db_review_to_owndb(&mut db).unwrap();
         assert!(std::path::Path::new(&test_owndb).exists());
@@ -2840,7 +2861,7 @@ mod tests {
         db2.load_own_hsc(&test_owndb).unwrap();
         let reloaded = db2.get_species("Na2WO4(g)").expect("Na2WO4(g) must persist in OwnDB");
         assert_eq!(reloaded.phase, Phase::Gas);
-        assert_eq!(reloaded.intervals[0].reference, "HSC Estimate");
+        assert_eq!(reloaded.intervals[0].reference, "Estimate");
         let _ = std::fs::remove_file(&test_owndb);
     }
 
@@ -2899,5 +2920,45 @@ mod tests {
         state.own_db_path = test_owndb.clone();
         state.save_db_review_to_owndb(&mut db).unwrap();
         let _ = std::fs::remove_file(&test_owndb);
+    }
+
+    #[test]
+    fn cut_with_stale_selection_does_not_clear_unrelated_row() {
+        let db = ThermoDatabase::with_open_defaults();
+        let mut state = EstimateModuleState::new(&db);
+        let ctx = egui::Context::default();
+        state.rows = vec![EstimateRow::new("CaO"), EstimateRow::new("MgO"), EstimateRow::new("SiO2")];
+        state.select_single(2);
+        // Menú contextual «Eliminar fila» sobre la fila 3 (rama `action.delete_at` de ui).
+        assert!(state.remove_row_at(2));
+        assert!(state.target_indices_for_edit().is_empty(), "la fila borrada sigue seleccionada");
+        state.cut_selected_rows(&ctx);
+        let formulas: Vec<&str> = state.rows.iter().map(|r| r.formula.as_str()).collect();
+        assert_eq!(formulas, ["CaO", "MgO"], "Cortar con selección obsoleta borró otra fila");
+
+        // Insertar desplaza la selección: Cortar elimina la fila resaltada, no la nueva.
+        state.select_single(1); // MgO
+        state.insert_row_at(0, EstimateRow::new(""));
+        state.cut_selected_rows(&ctx);
+        let formulas: Vec<&str> = state.rows.iter().map(|r| r.formula.as_str()).collect();
+        assert_eq!(formulas, ["", "CaO"]);
+
+        // Cortar todas las filas deja una fila vacía.
+        state.rows = vec![EstimateRow::new("CaO"), EstimateRow::new("MgO")];
+        state.selected_rows = [0, 1].into_iter().collect();
+        state.cut_selected_rows(&ctx);
+        assert_eq!(state.rows.len(), 1);
+        assert!(state.rows[0].formula.is_empty());
+    }
+
+    #[test]
+    fn owndb_default_path_is_not_in_temp_dir() {
+        let db = ThermoDatabase::with_open_defaults();
+        let state = EstimateModuleState::new(&db);
+        assert!(
+            !std::path::Path::new(&state.own_db_path).starts_with(std::env::temp_dir()),
+            "OwnDB por defecto: {}",
+            state.own_db_path
+        );
     }
 }

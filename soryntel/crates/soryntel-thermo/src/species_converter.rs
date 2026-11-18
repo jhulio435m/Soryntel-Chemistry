@@ -66,13 +66,16 @@ impl SpeciesTypeFilter {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ConverterInputEntry {
     pub formula: String,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub wt_pct: f64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ConverterOutputSpec {
     pub formula: String,
+    #[serde(default, with = "soryntel_core::serde_nonfinite::option")]
     pub target_wt_pct: Option<f64>,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub weight_coeff: f64,
 }
 
@@ -84,16 +87,21 @@ pub struct SpeciesConverterRequest {
     pub exact_o: bool,
     pub exact_h: bool,
     pub set_norm_limit: bool,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub norm_limit: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub small_meas_limit: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub element_balance_limit_pct: f64,
     pub stability_type: SpeciesTypeFilter,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub stability_weighting_coef: f64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CalculatedElementRow {
     pub element: String,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub wt_pct: f64,
     pub exceeds_limit: bool,
 }
@@ -101,8 +109,11 @@ pub struct CalculatedElementRow {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ConvertedSpeciesRow {
     pub formula: String,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub calculated_wt_pct: f64,
+    #[serde(default, with = "soryntel_core::serde_nonfinite::option")]
     pub target_wt_pct: Option<f64>,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub weight_coeff: f64,
     pub species_type: String,
 }
@@ -110,23 +121,34 @@ pub struct ConvertedSpeciesRow {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ElementBalanceRow {
     pub element: String,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub input_kg: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub output_kg: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub balance_kg: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub error_pct: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub limit: f64,
     pub below_limit: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SpeciesConverterResult {
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub input_total_wt_pct: f64,
     pub calculated_input_elements: Vec<CalculatedElementRow>,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub calculated_input_total_wt_pct: f64,
     pub output_rows: Vec<ConvertedSpeciesRow>,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub output_total_wt_pct: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub target_total_wt_pct: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub others_wt_pct: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub residual_error: f64,
     pub element_balance: Vec<ElementBalanceRow>,
 }

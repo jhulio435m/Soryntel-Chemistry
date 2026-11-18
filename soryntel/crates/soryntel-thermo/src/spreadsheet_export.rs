@@ -892,13 +892,13 @@ fn emit_onlyoffice_js_udfs() -> (String, String) {
     (defs, exports.join(", "))
 }
 
-/// Portable Excel & WPS Spreadsheets VBA module (`SoryntelHSC.bas`) calling the local HTTP bridge.
+/// Portable Excel & WPS Spreadsheets VBA module (`SoryntelAddIns.bas`) calling the local HTTP bridge.
 /// Supports Excel `Range` parameters (joined with `|` for `Stream*`, `Flow*`, `DensityA`, and `StreamEQ`),
 /// full UTF-8 URL encoding, and every HSC6 + HSC10 + Mineralogy UDF (all 83 active functions).
 pub fn generate_excel_wps_vba(port: u16) -> String {
     let generated_udfs = emit_vba_or_basic_udfs("SoryntelCall", true);
     format!(
-        r##"Attribute VB_Name = "SoryntelHSC"
+        r##"Attribute VB_Name = "SoryntelAddIns"
 ' Soryntel Thermochemical Add-In Module for Microsoft Excel & WPS Office
 ' Compatible with Excel 2010-2024 and WPS Spreadsheets (VBA Bridge)
 Option Explicit
@@ -1008,7 +1008,7 @@ Public Sub HSC_RecalculateAll()
     Application.CalculateFullRebuild
 End Sub
 
-Public Sub HSC_ChangeMeasurementUnits(ByVal TUnit As String, ByVal EUnit As String, Optional ByVal PUnit As String = "bar")
+Public Sub Soryntel_ChangeMeasurementUnits(ByVal TUnit As String, ByVal EUnit As String, Optional ByVal PUnit As String = "bar")
     Dim res As Variant
     res = SoryntelCall("UNITS", TUnit, EUnit, PUnit)
     Application.CalculateFullRebuild
@@ -1038,14 +1038,14 @@ End Function
 }
 
 /// Generate a LibreOffice Calc / Collabora `.oxt` Extension Package containing BOTH
-/// a Basic library (`SoryntelHSC/` via StarBasic `SimpleFileAccess`) and Python script (`Scripts/python/`).
+/// a Basic library (`SoryntelAddIns/` via StarBasic `SimpleFileAccess`) and Python script (`Scripts/python/`).
 pub fn build_libreoffice_oxt(port: u16) -> Vec<u8> {
     let mut zip = ZipBuilder::new();
     zip.add_file(
         "META-INF/manifest.xml",
         br#"<?xml version="1.0" encoding="UTF-8"?>
 <manifest:manifest xmlns:manifest="urn:oasis:names:tc:opendocument:xmlns:manifest:1.0">
-  <manifest:file-entry manifest:media-type="application/vnd.sun.star.basic-library" manifest:full-path="SoryntelHSC/"/>
+  <manifest:file-entry manifest:media-type="application/vnd.sun.star.basic-library" manifest:full-path="SoryntelAddIns/"/>
   <manifest:file-entry manifest:media-type="application/vnd.sun.star.framework-script" manifest:full-path="Scripts/"/>
 </manifest:manifest>"#
             .to_vec(),
@@ -1061,11 +1061,11 @@ pub fn build_libreoffice_oxt(port: u16) -> Vec<u8> {
             .to_vec(),
     );
     zip.add_file(
-        "SoryntelHSC/script.xlb",
+        "SoryntelAddIns/script.xlb",
         br#"<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE library:library PUBLIC "-//OpenOffice.org//DTD OfficeDocument 1.0//EN" "library.dtd">
-<library:library xmlns:library="http://openoffice.org/2000/library" library:name="SoryntelHSC" library:readonly="false" library:passwordprotected="false">
-  <library:element library:name="SoryntelHSC"/>
+<library:library xmlns:library="http://openoffice.org/2000/library" library:name="SoryntelAddIns" library:readonly="false" library:passwordprotected="false">
+  <library:element library:name="SoryntelAddIns"/>
 </library:library>"#
             .to_vec(),
     );
@@ -1169,12 +1169,12 @@ End Function
     let xba = format!(
         "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
          <!DOCTYPE script:module PUBLIC \"-//OpenOffice.org//DTD OfficeDocument 1.0//EN\" \"module.dtd\">\n\
-         <script:module xmlns:script=\"http://openoffice.org/2000/script\" script:name=\"SoryntelHSC\" script:language=\"StarBasic\">\n\
+         <script:module xmlns:script=\"http://openoffice.org/2000/script\" script:name=\"SoryntelAddIns\" script:language=\"StarBasic\">\n\
          {}\n\
          </script:module>\n",
         xml_escape(&basic_src)
     );
-    zip.add_file("SoryntelHSC/SoryntelHSC.xba", xba.into_bytes());
+    zip.add_file("SoryntelAddIns/SoryntelAddIns.xba", xba.into_bytes());
 
     let py_udfs = emit_python_udfs();
     let py = format!(
@@ -1225,14 +1225,14 @@ def STREAMEQ(sp, amt, temp, pres):
     return rows
 "##
     );
-    zip.add_file("Scripts/python/soryntel_hsc.py", py.into_bytes());
+    zip.add_file("Scripts/python/soryntel_addins.py", py.into_bytes());
     zip.add_file(
         "README.txt",
         format!(
             "Soryntel Chemistry Add-In for LibreOffice Calc / Collabora\n\
              ==========================================================\n\
              1. Install this .oxt via Tools -> Extension Manager -> Add...\n\
-             2. Copy/expose SoryntelHSC module functions to Standard library OR use macro-free =WEBSERVICE(\"http://127.0.0.1:{port}/eval?fn=H&a=CO2(g)&b=100\").\n\
+             2. Copy/expose SoryntelAddIns module functions to Standard library OR use macro-free =WEBSERVICE(\"http://127.0.0.1:{port}/eval?fn=H&a=CO2(g)&b=100\").\n\
              3. Keep Soryntel Add-In HTTP Bridge running on 127.0.0.1:{port} (GUI or `soryntel-desktop --addin-bridge {port}`).\n"
         )
         .into_bytes(),
@@ -1252,7 +1252,7 @@ pub fn build_onlyoffice_plugin_zip(port: u16) -> Vec<u8> {
   "baseUrl": "",
   "variations": [
     {
-      "description": "83 Thermochemical & Mineralogy Custom Functions compatible with HSC Add-Ins",
+      "description": "83 Thermochemical & Mineralogy Custom Functions for Soryntel Chemistry",
       "url": "index.html",
       "isViewer": false,
       "EditorsSupport": ["cell"],
@@ -1373,7 +1373,7 @@ pub fn build_onlyoffice_plugin_zip(port: u16) -> Vec<u8> {
     window.SoryntelFunctions = exported;
   }}
   if (typeof Api !== "undefined" && typeof Api.AddCustomFunctionLibrary === "function") {{
-    Api.AddCustomFunctionLibrary("SoryntelHSC", exported);
+    Api.AddCustomFunctionLibrary("SoryntelAddIns", exported);
   }}
 }})();
 "##
@@ -1385,7 +1385,7 @@ pub fn build_onlyoffice_plugin_zip(port: u16) -> Vec<u8> {
   if (window.Asc && window.Asc.plugin) {{
     window.Asc.plugin.init = function() {{
       if (window.Api && typeof window.Api.AddCustomFunctionLibrary === "function" && window.SoryntelFunctions) {{
-        window.Api.AddCustomFunctionLibrary("SoryntelHSC", window.SoryntelFunctions);
+        window.Api.AddCustomFunctionLibrary("SoryntelAddIns", window.SoryntelFunctions);
       }}
     }};
     window.Asc.plugin.button = function() {{
@@ -1467,7 +1467,7 @@ mod tests {
                     value: ExportCellValue::Formula {
                         formula: "=StreamX(\"A\";B1;\"SiO2\")".into(),
                         cached_number: None,
-                        cached_text: Some("#HSC_SIM_ONLY".into()),
+                        cached_text: Some("#SIM_ONLY".into()),
                         array_rows: 1,
                     },
                 },
@@ -1478,7 +1478,7 @@ mod tests {
         assert!(s.contains("<c r=\"A1\" s=\"0\" t=\"e\">"), "missing t=\"e\" on #NAME?");
         assert!(
             s.contains("<c r=\"A2\" s=\"0\" t=\"str\">"),
-            "custom #HSC_SIM_ONLY should keep t=\"str\""
+            "custom #SIM_ONLY should keep t=\"str\""
         );
     }
 }

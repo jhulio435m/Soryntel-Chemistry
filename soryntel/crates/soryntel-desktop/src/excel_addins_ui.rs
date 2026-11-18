@@ -8,6 +8,7 @@
 //!   exportadores nativos para Microsoft Excel, LibreOffice Calc (`.ods`/`.oxt`), ONLYOFFICE (`.zip`)
 //!   y WPS Office (`.bas` / `.xlsx` / `=WEBSERVICE(...)`).
 
+use crate::excel_grid::parse_decimal_input;
 use crate::addins_bridge::BridgeHandle;
 use crate::excel_grid::{
     col_letter, header_cell, row_num_cell, text_cell, widget_cell, CELL_H, EXCEL_ALT_ROW_BG,
@@ -136,7 +137,7 @@ impl ArgSeparator {
     }
     fn label(self) -> &'static str {
         match self {
-            Self::Semicolon => "Semicolon ( ; )  [EU / HSC manual]",
+            Self::Semicolon => "Semicolon ( ; ) [EU / manual]",
             Self::Comma => "Comma ( , )  [US Excel]",
         }
     }
@@ -292,23 +293,23 @@ impl Default for ExcelAddInsModuleState {
         let packs = vec![
             InternalAddInPack {
                 kind: AddInPackKind::Hsc6Core,
-                name: "HSC6 Core Thermochemical Add-In",
-                module_ref: "Internal :: HSC6.XLL (69 functions)",
+                name: "Thermochemical Add-In",
+                module_ref: "Internal :: Thermochemistry-Core.xll (69 functions)",
                 pack_type: "Internal Thermochemical Engine",
                 description: "H, S, Cp, G, Reaction*, TP/HT/ST/GT equilibrium, Percentage, Stream*, Flow*, StreamEQ.",
                 enabled: true,
             },
             InternalAddInPack {
                 kind: AddInPackKind::Hsc10UnitQuery,
-                name: "HSC10 Unit Query & Humid Air",
-                module_ref: "Internal :: HSC10-Excel.xll (3 functions)",
+                name: "Unit Query & Humid Air",
+                module_ref: "Internal :: Soryntel-Excel.xll (3 functions)",
                 pack_type: "Internal Unit & Density Add-In",
                 description: "UNITS(), DensityA(), StreamH() dynamic unit configuration inside Soryntel.",
                 enabled: true,
             },
             InternalAddInPack {
                 kind: AddInPackKind::Mineralogy,
-                name: "HSC Mineralogy Add-In",
+                name: "Mineralogy Add-In",
                 module_ref: "Internal :: Minerals.txt (11 functions, 3,812 records)",
                 pack_type: "Internal Mineralogy Engine",
                 description: "MineralCode, MineralName, MineralFormula, MineralGroup, MineralDensity, MineralC, etc.",
@@ -316,8 +317,8 @@ impl Default for ExcelAddInsModuleState {
             },
             InternalAddInPack {
                 kind: AddInPackKind::HscSimRef,
-                name: "HSC-Sim Particle / Stream Functions",
-                module_ref: "Internal :: HSC-Sim Cap. 27/57 (5 functions)",
+                name: "Sim Particle / Stream Functions",
+                module_ref: "Internal :: Sim Cap. 27/57 (5 functions)",
                 pack_type: "Flowsheet Function Pack",
                 description: "StreamX, StreamMass, StreamVol, ParticleX, MineralX (con plantilla de ejemplo).",
                 enabled: true,
@@ -452,7 +453,7 @@ impl Default for ExcelAddInsModuleState {
             webservice_a: "CO(g)".into(),
             webservice_b: "100".into(),
             export_dir: "/tmp".into(),
-            export_filename: "HSC_AddIns_Workbook".into(),
+            export_filename: "Soryntel_AddIns_Workbook".into(),
             export_status: String::new(),
             migrator_input: "=H(\"Fe\";298;\"Mcal\";25)".into(),
             migrator_output: String::new(),
@@ -644,8 +645,8 @@ fn cell_literal_for_expr(val: &CellEvalValue, raw: &str) -> String {
             let t = raw.trim();
             if t.is_empty() {
                 "\"\"".into()
-            } else if t.parse::<f64>().is_ok() {
-                t.to_string()
+            } else if let Some(number) = parse_decimal_input(t) {
+                number.to_string()
             } else {
                 format!("\"{}\"", t.replace('"', "\"\""))
             }
@@ -744,7 +745,7 @@ fn paint_range_outline(
     draw_corners: bool,
     draw_fill_handle: bool,
 ) {
-    painter.rect_stroke(rect, 0.0, egui::Stroke::new(width, color));
+    painter.rect_stroke(rect, 0.0, egui::Stroke::new(width, color), egui::StrokeKind::Middle);
     if draw_corners {
         let s = 4.0;
         for pt in [
@@ -781,6 +782,7 @@ fn paint_streameq_inline_formula(
         overlay,
         0.0,
         egui::Stroke::new(1.0, egui::Color32::from_rgb(160, 174, 192)),
+        egui::StrokeKind::Middle,
     );
 
     let font = egui::FontId::proportional(11.5);
@@ -862,7 +864,7 @@ impl ExcelAddInsModuleState {
         None
     }
 
-    fn resolve_cross_sheet_refs(&self, formula: &str) -> String {
+    fn resolve_cross_sheet_refs(&self, formula: &str, in_worksheet: bool) -> String {
         let bytes = formula.as_bytes();
         let mut out = String::with_capacity(formula.len());
         let mut i = 0usize;
@@ -900,8 +902,11 @@ impl ExcelAddInsModuleState {
                                 let coord_str = &after[..coord_len];
                                 let coord_clean = coord_str.replace('$', "");
                                 if let Some((row, col)) = AddinsUseCases::parse_a1(&coord_clean) {
-                                    let val_lit = self.cross_sheet_cell_expr(&sheet_norm, row, col);
-                                    out.push_str(&val_lit);
+                                    if in_worksheet && matches!(sheet_norm.as_str(), "worksheet" | "sheet1") {
+                                        out.push_str(coord_str);
+                                    } else {
+                                        out.push_str(&self.cross_sheet_cell_expr(&sheet_norm, row, col));
+                                    }
                                     i += bang_rel + 1 + coord_len;
                                     continue;
                                 }
@@ -986,7 +991,7 @@ impl ExcelAddInsModuleState {
         if let Some(err) = self.check_formula_pack_access(raw_formula) {
             return err;
         }
-        let expanded = self.resolve_cross_sheet_refs(raw_formula);
+        let expanded = self.resolve_cross_sheet_refs(raw_formula, false);
         AddinsUseCases::eval_addin_formula(db, &mut self.units, &expanded, lookup)
     }
 
@@ -1077,7 +1082,7 @@ impl ExcelAddInsModuleState {
                 if raw.is_empty() {
                     self.ws_eval[r][c] = blank_cell_val();
                 } else if !raw.starts_with('=') && !raw.starts_with("{=") {
-                    if let Ok(v) = raw.parse::<f64>() {
+                    if let Some(v) = parse_decimal_input(raw) {
                         self.ws_eval[r][c] = CellEvalValue::Number(v);
                     } else {
                         self.ws_eval[r][c] = CellEvalValue::Text(raw.to_string());
@@ -1090,6 +1095,7 @@ impl ExcelAddInsModuleState {
         for _pass in 0..16 {
             let mut changed = false;
             let mut spilled_targets: HashSet<(usize, usize)> = HashSet::new();
+            let mut dependencies = vec![Vec::new(); WS_ROWS * WS_COLS];
 
             for r in 0..WS_ROWS {
                 for c in 0..WS_COLS {
@@ -1099,13 +1105,19 @@ impl ExcelAddInsModuleState {
                     }
                     let snap_raw = self.ws_raw.clone();
                     let snap_eval = self.ws_eval.clone();
-                    let val = self.eval_sheet_formula(db, &raw, |rr, cc| {
-                        if rr < WS_ROWS && cc < WS_COLS {
-                            format_cell_for_lookup(&snap_eval[rr][cc], &snap_raw[rr][cc])
-                        } else {
-                            String::new()
-                        }
-                    });
+                    let val = if let Some(error) = self.check_formula_pack_access(&raw) {
+                        error
+                    } else {
+                        let formula = self.resolve_cross_sheet_refs(&raw, true);
+                        AddinsUseCases::eval_addin_formula(db, &mut self.units, &formula, |rr, cc| {
+                            if rr < WS_ROWS && cc < WS_COLS {
+                                dependencies[r * WS_COLS + c].push(rr * WS_COLS + cc);
+                                format_cell_for_lookup(&snap_eval[rr][cc], &snap_raw[rr][cc])
+                            } else {
+                                String::new()
+                            }
+                        })
+                    };
                     match val {
                         CellEvalValue::Array(arr) => {
                             let tag = if raw.starts_with("{=") {
@@ -1137,6 +1149,40 @@ impl ExcelAddInsModuleState {
                     }
                 }
             }
+            // The worksheet is bounded. Walk each cell's dependencies without
+            // recursing through formulas or growing the traversal stack by cycles.
+            let mut circular = vec![false; dependencies.len()];
+            for (origin, references) in dependencies.iter().enumerate() {
+                let mut pending = references.clone();
+                let mut visited = vec![false; dependencies.len()];
+                while let Some(cell) = pending.pop() {
+                    if cell == origin {
+                        circular[origin] = true;
+                        break;
+                    }
+                    if !std::mem::replace(&mut visited[cell], true) {
+                        pending.extend(&dependencies[cell]);
+                    }
+                }
+            }
+            // Propagate the error to formulas that read any circular result.
+            loop {
+                let mut propagated = false;
+                for (cell, references) in dependencies.iter().enumerate() {
+                    if !circular[cell] && references.iter().any(|&reference| circular[reference]) {
+                        circular[cell] = true;
+                        propagated = true;
+                    }
+                }
+                if !propagated {
+                    break;
+                }
+            }
+            for (cell, is_circular) in circular.into_iter().enumerate() {
+                if is_circular {
+                    self.ws_eval[cell / WS_COLS][cell % WS_COLS] = CellEvalValue::Error("#CIRC!".into());
+                }
+            }
             if !changed {
                 break;
             }
@@ -1147,18 +1193,15 @@ impl ExcelAddInsModuleState {
         if !self.is_pack_enabled(AddInOrigin::Hsc6Xll) {
             self.eq_outputs = vec![CellEvalValue::Error("#NAME?".into()); self.eq_species.len()];
             self.eq_balance.clear();
-            self.status_msg = "StreamEQ deshabilitado: activa 'HSC6 Core' en File -> Options -> Add-Ins.".into();
+            self.status_msg = "StreamEQ deshabilitado: activa 'Termoquímica' en File -> Options -> Add-Ins.".into();
             return;
         }
 
-        let t_parsed = self.eq_temp_raw.trim().parse::<f64>().ok();
-        let p_parsed = self.eq_press_raw.trim().parse::<f64>().ok();
+        let t_parsed = parse_decimal_input(&self.eq_temp_raw);
+        let p_parsed = parse_decimal_input(&self.eq_press_raw);
         let (t_val, p_val) = match (t_parsed, p_parsed) {
             (Some(t), Some(p)) => (t, p),
             _ => {
-                self.eq_outputs =
-                    vec![CellEvalValue::Error("#VALUE!".into()); self.eq_species.len()];
-                self.eq_balance.clear();
                 self.status_msg = "StreamEQ #VALUE!: C1 (Temperature) y C2 (Pressure) deben ser numéricos.".into();
                 return;
             }
@@ -1248,7 +1291,7 @@ impl ExcelAddInsModuleState {
                 if !trimmed.starts_with('=') && !trimmed.starts_with("{=") {
                     if trimmed.is_empty() {
                         cell.eval = blank_cell_val();
-                    } else if let Ok(n) = trimmed.parse::<f64>() {
+                    } else if let Some(n) = parse_decimal_input(trimmed) {
                         cell.eval = CellEvalValue::Number(n);
                     } else {
                         cell.eval = CellEvalValue::Text(trimmed.to_string());
@@ -1307,7 +1350,7 @@ impl ExcelAddInsModuleState {
 
         for idx in 0..self.scratch_rows.len() {
             let formula = self.scratch_rows[idx].formula.clone();
-            let expanded = self.resolve_cross_sheet_refs(&formula);
+            let expanded = self.resolve_cross_sheet_refs(&formula, false);
             let res = if let Some(err) = self.check_formula_pack_access(&expanded) {
                 err
             } else {
@@ -1341,7 +1384,7 @@ impl ExcelAddInsModuleState {
         if let Some((a, b)) = t.split_once(':') {
             let a_clean = a.trim().replace('$', "");
             let b_clean = b.trim().replace('$', "");
-            if let (Some((r0, c0)), Some((r1, c1))) = (AddinsUseCases::parse_a1(&a_clean), AddinsUseCases::parse_a1(&b_clean)) {
+            if let (Some((r0, c0)), Some((r1, c1))) = (self.active_sheet_position(&a_clean), self.active_sheet_position(&b_clean)) {
                 let mut vals = Vec::new();
                 for rr in r0.min(r1)..=r0.max(r1) {
                     for cc in c0.min(c1)..=c0.max(c1) {
@@ -1446,7 +1489,7 @@ impl ExcelAddInsModuleState {
                         && !matches!(fn_upper.as_str(), "STREAMX" | "STREAMMASS" | "STREAMVOL"));
                 if is_range {
                     t.to_string()
-                } else if t.parse::<f64>().is_ok() {
+                } else if parse_decimal_input(t).is_some() {
                     t.to_string()
                 } else if t.starts_with('"') && t.ends_with('"') {
                     t.to_string()
@@ -1676,37 +1719,75 @@ impl ExcelAddInsModuleState {
         self.formula_bar_text = raw_text;
     }
 
+    fn active_sheet_position(&self, reference: &str) -> Option<(usize, usize)> {
+        let (rows, columns) = match self.active_sheet {
+            AddInSheetTab::Worksheet => (WS_ROWS, WS_COLS),
+            AddInSheetTab::StreamEq => (self.eq_species.len() + 3, 3),
+            AddInSheetTab::Minerals => (self.min_max_row + 1, self.min_max_col + 1),
+            AddInSheetTab::AddInSample => (self.sample_max_row + 1, self.sample_max_col + 1),
+            AddInSheetTab::FunctionsCatalog => return AddinsUseCases::parse_a1(reference),
+        };
+        let position = AddinsUseCases::parse_a1_in_sheet(reference, rows, columns)?;
+        if self.active_sheet == AddInSheetTab::StreamEq
+            && !(position.0 >= 3 || (position.0 < 2 && position.1 == 2))
+        {
+            return None;
+        }
+        Some(position)
+    }
+
+    fn worksheet_edit_position(&mut self) -> Option<(usize, usize)> {
+        let position = AddinsUseCases::parse_a1_in_sheet(&self.active_cell_ref, WS_ROWS, WS_COLS);
+        if position.is_none() {
+            self.status_msg = format!(
+                "Referencia inválida para Worksheet (A1:H24): '{}'.",
+                self.active_cell_ref
+            );
+        }
+        position
+    }
+
     pub fn apply_formula_bar(&mut self, db: &dyn SpeciesCatalogPort) {
         let cell_ref = self.active_cell_ref.trim().to_ascii_uppercase();
         let val = self.formula_bar_text.clone();
         self.active_cell_ref = cell_ref.clone();
 
+        if !matches!(self.active_sheet, AddInSheetTab::Worksheet | AddInSheetTab::FunctionsCatalog)
+            && !(self.active_sheet == AddInSheetTab::AddInSample && cell_ref.starts_with("SCRATCH"))
+            && self.active_sheet_position(&cell_ref).is_none()
+        {
+            self.status_msg = format!("Referencia inválida: '{cell_ref}'.");
+            return;
+        }
+
         match self.active_sheet {
             AddInSheetTab::Worksheet => {
-                if let Some((r, c)) = AddinsUseCases::parse_a1(&cell_ref) {
-                    if r < WS_ROWS && c < WS_COLS {
-                        let stored = val
-                            .trim()
-                            .strip_prefix('{')
-                            .and_then(|s| s.strip_suffix('}'))
-                            .map(|s| s.to_string())
-                            .unwrap_or_else(|| val.clone());
-                        self.ws_raw[r][c] = stored;
-                        self.recalculate_worksheet(db);
-                        self.status_msg = format!("Worksheet {cell_ref} actualizado.");
-                        return;
-                    }
-                }
-                self.status_msg = format!("Referencia inválida para Worksheet (A1:H24): '{cell_ref}'.");
+                let Some((r, c)) = self.worksheet_edit_position() else {
+                    return;
+                };
+                let stored = val
+                    .trim()
+                    .strip_prefix('{')
+                    .and_then(|s| s.strip_suffix('}'))
+                    .map(str::to_string)
+                    .unwrap_or(val);
+                self.ws_raw[r][c] = stored;
+                self.recalculate_worksheet(db);
+                self.status_msg = format!("Worksheet {cell_ref} actualizado.");
             }
             AddInSheetTab::StreamEq => {
-                if cell_ref == "C1" {
-                    self.eq_temp_raw = val.trim().to_string();
+                if matches!(self.active_sheet_position(&cell_ref), Some((0 | 1, 2))) {
+                    let Some(number) = parse_decimal_input(&val) else {
+                        self.status_msg = format!("StreamEQ {cell_ref}: número inválido.");
+                        return;
+                    };
+                    if self.active_sheet_position(&cell_ref) == Some((0, 2)) {
+                        self.eq_temp_raw = number.to_string();
+                    } else {
+                        self.eq_press_raw = number.to_string();
+                    }
                     self.recalculate_streameq(db);
-                } else if cell_ref == "C2" {
-                    self.eq_press_raw = val.trim().to_string();
-                    self.recalculate_streameq(db);
-                } else if let Some((r, c)) = AddinsUseCases::parse_a1(&cell_ref) {
+                } else if let Some((r, c)) = self.active_sheet_position(&cell_ref) {
                     if r >= 3 {
                         let idx = r - 3;
                         while self.eq_species.len() <= idx {
@@ -1729,7 +1810,7 @@ impl ExcelAddInsModuleState {
                 }
             }
             AddInSheetTab::Minerals => {
-                if let Some((r, c)) = AddinsUseCases::parse_a1(&cell_ref) {
+                if let Some((r, c)) = self.active_sheet_position(&cell_ref) {
                     let is_f = val.trim().starts_with('=') || val.trim().starts_with("{=");
                     let prev_style = self
                         .min_cells
@@ -1758,7 +1839,7 @@ impl ExcelAddInsModuleState {
             AddInSheetTab::AddInSample => {
                 if let Some(idx_str) = cell_ref.strip_prefix("SCRATCH") {
                     if let Ok(n) = idx_str.parse::<usize>() {
-                        if let Some(row) = self.scratch_rows.get_mut(n.saturating_sub(1)) {
+                        if let Some(row) = self.scratch_rows.get_mut(n.checked_sub(1).unwrap_or(usize::MAX)) {
                             row.formula = val;
                             self.recalculate_scratch_rows(db);
                             self.status_msg = format!("{cell_ref} actualizado.");
@@ -1766,7 +1847,7 @@ impl ExcelAddInsModuleState {
                         }
                     }
                 }
-                if let Some((r, c)) = AddinsUseCases::parse_a1(&cell_ref) {
+                if let Some((r, c)) = self.active_sheet_position(&cell_ref) {
                     let is_f = val.trim().starts_with('=') || val.trim().starts_with("{=");
                     let prev_style = self
                         .sample_cells
@@ -1825,9 +1906,9 @@ impl ExcelAddInsModuleState {
     }
 
     pub fn insert_formula_into_worksheet(&mut self, db: &dyn SpeciesCatalogPort, formula: String) {
-        let (r, c) = AddinsUseCases::parse_a1(&self.active_cell_ref)
-            .filter(|&(r, c)| r < WS_ROWS && c < WS_COLS)
-            .unwrap_or((1, 2));
+        let Some((r, c)) = self.worksheet_edit_position() else {
+            return;
+        };
         self.ws_raw[r][c] = formula.clone();
         self.active_sheet = AddInSheetTab::Worksheet;
         self.active_cell_ref = format!("{}{}", AddinsUseCases::col_to_a1(c), r + 1);
@@ -1889,8 +1970,10 @@ impl ExcelAddInsModuleState {
         let fname = format!("{}.{}", self.export_filename.trim(), format_ext);
         let full_path = dir.join(fname);
 
-        let t_val = self.eq_temp_raw.trim().parse::<f64>().unwrap_or(1500.0);
-        let p_val = self.eq_press_raw.trim().parse::<f64>().unwrap_or(1.0);
+        let t_val = parse_decimal_input(&self.eq_temp_raw)
+            .ok_or("StreamEQ C1: temperatura inválida")?;
+        let p_val = parse_decimal_input(&self.eq_press_raw)
+            .ok_or("StreamEQ C2: presión inválida")?;
         let sheets = vec![
             self.build_worksheet_export_sheet(),
             AddinsUseCases::addin_streameq_sheet(
@@ -1919,15 +2002,15 @@ impl ExcelAddInsModuleState {
         std::fs::create_dir_all(dir).map_err(|e| format!("No se pudo crear directorio: {e}"))?;
         let (fname, bytes): (&str, Vec<u8>) = match kind {
             "oxt" => (
-                "SoryntelHSC_Calc.oxt",
+                "Soryntel_Calc.oxt",
                 AddinsUseCases::export_libreoffice_oxt(self.bridge_port),
             ),
             "onlyoffice" => (
-                "SoryntelHSC_ONLYOFFICE.zip",
+                "Soryntel_ONLYOFFICE.zip",
                 AddinsUseCases::export_onlyoffice_plugin(self.bridge_port),
             ),
             "bas" => (
-                "SoryntelHSC.bas",
+                "Soryntel.bas",
                 AddinsUseCases::export_excel_wps_vba(self.bridge_port).into_bytes(),
             ),
             _ => return Err("Conector de suite no reconocido".into()),
@@ -1963,7 +2046,8 @@ impl ExcelAddInsModuleState {
         Ok(full_path.to_string_lossy().to_string())
     }
 
-    pub fn ui<C: SpeciesCatalogPort + Send + Sync + 'static>(&mut self, ctx: &egui::Context, shared: Arc<RwLock<C>>) {
+    pub fn ui<C: SpeciesCatalogPort + Send + Sync + 'static>(&mut self, root_ui: &mut egui::Ui, shared: Arc<RwLock<C>>) {
+        let ctx = &root_ui.ctx().clone();
         let catalog = shared.read().unwrap_or_else(|e| e.into_inner());
         let db = &*catalog;
         self.ensure_initialized(db);
@@ -2012,34 +2096,34 @@ impl ExcelAddInsModuleState {
         }
 
         if self.show_file_backstage {
-            self.render_file_backstage(ctx, db, &shared);
+            self.render_file_backstage(root_ui, db, &shared);
             return;
         }
 
         // 1) Barra superior estilo Excel 2013 + HSC Ribbon
-        egui::TopBottomPanel::top("excel_addins_ribbon")
-            .frame(egui::Frame::none().fill(EXCEL_RIBBON_BG))
-            .show(ctx, |ui| {
+        egui::Panel::top("excel_addins_ribbon")
+            .frame(egui::Frame::NONE.fill(EXCEL_RIBBON_BG))
+            .show(root_ui, |ui| {
                 self.render_title_and_ribbon(ui, db, &shared);
                 self.render_formula_bar(ui, db);
             });
 
         // 2) Barra inferior con pestañas de hojas + estado 100% interno
-        egui::TopBottomPanel::bottom("excel_addins_sheet_bar")
+        egui::Panel::bottom("excel_addins_sheet_bar")
             .frame(
-                egui::Frame::none()
+                egui::Frame::NONE
                     .fill(EXCEL_HEADER_BG)
                     .stroke(egui::Stroke::new(1.0, EXCEL_BORDER))
-                    .inner_margin(egui::Margin::symmetric(8.0, 4.0)),
+                    .inner_margin(egui::Margin::symmetric(8, 4)),
             )
-            .show(ctx, |ui| {
+            .show(root_ui, |ui| {
                 self.render_sheet_tabs_and_status(ui, db);
             });
 
         // 3) Contenido de la hoja activa
         egui::CentralPanel::default()
-            .frame(egui::Frame::none().fill(egui::Color32::WHITE))
-            .show(ctx, |ui| match self.active_sheet {
+            .frame(egui::Frame::NONE.fill(egui::Color32::WHITE))
+            .show(root_ui, |ui| match self.active_sheet {
                 AddInSheetTab::Worksheet => self.render_worksheet(ui, db),
                 AddInSheetTab::StreamEq => self.render_streameq_sheet(ui, db),
                 AddInSheetTab::Minerals => self.render_minerals_sheet(ui, db),
@@ -2050,13 +2134,13 @@ impl ExcelAddInsModuleState {
 
     fn render_title_and_ribbon<C: SpeciesCatalogPort + Send + Sync + 'static>(&mut self, ui: &mut egui::Ui, db: &dyn SpeciesCatalogPort, shared: &Arc<RwLock<C>>) {
         // Banda verde título + pestañas Excel 2013 (FILE / HOME / INSERT / PAGE LAYOUT / FORMULAS / ADD-INS)
-        egui::Frame::none()
+        egui::Frame::NONE
             .fill(EXCEL_GREEN)
-            .inner_margin(egui::Margin::symmetric(10.0, 5.0))
+            .inner_margin(egui::Margin::symmetric(10, 5))
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
                     ui.label(
-                        egui::RichText::new("HSC Excel Add-Ins — Soryntel Chemistry")
+                        egui::RichText::new("Excel Add-Ins — Soryntel Chemistry")
                             .strong()
                             .size(13.5)
                             .color(egui::Color32::WHITE),
@@ -2072,7 +2156,7 @@ impl ExcelAddInsModuleState {
                                     .color(egui::Color32::WHITE),
                             )
                             .fill(EXCEL_GREEN_DARK)
-                            .rounding(egui::Rounding::same(2.0)),
+                            .corner_radius(egui::CornerRadius::same(2)),
                         )
                         .clicked()
                     {
@@ -2105,7 +2189,7 @@ impl ExcelAddInsModuleState {
                                     egui::RichText::new(label).strong().size(11.5).color(fg),
                                 )
                                 .fill(fill)
-                                .rounding(egui::Rounding::same(2.0)),
+                                .corner_radius(egui::CornerRadius::same(2)),
                             )
                             .clicked()
                         {
@@ -2139,7 +2223,7 @@ impl ExcelAddInsModuleState {
                                         .color(egui::Color32::WHITE),
                                 )
                                 .fill(b_fill)
-                                .rounding(egui::Rounding::same(3.0)),
+                                .corner_radius(egui::CornerRadius::same(3)),
                             )
                             .on_hover_text("Activar/detener servidor HTTP local para Excel, LibreOffice Calc, ONLYOFFICE y WPS")
                             .clicked()
@@ -2167,10 +2251,10 @@ impl ExcelAddInsModuleState {
             });
 
         // Franja contextual del Ribbon según pestaña
-        egui::Frame::none()
+        egui::Frame::NONE
             .fill(EXCEL_RIBBON_BG)
             .stroke(egui::Stroke::new(1.0, EXCEL_BORDER))
-            .inner_margin(egui::Margin::symmetric(10.0, 5.0))
+            .inner_margin(egui::Margin::symmetric(10, 5))
             .show(ui, |ui| {
                 ui.horizontal_wrapped(|ui| match self.ribbon_tab {
                     AddInRibbonTab::Home | AddInRibbonTab::File => {
@@ -2280,14 +2364,14 @@ impl ExcelAddInsModuleState {
                     }
                     AddInRibbonTab::AddIns => {
                         // Clon fiel de "Menu Commands -> HSC ▼ -> Change measurement units..."
-                        egui::Frame::none()
+                        egui::Frame::NONE
                             .fill(egui::Color32::from_rgb(235, 240, 237))
                             .stroke(egui::Stroke::new(1.0, egui::Color32::from_rgb(180, 198, 187)))
-                            .inner_margin(egui::Margin::symmetric(8.0, 3.0))
+                            .inner_margin(egui::Margin::symmetric(8, 3))
                             .show(ui, |ui| {
                                 ui.vertical(|ui| {
                                     ui.menu_button(
-                                        egui::RichText::new("  HSC ▾  ")
+                                        egui::RichText::new(" ▾ ")
                                             .strong()
                                             .size(12.0)
                                             .color(EXCEL_GREEN_DARK),
@@ -2295,30 +2379,30 @@ impl ExcelAddInsModuleState {
                                             if ui.button(crate::i18n::text("common.035")).clicked() {
                                                 self.pending_units = self.units.clone();
                                                 self.show_units_dialog = true;
-                                                ui.close_menu();
+                                                ui.close_kind(egui::UiKind::Menu);
                                             }
                                             ui.separator();
                                             if ui.button("Recalculate Workbook (F9)").clicked() {
                                                 self.recalculate_all(db);
-                                                ui.close_menu();
+                                                ui.close_kind(egui::UiKind::Menu);
                                             }
                                             if ui.button("StreamEQ Array Sheet (Fig. 4-6)").clicked() {
                                                 self.active_sheet = AddInSheetTab::StreamEq;
-                                                ui.close_menu();
+                                                ui.close_kind(egui::UiKind::Menu);
                                             }
                                             if ui.button("Minerals Sample Sheet (Fig. 7)").clicked() {
                                                 self.active_sheet = AddInSheetTab::Minerals;
-                                                ui.close_menu();
+                                                ui.close_kind(egui::UiKind::Menu);
                                             }
                                             ui.separator();
                                             if ui.button("Excel Add-Ins Manager (Go...)").clicked() {
                                                 self.show_addins_go_dialog = true;
-                                                ui.close_menu();
+                                                ui.close_kind(egui::UiKind::Menu);
                                             }
                                             if ui.button("Cross-Suite Bridge & Packages (.oxt / ONLYOFFICE / VBA)").clicked() {
                                                 self.show_file_backstage = true;
                                                 self.file_section = FileBackstageSection::ExportReport;
-                                                ui.close_menu();
+                                                ui.close_kind(egui::UiKind::Menu);
                                             }
                                         },
                                     );
@@ -2404,10 +2488,10 @@ impl ExcelAddInsModuleState {
     }
 
     fn render_formula_bar(&mut self, ui: &mut egui::Ui, db: &dyn SpeciesCatalogPort) {
-        egui::Frame::none()
+        egui::Frame::NONE
             .fill(egui::Color32::WHITE)
             .stroke(egui::Stroke::new(1.0, EXCEL_BORDER))
-            .inner_margin(egui::Margin::symmetric(8.0, 4.0))
+            .inner_margin(egui::Margin::symmetric(8, 4))
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
                     let name_resp = ui.add_sized(
@@ -2446,7 +2530,8 @@ impl ExcelAddInsModuleState {
     fn load_cell_into_formula_bar(&mut self) {
         let cell_ref = self.active_cell_ref.trim().to_ascii_uppercase();
         self.active_cell_ref = cell_ref.clone();
-        let Some((r, c)) = AddinsUseCases::parse_a1(&cell_ref) else {
+        let Some((r, c)) = self.active_sheet_position(&cell_ref) else {
+            self.status_msg = format!("Referencia inválida: '{cell_ref}'.");
             return;
         };
         self.formula_bar_text = match self.active_sheet {
@@ -2530,7 +2615,7 @@ impl ExcelAddInsModuleState {
                 };
                 ui.label(
                     egui::RichText::new(format!(
-                        "Integrado: 83 activas + 5 HSC-Sim ({enabled_packs}/{} paquetes)  |  {bridge_tag}  |  {}",
+                        "Integrado: 83 activas + 5 Sim ({enabled_packs}/{} paquetes) | {bridge_tag} | {}",
                         self.packs.len(),
                         self.status_msg
                     ))
@@ -3166,7 +3251,7 @@ impl ExcelAddInsModuleState {
             .unwrap_or(ExportCellStyle::Default);
         let eval = if is_f {
             blank_cell_val()
-        } else if let Ok(n) = val.trim().parse::<f64>() {
+        } else if let Some(n) = parse_decimal_input(&val) {
             CellEvalValue::Number(n)
         } else {
             CellEvalValue::Text(val.clone())
@@ -3208,7 +3293,7 @@ impl ExcelAddInsModuleState {
             (
                 "=MineralCode(B4)",
                 "=MineralCode(\"Pyrite\")",
-                "Gives standard HSC mineral code for a mineral (1-3 letters)",
+                "Gives standard mineral code for a mineral (1-3 letters)",
             ),
             (
                 "=MineralFormula(B5)",
@@ -3289,10 +3374,10 @@ impl ExcelAddInsModuleState {
                     });
 
                     if let Some(rec) = &self.min_selected {
-                        egui::Frame::none()
+                        egui::Frame::NONE
                             .fill(EXCEL_ALT_ROW_BG)
                             .stroke(egui::Stroke::new(1.0, EXCEL_BORDER))
-                            .inner_margin(egui::Margin::symmetric(8.0, 5.0))
+                            .inner_margin(egui::Margin::symmetric(8, 5))
                             .show(ui, |ui| {
                                 ui.horizontal_wrapped(|ui| {
                                     ui.strong(format!("{} ({})", rec.name, rec.code));
@@ -3339,7 +3424,7 @@ impl ExcelAddInsModuleState {
                     }
 
                     ui.add_space(6.0);
-                    egui::Frame::none()
+                    egui::Frame::NONE
                         .fill(EXCEL_YELLOW_BG)
                         .stroke(egui::Stroke::new(1.0, egui::Color32::from_rgb(180, 160, 80)))
                         .inner_margin(8.0)
@@ -3358,7 +3443,7 @@ impl ExcelAddInsModuleState {
                 ui.vertical(|ui| {
                     ui.set_min_width(470.0);
                     ui.label(
-                        egui::RichText::new("Example of using HSC Chemistry Add-in functions to create a table of minerals")
+                        egui::RichText::new("Example of using spreadsheet add-in functions to create a table of minerals")
                             .strong()
                             .size(12.5)
                             .color(TEXT_DARK),
@@ -3370,7 +3455,7 @@ impl ExcelAddInsModuleState {
                     );
                     ui.add_space(4.0);
 
-                    egui::Frame::none()
+                    egui::Frame::NONE
                         .fill(egui::Color32::WHITE)
                         .stroke(egui::Stroke::new(1.0, EXCEL_BORDER))
                         .inner_margin(6.0)
@@ -3379,7 +3464,7 @@ impl ExcelAddInsModuleState {
                                 .striped(true)
                                 .spacing([10.0, 4.0])
                                 .show(ui, |ui| {
-                                    ui.strong("HSC Command");
+                                    ui.strong("Command");
                                     ui.strong("Code example");
                                     ui.strong("Explanation");
                                     ui.strong("");
@@ -3399,7 +3484,7 @@ impl ExcelAddInsModuleState {
                     ui.add_space(10.0);
                     ui.group(|ui| {
                         ui.label(
-                            egui::RichText::new("General HSC Command MineralProperty(MineralName; Property)")
+                            egui::RichText::new("General Command MineralProperty(MineralName; Property)")
                                 .strong()
                                 .size(11.5),
                         );
@@ -3542,7 +3627,7 @@ impl ExcelAddInsModuleState {
                         "Stream Reverse",
                         "Equilibrium Array",
                         "Mineralogy",
-                        "HSC-Sim Mineral",
+                        "Sim Mineral",
                     ];
                     egui::ComboBox::from_id_salt("fx_group_filter")
                         .width(195.0)
@@ -3647,7 +3732,7 @@ impl ExcelAddInsModuleState {
                                 self.insert_formula_into_worksheet(db, f);
                             }
                             if ui.button("Copiar fórmula").clicked() {
-                                ui.output_mut(|o| o.copied_text = self.formula_preview.clone());
+                                ui.ctx().copy_text(self.formula_preview.clone());
                                 self.status_msg = format!("Copiada {}", self.formula_preview);
                             }
                             if meta.name.eq_ignore_ascii_case("UNITS")
@@ -3722,9 +3807,9 @@ impl ExcelAddInsModuleState {
                     self.status_msg = format!("Añadida especie '{sp_name}' a StreamEQ.");
                 }
                 PickerTarget::WorksheetActiveCell => {
-                    let (r, c) = AddinsUseCases::parse_a1(&self.active_cell_ref)
-                        .filter(|&(r, c)| r < WS_ROWS && c < WS_COLS)
-                        .unwrap_or((1, 0));
+                    let Some((r, c)) = self.worksheet_edit_position() else {
+                        return;
+                    };
                     self.ws_raw[r][c] = sp_name.clone();
                     self.formula_bar_text = sp_name.clone();
                     self.active_sheet = AddInSheetTab::Worksheet;
@@ -3751,7 +3836,7 @@ impl ExcelAddInsModuleState {
             .default_width(360.0)
             .show(ctx, |ui| {
                 ui.label(
-                    egui::RichText::new("HSC Add-In Global Measurement Units")
+                    egui::RichText::new("Add-In Global Measurement Units")
                         .strong()
                         .size(13.0)
                         .color(EXCEL_GREEN_DARK),
@@ -3874,7 +3959,7 @@ impl ExcelAddInsModuleState {
                     ui.vertical(|ui| {
                         ui.set_min_width(310.0);
                         ui.label(egui::RichText::new("Add-Ins available:").strong());
-                        egui::Frame::none()
+                        egui::Frame::NONE
                             .fill(egui::Color32::WHITE)
                             .stroke(egui::Stroke::new(1.0, EXCEL_BORDER))
                             .inner_margin(6.0)
@@ -3940,37 +4025,37 @@ impl ExcelAddInsModuleState {
     fn render_browse_xll_dialog<C: SpeciesCatalogPort + Send + Sync + 'static>(&mut self, ctx: &egui::Context, db: &dyn SpeciesCatalogPort, shared: &Arc<RwLock<C>>) {
         const FILES: &[(&str, &str, &str, &str)] = &[
             (
-                "HSC10-Excel.xll",
+                "Soryntel-Excel.xll",
                 "15.11.2026 14:00",
                 "Microsoft Excel XLL Add-In (83 funciones activas)",
                 "xll",
             ),
             (
-                "HSC9-Excel.xll",
+                "Legacy-Excel.xll",
                 "16.12.2015 12:31",
                 "Microsoft Excel XLL Add-In Legacy",
                 "xll",
             ),
             (
-                "HSC6.XLL",
+                "Thermochemistry-Core.xll",
                 "01.10.2006 09:00",
                 "Microsoft Excel XLL Core (69 funciones)",
                 "xll",
             ),
             (
-                "SoryntelHSC_Calc.oxt",
+                "Soryntel_Calc.oxt",
                 "Cross-Suite",
                 "LibreOffice Calc Add-In Package (83 funciones)",
                 "oxt",
             ),
             (
-                "SoryntelHSC_ONLYOFFICE.zip",
+                "Soryntel_ONLYOFFICE.zip",
                 "Cross-Suite",
                 "ONLYOFFICE Plugin JS (83 funciones)",
                 "onlyoffice",
             ),
             (
-                "SoryntelHSC.bas",
+                "Soryntel.bas",
                 "Cross-Suite",
                 "Excel / WPS Office VBA Module (83 funciones)",
                 "bas",
@@ -3990,11 +4075,11 @@ impl ExcelAddInsModuleState {
             .show(ctx, |ui| {
                 ui.horizontal(|ui| {
                     ui.label(egui::RichText::new("Ubicación:").strong());
-                    ui.monospace("HSC10  >  Programs  >  Soryntel Internal & Cross-Suite");
+                    ui.monospace("Soryntel · Complementos de hoja de cálculo");
                 });
                 ui.separator();
 
-                egui::Frame::none()
+                egui::Frame::NONE
                     .fill(egui::Color32::WHITE)
                     .stroke(egui::Stroke::new(1.0, EXCEL_BORDER))
                     .inner_margin(6.0)
@@ -4094,11 +4179,11 @@ impl ExcelAddInsModuleState {
     // -------------------------------------------------------------------------
     // FILE Backstage (Options Fig. 1-3, Open/Samples, Cross-Suite Bridge & Export)
     // -------------------------------------------------------------------------
-    fn render_file_backstage<C: SpeciesCatalogPort + Send + Sync + 'static>(&mut self, ctx: &egui::Context, db: &dyn SpeciesCatalogPort, shared: &Arc<RwLock<C>>) {
-        egui::SidePanel::left("file_backstage_nav")
-            .exact_width(195.0)
-            .frame(egui::Frame::none().fill(EXCEL_GREEN).inner_margin(10.0))
-            .show(ctx, |ui| {
+    fn render_file_backstage<C: SpeciesCatalogPort + Send + Sync + 'static>(&mut self, root_ui: &mut egui::Ui, db: &dyn SpeciesCatalogPort, shared: &Arc<RwLock<C>>) {
+        egui::Panel::left("file_backstage_nav")
+            .exact_size(195.0)
+            .frame(egui::Frame::NONE.fill(EXCEL_GREEN).inner_margin(10.0))
+            .show(root_ui, |ui| {
                 if ui
                     .button(egui::RichText::new("← Volver a la hoja").color(egui::Color32::WHITE))
                     .clicked()
@@ -4112,7 +4197,7 @@ impl ExcelAddInsModuleState {
                     (FileBackstageSection::OpenSamples, "Open / Templates"),
                     (FileBackstageSection::ExportReport, "Cross-Suite & Export"),
                     (FileBackstageSection::Options, "Options (Fig. 1-3)"),
-                    (FileBackstageSection::Migrator, "Migrate HSC5.xla"),
+                    (FileBackstageSection::Migrator, "Migrate legacy add-in formulas"),
                 ];
                 for (sec, lbl) in items {
                     let active = self.file_section == sec;
@@ -4135,12 +4220,12 @@ impl ExcelAddInsModuleState {
                 }
             });
 
-        egui::CentralPanel::default().show(ctx, |ui| {
+        egui::CentralPanel::default().show(root_ui, |ui| {
             egui::ScrollArea::vertical().show(ui, |ui| match self.file_section {
                 FileBackstageSection::Info => {
-                    ui.heading("HSC Excel Add-Ins — Arquitectura Híbrida (Standalone + Cross-Suite)");
+                    ui.heading("Excel Add-Ins — Arquitectura Híbrida (Standalone + Cross-Suite)");
                     ui.separator();
-                    ui.label("• Modo Standalone: 83 funciones activas + 5 HSC-Sim ejecutándose en Rust dentro de Soryntel sin dependencias externas.");
+                    ui.label("• Modo Standalone: 83 funciones activas + 5 Sim ejecutándose en Rust dentro de Soryntel sin dependencias externas.");
                     ui.label(format!("• Base de datos activa: {} especies cargadas.", db.species_count()));
                     ui.label("• Minerales integrados: 3,812 registros (Cap. 30 Fig. 7 editable inline).");
                     ui.label("• Compatibilidad externa opcional: Microsoft Excel, LibreOffice Calc (.ods / .oxt), ONLYOFFICE (.zip) y WPS Office (.bas / =WEBSERVICE).");
@@ -4156,7 +4241,7 @@ impl ExcelAddInsModuleState {
                     });
                 }
                 FileBackstageSection::OpenSamples => {
-                    ui.heading("Open — Recent Workbooks & HSC Cap. 30 Templates (Fig. 1)");
+                    ui.heading("Open — Recent Workbooks & Cap. 30 Templates (Fig. 1)");
                     ui.separator();
                     let templates = [
                         (
@@ -4186,7 +4271,7 @@ impl ExcelAddInsModuleState {
                         ),
                     ];
                     for (title, desc, target) in templates {
-                        egui::Frame::none()
+                        egui::Frame::NONE
                             .fill(EXCEL_ALT_ROW_BG)
                             .stroke(egui::Stroke::new(1.0, EXCEL_BORDER))
                             .inner_margin(8.0)
@@ -4381,7 +4466,7 @@ impl ExcelAddInsModuleState {
                                 if ui
                                     .add_sized(
                                         [160.0, 24.0],
-                                        egui::SelectableLabel::new(sel, label),
+                                        egui::Button::selectable(sel, label),
                                     )
                                     .clicked()
                                 {
@@ -4451,9 +4536,9 @@ impl ExcelAddInsModuleState {
                                 | OptionsCategory::Advanced
                                 | OptionsCategory::CustomizeRibbon
                                 | OptionsCategory::QuickAccessToolbar => {
-                                    ui.strong("Excel Options — HSC Compatibility Defaults");
+                                    ui.strong("Excel Options — Compatibility Defaults");
                                     ui.label("Los atajos de teclado (Ctrl+Shift+Enter para Array StreamEQ y F9 para Recalcular) están activos.");
-                                    ui.label("La cinta ADD-INS expone Menu Commands -> HSC ▾ -> Change measurement units...");
+                                    ui.label("La cinta ADD-INS expone Menu Commands -> ▾ -> Change measurement units...");
                                 }
                                 OptionsCategory::TrustCenter => {
                                     ui.strong("Trust Center — Local Loopback Security");
@@ -4468,7 +4553,7 @@ impl ExcelAddInsModuleState {
                                     ui.add_space(4.0);
                                     let mut changed = false;
 
-                                    egui::Frame::none()
+                                    egui::Frame::NONE
                                         .fill(egui::Color32::WHITE)
                                         .stroke(egui::Stroke::new(1.0, EXCEL_BORDER))
                                         .inner_margin(6.0)
@@ -4548,9 +4633,9 @@ impl ExcelAddInsModuleState {
                                                     }
 
                                                     for (ext_name, ext_loc, ext_type) in [
-                                                        ("LibreOffice Calc Extension", "SoryntelHSC_Calc.oxt", "UNO / Python Add-In"),
-                                                        ("ONLYOFFICE Custom Functions", "SoryntelHSC_ONLYOFFICE.zip", "JS Plugin"),
-                                                        ("Excel / WPS VBA Module", "SoryntelHSC.bas", "VBA UDF Module"),
+                                                        ("LibreOffice Calc Extension", "Soryntel_Calc.oxt", "UNO / Python Add-In"),
+                                                        ("ONLYOFFICE Custom Functions", "Soryntel_ONLYOFFICE.zip", "JS Plugin"),
+                                                        ("Excel / WPS VBA Module", "Soryntel.bas", "VBA UDF Module"),
                                                     ] {
                                                         ui.label(ext_name);
                                                         ui.label(egui::RichText::new(ext_loc).size(11.0).color(TEXT_MUTED));
@@ -4575,7 +4660,7 @@ impl ExcelAddInsModuleState {
                                     if let Some(p) = self.packs.get(self.selected_pack_idx) {
                                         ui.group(|ui| {
                                             ui.label(format!("Add-in:         {}", p.name));
-                                            ui.label("Publisher:      Soryntel / HSC Compatible Engine");
+                                            ui.label("Publisher: Soryntel");
                                             ui.label(format!("Compatibility:  {} (Standalone + Cross-Suite)", p.pack_type));
                                             ui.label(format!("Location:       {}", p.module_ref));
                                             ui.label(format!("Description:    {}", p.description));
@@ -4628,7 +4713,7 @@ impl ExcelAddInsModuleState {
                     });
                 }
                 FileBackstageSection::Migrator => {
-                    ui.heading("Migrador de fórmulas legacy HSC5.xla -> HSC 6–10");
+                    ui.heading("Migrador de fórmulas legacy de complementos antiguos");
                     ui.label("Convierte sintaxis antigua (unidades inline, argumentos obsoletos) a fórmulas modernas:");
                     ui.add_space(6.0);
                     let resp = ui.add_sized(
@@ -4846,16 +4931,10 @@ mod tests {
 
     fn test_db_enriched() -> ThermoDatabase {
         let mut db = ThermoDatabase::with_open_defaults();
-        for p in [
-            "/home/nando/HSC6/Maindb6.HSC",
-            "/home/nando/Documentos/HSC-REA/Maindb6.HSC",
-            "../../Maindb6.HSC",
-        ] {
-            if std::path::Path::new(p).exists() {
-                let _ = db.load_external_hsc_readonly(p, false);
-                if db.len() > 100 {
-                    return db;
-                }
+        if let Some(p) = crate::test_support::test_maindb("excel_addins_ui::tests (usa el respaldo sintético)") {
+            let _ = db.load_external_hsc_readonly(&p, false);
+            if db.len() > 100 {
+                return db;
             }
         }
         // Fallback determinista para entornos sin Maindb6.HSC: clona plantilla CO(g)/Al2O3
@@ -4951,9 +5030,12 @@ mod tests {
         st.apply_formula_bar(&full_db);
         assert_eq!(st.eq_temp_raw, "1200");
 
+        let previous = st.eq_outputs.clone();
         st.select_cell("C1", "bad_temp".into());
         st.apply_formula_bar(&full_db);
-        assert!(matches!(st.eq_outputs.first(), Some(CellEvalValue::Error(e)) if e == "#VALUE!"));
+        assert_eq!(st.eq_temp_raw, "1200");
+        assert_eq!(st.eq_outputs, previous);
+        assert!(st.status_msg.contains("inválido"));
 
         st.select_cell("C1", "1500".into());
         st.apply_formula_bar(&full_db);
@@ -5053,5 +5135,56 @@ mod tests {
         assert!(std::fs::read(&p_xlsx).expect("read xlsx").len() > 500);
         assert!(std::fs::read(&p_ods).expect("read ods").len() > 500);
         let _ = std::fs::remove_dir_all(&tmp);
+    }
+}
+
+#[cfg(test)]
+mod area_d_regressions {
+    use super::*;
+    use soryntel_db::ThermoDatabase;
+
+    #[test]
+    fn invalid_reference_does_not_overwrite_worksheet() {
+        let db = ThermoDatabase::with_open_defaults();
+        let mut overwritten = Vec::new();
+        for reference in ["A0", "ZZZZ0", "I1", "A25", "", "AAAAAAAAAAAAAAAAAAAAAAAAAAAA1"] {
+            let mut state = ExcelAddInsModuleState::default();
+            state.ensure_initialized(&db);
+            state.ws_raw[1][2] = "42".into();
+            state.select_cell(reference, String::new());
+            state.insert_formula_into_worksheet(&db, "=MW(\"H2O\")".into());
+            if state.ws_raw[1][2] != "42" {
+                overwritten.push(reference);
+            }
+        }
+        assert!(overwritten.is_empty(), "C2 sobrescrita con {overwritten:?}");
+    }
+
+    #[test]
+    fn circular_worksheet_formula_reports_an_error() {
+        let db = ThermoDatabase::with_open_defaults();
+        let mut state = ExcelAddInsModuleState::default();
+        state.ensure_initialized(&db);
+        state.select_cell("A20", "1".into());
+        state.apply_formula_bar(&db);
+        state.select_cell("A20", "=SUM(A20;1)".into());
+        state.apply_formula_bar(&db);
+        assert_eq!(state.ws_eval[19][0], CellEvalValue::Error("#CIRC!".into()));
+    }
+
+    #[test]
+    fn indirect_worksheet_cycle_and_its_dependents_are_invalidated() {
+        let db = ThermoDatabase::with_open_defaults();
+        let mut state = ExcelAddInsModuleState::default();
+        state.ws_raw[0][0] = "=B1".into();
+        state.ws_raw[0][1] = "=Sheet1!A1".into();
+        state.ws_raw[0][2] = "=SUM(A1:B1)".into();
+        state.recalculate_worksheet(&db);
+        for column in 0..3 {
+            assert_eq!(state.ws_eval[0][column], CellEvalValue::Error("#CIRC!".into()));
+        }
+        state.ws_raw[0][1] = "2".into();
+        state.recalculate_worksheet(&db);
+        assert_eq!(state.ws_eval[0][2], CellEvalValue::Number(4.0));
     }
 }

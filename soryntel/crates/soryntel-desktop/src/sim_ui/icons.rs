@@ -16,7 +16,7 @@ pub fn draw_equipment_icon(painter: &Painter, rect: Rect, icon_key: &str) {
         "column_tall" | "packed_tower" => {
             let body = Rect::from_center_size(c + Vec2::new(0.0, h * 0.03), Vec2::new(w * 0.30, h * 0.72));
             painter.rect_filled(body, 4.0, metal_light);
-            painter.rect_stroke(body, 4.0, steel_stroke);
+            painter.rect_stroke(body, 4.0, steel_stroke, egui::StrokeKind::Middle);
             // shading band & nozzle
             let band = Rect::from_min_max(
                 Pos2::new(body.left() + body.width() * 0.55, body.top() + 2.0),
@@ -47,7 +47,7 @@ pub fn draw_equipment_icon(painter: &Painter, rect: Rect, icon_key: &str) {
                 Rect::from_center_size(c + Vec2::new(0.0, h * 0.04), Vec2::new(w * 0.42, h * 0.56))
             };
             painter.rect_filled(body, 6.0, metal_light);
-            painter.rect_stroke(body, 6.0, steel_stroke);
+            painter.rect_stroke(body, 6.0, steel_stroke, egui::StrokeKind::Middle);
             painter.rect_filled(
                 Rect::from_center_size(c - Vec2::new(0.0, h * 0.26), Vec2::new(w * 0.16, h * 0.14)),
                 2.0,
@@ -69,10 +69,10 @@ pub fn draw_equipment_icon(painter: &Painter, rect: Rect, icon_key: &str) {
                 let x = rect.left() + w * 0.11 + i as f32 * step;
                 let top_r = Rect::from_min_size(Pos2::new(x + 1.0, c.y - h * 0.14), Vec2::new(step - 3.0, h * 0.34));
                 painter.rect_filled(top_r, 1.5, metal_light);
-                painter.rect_stroke(top_r, 1.5, steel_stroke);
+                painter.rect_stroke(top_r, 1.5, steel_stroke, egui::StrokeKind::Middle);
                 let chimney = Rect::from_min_size(Pos2::new(x + step * 0.3, c.y - h * 0.28), Vec2::new(step * 0.4, h * 0.14));
                 painter.rect_filled(chimney, 1.0, metal_mid);
-                painter.rect_stroke(chimney, 1.0, steel_stroke);
+                painter.rect_stroke(chimney, 1.0, steel_stroke, egui::StrokeKind::Middle);
             }
             painter.line_segment(
                 [Pos2::new(rect.left() + 4.0, c.y + h * 0.22), Pos2::new(rect.right() - 4.0, c.y + h * 0.22)],
@@ -82,7 +82,7 @@ pub fn draw_equipment_icon(painter: &Painter, rect: Rect, icon_key: &str) {
         "thickener" | "tankcell_200" => {
             let tank = Rect::from_center_size(c + Vec2::new(0.0, h * 0.06), Vec2::new(w * 0.62, h * 0.42));
             painter.rect_filled(tank, 2.0, metal_light);
-            painter.rect_stroke(tank, 2.0, steel_stroke);
+            painter.rect_stroke(tank, 2.0, steel_stroke, egui::StrokeKind::Middle);
             // Bridge / motor atop tank
             painter.line_segment(
                 [Pos2::new(tank.left() - 2.0, tank.top() - 4.0), Pos2::new(tank.right() + 2.0, tank.top() - 4.0)],
@@ -105,7 +105,7 @@ pub fn draw_equipment_icon(painter: &Painter, rect: Rect, icon_key: &str) {
             // Cylindrical feed box + conical lower apex
             let top_box = Rect::from_center_size(c - Vec2::new(0.0, h * 0.18), Vec2::new(w * 0.30, h * 0.20));
             painter.rect_filled(top_box, 1.0, metal_light);
-            painter.rect_stroke(top_box, 1.0, steel_stroke);
+            painter.rect_stroke(top_box, 1.0, steel_stroke, egui::StrokeKind::Middle);
             let pts = vec![
                 Pos2::new(top_box.left(), top_box.bottom()),
                 Pos2::new(top_box.right(), top_box.bottom()),
@@ -123,7 +123,7 @@ pub fn draw_equipment_icon(painter: &Painter, rect: Rect, icon_key: &str) {
         "conditioner" | "reactor_tank" => {
             let vessel = Rect::from_center_size(c + Vec2::new(0.0, h * 0.05), Vec2::new(w * 0.48, h * 0.54));
             painter.rect_filled(vessel, 3.0, metal_light);
-            painter.rect_stroke(vessel, 3.0, steel_stroke);
+            painter.rect_stroke(vessel, 3.0, steel_stroke, egui::StrokeKind::Middle);
             // Impeller shaft & blades
             painter.line_segment(
                 [Pos2::new(c.x, rect.top() + 5.0), Pos2::new(c.x, vessel.bottom() - 5.0)],
@@ -143,12 +143,12 @@ pub fn draw_equipment_icon(painter: &Painter, rect: Rect, icon_key: &str) {
             // flotation_bank / filter_plant / dewatering: detailed plant frame
             let base = Rect::from_center_size(c + Vec2::new(0.0, h * 0.08), Vec2::new(w * 0.72, h * 0.44));
             painter.rect_filled(base, 2.0, metal_light);
-            painter.rect_stroke(base, 2.0, steel_stroke);
+            painter.rect_stroke(base, 2.0, steel_stroke, egui::StrokeKind::Middle);
             for i in 0..3 {
                 let x = base.left() + 4.0 + i as f32 * (base.width() / 3.0);
                 let cell = Rect::from_min_size(Pos2::new(x, base.top() - 5.0), Vec2::new(base.width() / 3.8, 7.0));
                 painter.rect_filled(cell, 1.0, accent);
-                painter.rect_stroke(cell, 1.0, steel_stroke);
+                painter.rect_stroke(cell, 1.0, steel_stroke, egui::StrokeKind::Middle);
             }
         }
     }
@@ -187,7 +187,7 @@ pub fn draw_toolbar_glyph(painter: &Painter, rect: Rect, kind: &str, active: boo
                 _ => Color32::from_rgb(235, 244, 255),
             };
             painter.rect_filled(box_r, 1.5, fill);
-            painter.rect_stroke(box_r, 1.5, stroke);
+            painter.rect_stroke(box_r, 1.5, stroke, egui::StrokeKind::Middle);
             let txt = match kind {
                 "unit_u" => "U",
                 "unit_r" => "R",
@@ -244,14 +244,14 @@ pub fn draw_toolbar_glyph(painter: &Painter, rect: Rect, kind: &str, active: boo
         "table" => {
             let r = Rect::from_center_size(c, Vec2::new(13.0, 10.0));
             painter.rect_filled(r, 0.0, Color32::WHITE);
-            painter.rect_stroke(r, 0.0, stroke);
+            painter.rect_stroke(r, 0.0, stroke, egui::StrokeKind::Middle);
             painter.line_segment([Pos2::new(r.left(), c.y), Pos2::new(r.right(), c.y)], Stroke::new(0.8, ink));
             painter.line_segment([Pos2::new(c.x, r.top()), Pos2::new(c.x, r.bottom())], Stroke::new(0.8, ink));
         }
         "lock" => {
             let body = Rect::from_center_size(c + Vec2::new(0.0, 2.0), Vec2::new(9.0, 7.0));
             painter.rect_filled(body, 1.0, Color32::from_rgb(220, 168, 42));
-            painter.rect_stroke(body, 1.0, Stroke::new(1.0, Color32::from_rgb(120, 80, 16)));
+            painter.rect_stroke(body, 1.0, Stroke::new(1.0, Color32::from_rgb(120, 80, 16)), egui::StrokeKind::Middle);
             painter.circle_stroke(c - Vec2::new(0.0, 3.0), 3.0, stroke);
         }
         _ => {}

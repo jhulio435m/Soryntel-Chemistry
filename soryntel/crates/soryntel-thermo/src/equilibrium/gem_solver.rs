@@ -661,11 +661,9 @@ fn run_wjd_active_set(
         let mut rhs = vec![0.0; dim];
 
         // Phase totals Y_alpha and f_i = mu_std_rt + ln(y_i/Y_alpha) + ln_gamma_i
-        let mut y_phase_tot = vec![0.0; p_mix];
         let mut f_val = vec![0.0; n_sp];
-        for (alpha, members) in mix_phase_members.iter().enumerate() {
+        for members in mix_phase_members.iter() {
             let y_tot: f64 = members.iter().map(|&i| y[i]).sum::<f64>().max(1e-300);
-            y_phase_tot[alpha] = y_tot;
             for &i in members {
                 let xi = (y[i] / y_tot).max(1e-30);
                 f_val[i] = resolved[i].mu_std_rt + xi.ln() + ln_gamma[i];
@@ -698,8 +696,13 @@ fn run_wjd_active_set(
         }
 
         // 2. Mixture phase rows (m .. m + p_mix):
+        //    sum_e pi_e * sum_i a_ei y_i = sum_i y_i f_i   (RAND / WJD phase equation; White, Johnson &
+        //    Dantzig 1958, J. Chem. Phys. 28, 751; Smith & Missen 1982, "Chemical Reaction Equilibrium
+        //    Analysis", ch. 6). With n_i = y_i (u + pi.a_i - f_i), u = x_bar / y_bar -> 1 at convergence
+        //    and mu_i / RT = pi.a_i. An extra `y_bar` term on this RHS shifted every mixture species by
+        //    -RT (K_GEM = K * exp(-dn)), see BUG-B01.
         for (alpha, members) in mix_phase_members.iter().enumerate() {
-            let mut r_val = y_phase_tot[alpha];
+            let mut r_val = 0.0;
             for &i in members {
                 r_val += y[i] * f_val[i];
             }

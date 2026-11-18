@@ -6,7 +6,7 @@ use std::collections::BTreeMap;
 use std::sync::LazyLock;
 
 static PHASE_SUFFIX_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"(?i)\((aq|ia|a|g|l|s)\)$").expect("valid phase regex"));
+    LazyLock::new(|| Regex::new(r"\((aq|ia|a|g|l|s)\)$").expect("valid phase regex"));
 static LEADING_COEFF_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"^(\d+(?:\.\d+)?(?:/\d+(?:\.\d+)?)?)(?:\s*\*?\s*|\s+)([A-Za-z(\[].*)$")
         .expect("valid coeff regex")
@@ -17,6 +17,10 @@ static UNSIGNED_NUM_PREFIX_RE: LazyLock<Regex> = LazyLock::new(|| {
 static BRACKET_CHARGE_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"^(.+?)\(([+-]\d+|\d*[+-])\)$").expect("valid bracket charge regex")
 });
+static HSC_CHARGE_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^(.+)\(([+-]\d*)a\)$").expect("valid HSC charge regex"));
+static SQUARE_CHARGE_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^(.+)\[([+-]\d+|\d*[+-])\]$").expect("valid square charge regex"));
 static CARET_CHARGE_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"^(.+?)\^(\d*[+-]|[+-]\d+)$").expect("valid caret charge regex")
 });
@@ -86,7 +90,7 @@ impl ParsedSpecies {
             mw += aw * count;
         }
         // Adjust for lost/gained electrons cleanly when ionic.
-        if self.charge != 0 && !(self.composition.is_empty() && self.charge == -1) {
+        if self.charge != 0 {
             let me = atomic_weight("e-").unwrap_or(0.00054858);
             mw -= (self.charge as f64) * me;
         }
@@ -117,9 +121,18 @@ pub fn is_reaction(expr: &str) -> bool {
 /// Parse a chemical species string supporting phase tags (`(g)`), nested parentheses/brackets,
 /// hydrate/adduct separators (`*`, `·`), fractional coefficients, and ionic charges.
 pub fn parse_species(input: &str) -> Result<ParsedSpecies> {
+    if input.chars().take(4097).count() > 4096 {
+        return Err(ChemAddinError::InvalidFormula("input exceeds 4096 characters".into()));
+    }
     let trimmed = input.trim();
     if trimmed.is_empty() {
         return Err(ChemAddinError::InvalidFormula("<empty>".to_string()));
+    }
+
+    if let Some(caps) = HSC_CHARGE_RE.captures(trimmed) {
+        let mut parsed = parse_species(&format!("{}[{}](aq)", &caps[1], &caps[2]))?;
+        parsed.raw = trimmed.to_string();
+        return Ok(parsed);
     }
 
     // 1. Peel optional trailing phase suffix such as (g), (l), (s), (aq).
@@ -194,6 +207,9 @@ pub fn parse_species(input: &str) -> Result<ParsedSpecies> {
 
 /// Parse a reaction string containing `=`, `<=>`, `=>`, or `->`.
 pub fn parse_reaction(input: &str) -> Result<ParsedReaction> {
+    if input.chars().take(4097).count() > 4096 {
+        return Err(ChemAddinError::InvalidFormula("input exceeds 4096 characters".into()));
+    }
     let normalized = input
         .trim()
         .replace("<=>", "=")
@@ -358,7 +374,7 @@ fn split_reaction_terms(side: &str) -> Result<Vec<String>> {
 }
 
 fn extract_charge(s: &str) -> Result<(&str, i32)> {
-    if let Some(caps) = BRACKET_CHARGE_RE.captures(s) {
+    if let Some(caps) = BRACKET_CHARGE_RE.captures(s).or_else(|| SQUARE_CHARGE_RE.captures(s)) {
         let base = caps.get(1).expect("base").as_str().trim();
         let charge_raw = caps.get(2).expect("charge").as_str();
         let charge = parse_charge_token(charge_raw, s)?;
@@ -380,6 +396,24 @@ fn extract_charge(s: &str) -> Result<(&str, i32)> {
             let base = &s[..idx];
             if !base.ends_with('*') && !base.ends_with('(') && !base.ends_with('[') {
                 let sign = if suffix.starts_with('-') { -1 } else { 1 };
+                if suffix.len() == 1 {
+                    // A monatomic ion uses the full trailing digit run (Fe2+). For
+                    // a polyatomic ion with consecutive digits, the final digit is
+                    // its charge (SO42-); a lone subscript stays in NH4+.
+                    // Brackets disambiguate subscripts and multidigit charges.
+                    let stem = base.trim_end_matches(|ch: char| ch.is_ascii_digit());
+                    let digits = &base[stem.len()..];
+                    let monatomic = atomic_weight(stem).is_some();
+                    if !digits.is_empty() && (monatomic || digits.len() > 1) {
+                        let split = if monatomic { stem.len() } else { base.len() - 1 };
+                        let magnitude = base[split..].parse::<i32>()
+                            .map_err(|_| ChemAddinError::InvalidFormula(s.into()))?;
+                        if magnitude == 0 {
+                            return Err(ChemAddinError::InvalidFormula(s.into()));
+                        }
+                        return Ok((&base[..split], sign * magnitude));
+                    }
+                }
                 let mag: i32 = if suffix.len() == 1 {
                     1
                 } else {
@@ -476,7 +510,7 @@ fn split_leading_unsigned_multiplier<'a>(s: &'a str, full_ctx: &str) -> Result<(
 
 fn parse_formula_group(s: &str, full_ctx: &str) -> Result<BTreeMap<String, f64>> {
     let bytes = s.as_bytes();
-    let (map, pos) = parse_sequence(bytes, 0, None, full_ctx)?;
+    let (map, pos) = parse_sequence(bytes, 0, None, full_ctx, 0)?;
     if pos != bytes.len() {
         return Err(ChemAddinError::InvalidFormula(full_ctx.to_string()));
     }
@@ -488,6 +522,7 @@ fn parse_sequence(
     mut i: usize,
     closing_delim: Option<u8>,
     full_ctx: &str,
+    depth: usize,
 ) -> Result<(BTreeMap<String, f64>, usize)> {
     let mut comp = BTreeMap::<String, f64>::new();
 
@@ -504,7 +539,10 @@ fn parse_sequence(
         }
         if b == b'(' || b == b'[' {
             let expected_close = if b == b'(' { b')' } else { b']' };
-            let (inner, next_i) = parse_sequence(bytes, i + 1, Some(expected_close), full_ctx)?;
+            if depth == 64 {
+                return Err(ChemAddinError::InvalidFormula("nesting exceeds 64 levels".into()));
+            }
+            let (inner, next_i) = parse_sequence(bytes, i + 1, Some(expected_close), full_ctx, depth + 1)?;
             if inner.is_empty() {
                 return Err(ChemAddinError::InvalidFormula(full_ctx.to_string()));
             }
@@ -564,7 +602,7 @@ fn parse_optional_number(bytes: &[u8], mut i: usize, full_ctx: &str) -> Result<(
     let val: f64 = slice
         .parse()
         .map_err(|_| ChemAddinError::InvalidFormula(full_ctx.to_string()))?;
-    if !val.is_finite() || val < 0.0 {
+    if !val.is_finite() || val <= 0.0 {
         return Err(ChemAddinError::InvalidFormula(full_ctx.to_string()));
     }
     Ok((val, i))

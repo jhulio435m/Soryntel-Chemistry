@@ -49,7 +49,7 @@ pub const H2O_TC_K: f64 = 647.096;
 pub const H2O_PC_BAR: f64 = 220.64;
 
 /// Molar thermodynamic properties for Module 2 in MJ/kmol (== kJ/mol).
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Default)]
 pub struct BalancePointSI {
     pub t_k: f64,
     /// Sensible + latent heat above 298.15 K (MJ/kmol == kJ/mol).
@@ -66,6 +66,8 @@ pub struct BalancePointSI {
     pub ex_chem_mj_kmol: f64,
     /// Total exergy = Ex_phys + Ex_chem (MJ/kmol).
     pub ex_tot_mj_kmol: f64,
+    /// Why the chemical exergy could not be computed (then `ex_chem` and `ex_tot` are NaN).
+    pub ex_chem_error: Option<String>,
 }
 
 /// IAPWS-95 Wagner & Pruss saturation vapor pressure of water P_sat(T) in bar.
@@ -168,42 +170,45 @@ pub fn element_standard_chemical_exergy_kj_mol(symbol: &str) -> Option<f64> {
 }
 
 /// Compute standard chemical exergy of a species (MJ/kmol == kJ/mol):
-/// ex_chem = dGf°(298.15) + sum_e nu_e * ex_chem,e°.
+/// ex_chem = dGf°(298.15) + sum_e nu_e * ex_chem,e° (Szargut, Morris & Steward 1988).
+///
+/// Returns an explicit error naming the missing data when an element has no tabulated
+/// standard chemical exergy or its reference species is not in the catalog: a partial
+/// sum would not be ΔfG and the result would be silently wrong (BUG-B03).
 pub fn species_chemical_exergy_kj_mol(
     repo: &dyn SpeciesRepository,
     species: &ChemicalSpecies,
-) -> f64 {
-    let Ok((pt_ref, _)) = evaluate_species_si(species, T_REF_K, false, false) else {
-        return 0.0;
-    };
-    let Ok(elems) = parse_hsc_species_elements(&species.formula) else {
-        return 0.0;
-    };
+) -> Result<f64, SoryntelError> {
+    let (pt_ref, _) = evaluate_species_si(species, T_REF_K, false, false)?;
+    let elems = parse_hsc_species_elements(&species.formula)?;
     if elems.is_empty() {
-        return 0.0;
+        return Ok(0.0);
     }
 
     // Compute dGf°(298.15) = G_species(298.15) - sum_e nu_e * G_ref_elem(298.15)
     let mut sum_g_ref = 0.0;
     let mut sum_ex_elem = 0.0;
     for (el, nu) in elems {
-        let Some(ex_e) = element_standard_chemical_exergy_kj_mol(&el) else {
-            return 0.0;
-        };
+        let ex_e = element_standard_chemical_exergy_kj_mol(&el).ok_or_else(|| {
+            SoryntelError::SpeciesNotFound(format!(
+                "exergía química estándar del elemento {el} (tabla de Szargut)"
+            ))
+        })?;
         sum_ex_elem += nu * ex_e;
-        if let Some(ref_sp) = repo.get_reference_element(&el) {
-            // Count atoms of `el` in reference species (e.g., O2(g) has 2 O atoms)
-            let ref_atoms = parse_hsc_species_elements(&ref_sp.formula)
-                .ok()
-                .and_then(|m| m.get(&el).copied())
-                .unwrap_or(1.0);
-            if let Ok((ref_pt, _)) = evaluate_species_si(&ref_sp, T_REF_K, false, false) {
-                sum_g_ref += (nu / ref_atoms) * (ref_pt.g / 1000.0);
-            }
-        }
+        let ref_sp = repo.get_reference_element(&el).ok_or_else(|| {
+            SoryntelError::SpeciesNotFound(format!("elemento de referencia {el}"))
+        })?;
+        // Count atoms of `el` in reference species (e.g., O2(g) has 2 O atoms)
+        let ref_atoms = parse_hsc_species_elements(&ref_sp.formula)
+            .ok()
+            .and_then(|m| m.get(&el).copied())
+            .filter(|&n| n > 0.0)
+            .unwrap_or(1.0);
+        let (ref_pt, _) = evaluate_species_si(&ref_sp, T_REF_K, false, false)?;
+        sum_g_ref += (nu / ref_atoms) * (ref_pt.g / 1000.0);
     }
     let dg_f_kj = (pt_ref.g / 1000.0) - sum_g_ref;
-    dg_f_kj + sum_ex_elem
+    Ok(dg_f_kj + sum_ex_elem)
 }
 
 /// Evaluate Heat Content, Total H, T*S, G, Physical Exergy and Total Exergy for a species at (t_k, p_bar).
@@ -219,6 +224,9 @@ pub fn evaluate_balance_point_si(
     let mut effective_species = species.clone();
     let mut pressure_dh_j = 0.0;
     let mut pressure_ds_j = 0.0;
+    // Entropy pressure term of the same species at the dead state (T0, P0), on the same
+    // basis as `pressure_ds_j`, so that Ex_phys(T0, P0) = 0.
+    let mut dead_state_ds_j = 0.0;
 
     if (h2o_pressure_corr || (p_bar - 1.0).abs() > 1e-4)
         && (species.formula == "H2O"
@@ -232,7 +240,7 @@ pub fn evaluate_balance_point_si(
             if let Some(steam) = repo.get_species("H2O(g)") {
                 effective_species = steam;
             }
-            // Real-gas / pressure entropy shift -R*ln(P/P_ref)
+            // Real-gas / pressure entropy shift -R*ln(P/P_ref); the dead state sits at P_ref.
             pressure_ds_j = -R_JOULE * (p_bar / P_REF_BAR).ln();
         } else {
             if let Some(liq) = repo.get_species("H2O").or_else(|| repo.get_species("H2O(l)")) {
@@ -242,8 +250,10 @@ pub fn evaluate_balance_point_si(
             let v_molar_m3 = 18.015e-6; // m3/mol
             pressure_dh_j = v_molar_m3 * (p_bar - P_REF_BAR) * 1.0e5;
         }
-    } else if effective_species.phase == Phase::Gas && p_bar > 0.0 && (p_bar - 1.0).abs() > 1e-4 {
+    } else if effective_species.phase == Phase::Gas && p_bar > 0.0 {
+        // Ideal gas, standard state 1 bar: S(T, P) = S°(T) - R ln(P / 1 bar).
         pressure_ds_j = -R_JOULE * (p_bar / 1.0).ln();
+        dead_state_ds_j = -R_JOULE * (P_REF_BAR / 1.0).ln();
     }
 
     let (pt_t, _) = evaluate_species_si(&effective_species, t_k, false, upper_side_on_boundary)?;
@@ -258,15 +268,17 @@ pub fn evaluate_balance_point_si(
     let ts = t_k * s_t;
     let g = h_t - ts;
 
-    // Physical exergy: (H(T,P) - H(T0,P0)) - T0 * (S(T,P) - S(T0,P0))
-    let ds_pressure_gas = if effective_species.phase == Phase::Gas && p_bar > 0.0 && !h2o_pressure_corr
-    {
-        -R_JOULE * (p_bar / P_REF_BAR).ln()
-    } else {
-        0.0
+    // Physical exergy: (H(T,P) - H(T0,P0)) - T0 * (S(T,P) - S(T0,P0)), with T0 = 298.15 K and
+    // P0 = 1.01325 bar (Szargut, Morris & Steward 1988). For an ideal gas at T0 this is
+    // R T0 ln(P/P0). The pressure term is counted once (BUG-B02).
+    let s_dead = pt_ref.s + dead_state_ds_j;
+    let ex_phys = (h_t - pt_ref.h) - T_REF_K * (s_t - s_dead);
+    // Missing data makes the chemical (and total) exergy NaN and is reported in
+    // `ex_chem_error`; the enthalpy-based results remain valid.
+    let (ex_chem_kj, ex_chem_error) = match species_chemical_exergy_kj_mol(repo, &effective_species) {
+        Ok(v) => (v, None),
+        Err(e) => (f64::NAN, Some(e.to_string())),
     };
-    let ex_phys = (h_t - pt_ref.h) - T_REF_K * ((s_t + ds_pressure_gas) - pt_ref.s);
-    let ex_chem_kj = species_chemical_exergy_kj_mol(repo, &effective_species);
 
     Ok(BalancePointSI {
         t_k,
@@ -277,5 +289,6 @@ pub fn evaluate_balance_point_si(
         ex_phys_mj_kmol: ex_phys / 1000.0,
         ex_chem_mj_kmol: ex_chem_kj,
         ex_tot_mj_kmol: ex_phys / 1000.0 + ex_chem_kj,
+        ex_chem_error,
     })
 }

@@ -2,7 +2,7 @@
 
 ## Objetivo
 
-Revisar esta reconstrucción de HSC Chemistry para comprobar su comportamiento científico y funcional, mejorar la interfaz y documentación en español, y dejar resultados reproducibles que permitan distinguir cálculos verificados de funciones aproximadas o aún no validadas. Este plan no afirma equivalencia total con HSC: cada módulo se contrastará con la especificación recuperada, fuentes científicas y casos de referencia disponibles.
+Revisar Soryntel Chemistry para comprobar su comportamiento científico y funcional, mejorar la interfaz y documentación en español, y dejar resultados reproducibles que permitan distinguir cálculos verificados de funciones aproximadas o aún no validadas. Este plan no afirma equivalencia total con HSC: cada módulo se contrastará con la especificación recuperada, fuentes científicas y casos de referencia disponibles.
 
 ## Alcance observado
 

@@ -32,7 +32,7 @@ graph TD
 | `soryntel-solver` | Parseo y balance estequiométrico. | Sin interfaz, base de datos ni orquestación de casos de uso. |
 | `soryntel-thermo` | Cálculos científicos y modelos específicos de cada capacidad. | Sin adaptadores de base de datos ni UI. Consulta especies mediante puertos del núcleo. |
 | `soryntel-application` | Casos de uso por capacidad, contratos de almacenamiento de proyectos, reexportación de DTO y catálogo de prueba en memoria. | Sin `soryntel-db`, egui, transporte HTTP ni locks de la composición. |
-| `soryntel-db` | Catálogo en memoria por capas, lectura y escritura de formatos de catálogo e implementación de puertos. | Sin lógica de presentación ni transporte de clientes. Mantiene dependencias de thermo y solver. |
+| `soryntel-db` | Catálogo en memoria por capas, lectura y escritura de formatos de catálogo (`.HSC`, `.REF`, `.CAT` y SoryntelDB `.sdb`), conversor `sdb-convert` e implementación de puertos. | Sin lógica de presentación ni transporte de clientes. Mantiene dependencias de thermo y solver. |
 | `soryntel-app` | Adaptadores de entrada CLI y HTTP y raíz de composición. | El adaptador concreto se nombra en `composition.rs`. Los handlers usan puertos, casos de uso y DTO de application. |
 | `soryntel-desktop` | Interfaz egui, arranque, archivos del usuario y bridge HTTP de Add-ins. | Sin dependencia directa de thermo ni solver: usa los DTO de `soryntel_application::models` y las operaciones de `use_cases`. La infraestructura queda en la composición. |
 | `chem_addin_core` | Motor de add-ins independiente con SQLite y álgebra numérica. | Sin dependencias de los demás crates del workspace. |
@@ -50,7 +50,7 @@ Los contratos de catálogo viven en [ports.rs](../../crates/soryntel-core/src/po
 | `OwnDbEditorPort` | `ThermoDatabase` para editar OwnDB e importar y exportar registros. |
 | `ReferenceLibraryPort` | `ThermoDatabase` para cargar y consultar referencias. |
 | `HscFileToolsPort` | `HscFileTools` y `ThermoDatabase` para fusionar y convertir archivos. |
-| `DatabaseLocatorPort` | `DatabaseDirLocator` para localizar archivos de catálogo en un conjunto ordenado de directorios. |
+| `DatabaseLocatorPort` | `DatabaseDirLocator` para localizar `Maindb6.HSC`, `OWNDB6.HSC` y `soryntel.sdb` en un conjunto ordenado de directorios. |
 | `ProjectStoragePort` | Contrato en [application](../../crates/soryntel-application/src/ports/mod.rs) para workbooks `.rea8`, `.bal8` y `.htr8`. Cableado en migración. |
 
 `soryntel_application::testing::InMemorySpeciesCatalog` implementa `SpeciesRepository` y `SpeciesCatalogPort` para pruebas sin archivos HSC.
@@ -94,9 +94,9 @@ En T7 la composición de escritorio posee un `Arc<RwLock<ThermoDatabase>>`. La U
 
 ## Precedencia del catálogo
 
-La política común a escritorio, bridge y CLI es **OwnDB > MainDB > OpenDefault**. Primero se crea el catálogo con los datos incluidos, luego se carga MainDB con prioridad sobre esos datos y por último se aplica OwnDB, que tiene prioridad sobre ambas capas. El bridge toma el catálogo cargado por el escritorio. El CLI usa explícitamente `MainDbPrecedence::OverrideOpenDefault` y conserva la política anterior como referencia en su prueba de regresión. [ADR 0003](adr/0003-precedencia-unificada.md)
+La política común a escritorio, bridge y CLI es **OwnDB > MainDB > SoryntelDB > OpenDefault**. Primero se crea el catálogo con los datos incluidos y se carga SoryntelDB, la base propia de Soryntel. Mientras SoryntelDB está cargada no se usan los datos incluidos (OpenDefault). Después se carga MainDB, una base HSC externa y opcional, con prioridad sobre las capas anteriores. Por último se aplica OwnDB, que tiene prioridad sobre todas. El formato `.sdb` y su búsqueda se describen en [soryntel-db-format.md](soryntel-db-format.md) y en el [ADR 0007](adr/0007-soryntel-db.md). El bridge toma el catálogo cargado por el escritorio. El CLI usa explícitamente `MainDbPrecedence::OverrideOpenDefault` y conserva la política anterior como referencia en su prueba de regresión. [ADR 0003](adr/0003-precedencia-unificada.md)
 
-`SORYNTEL_MAIN_DB` y `SORYNTEL_OWN_DB` configuran las rutas. Para MainDB, si no hay variable de entorno, se considera `--hsc-db`. Las rutas por defecto del escritorio y del CLI buscan primero en `Databases/` junto al ejecutable y después en la ruta heredada.
+`SORYNTEL_SDB`, `SORYNTEL_MAIN_DB` y `SORYNTEL_OWN_DB` configuran las rutas. Para MainDB, `--hsc-db` tiene prioridad sobre `SORYNTEL_MAIN_DB`, como fija el [ADR 0003](adr/0003-precedencia-unificada.md). Si una ruta configurada no se puede cargar, no se recurre a la ruta por defecto: el escritorio muestra el error en un aviso. Sin SoryntelDB, el escritorio avisa de que el catálogo está limitado. Las rutas por defecto del escritorio y del CLI buscan primero en `Databases/` junto al ejecutable y después en la ruta heredada.
 
 ## Auditoría de arquitectura
 

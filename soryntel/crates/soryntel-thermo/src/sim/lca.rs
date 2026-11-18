@@ -257,6 +257,7 @@ pub struct LcaCatalogFlow {
     pub category_path: Vec<String>,
     pub reference_quantity: String,
     pub energy_quantity: String,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub conversion_factor: f64,
     pub gabi_group_hint: LcaGroup,
     pub providers: Vec<LcaProviderEntry>,
@@ -809,7 +810,9 @@ pub fn builtin_openlca_flows() -> Vec<LcaCatalogFlow> {
 pub struct ClassicStreamSpeciesDetail {
     pub formula: String,
     pub phase_label: String,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub mass_flow_t_h: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub enthalpy_kw: f64,
 }
 
@@ -819,12 +822,19 @@ pub struct ClassicStreamRow {
     pub is_manual: bool,
     pub stream_name: String,
     pub unit_name: String,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub mass_flow_t_h: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub temp_c: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub pressure_bar: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub enthalpy_kw: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub exergy_kw: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub total_volume_nm3: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub total_solids_t_h: f64,
     pub is_energy_only: bool,
     pub use_exergy: bool,
@@ -866,6 +876,7 @@ pub struct IndicatorSourceMatch {
     pub stream_id: Option<usize>,
     pub stream_name: String,
     pub species_formula: String,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub amount_kg: f64,
     pub counted: bool,
 }
@@ -898,7 +909,9 @@ pub struct NormalizedFlowRow {
     pub group_name: String,
     pub category: String,
     pub sub_category: String,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub amount: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub normalized_amount: f64,
     pub unit: String,
     pub lca_flow_id: Option<String>,
@@ -1393,11 +1406,11 @@ impl ClassicLcaState {
         }
         let info = &self.process_info;
         let tech_tag = if info.technology.trim().is_empty() {
-            "HSC".to_string()
+            "Soryntel".to_string()
         } else {
             info.technology.trim().to_string()
         };
-        let category = format!("{}: {} [HSC] [{}]", info.location, info.process_name, tech_tag);
+        let category = format!("{}: {} [Soryntel] [{}]", info.location, info.process_name, tech_tag);
         let ds_uuid = deterministic_uuid(&format!("ecospold::{}", info.process_name));
 
         let mut exchanges = String::new();
@@ -1433,9 +1446,9 @@ impl ClassicLcaState {
         </timePeriod>\n\
       </processInformation>\n\
       <administrativeInformation>\n\
-        <dataGeneratorAndPublication person=\"1\" companyCode=\"SORYNTEL\" publishedSource=\"HSC Sim LCA {ver}\" />\n\
+        <dataGeneratorAndPublication person=\"1\" companyCode=\"SORYNTEL\" publishedSource=\"Soryntel LCA {ver}\" />\n\
         <person number=\"1\" name=\"{author}\" />\n\
-        <fileAttributes internalSchemaVersion=\"1.0\" fileGenerator=\"Soryntel HSC Sim LCA\" defaultLanguage=\"en\" creationTimestamp=\"{date}\" uuid=\"{ds_uuid}\" />\n\
+        <fileAttributes internalSchemaVersion=\"1.0\" fileGenerator=\"Soryntel LCA\" defaultLanguage=\"en\" creationTimestamp=\"{date}\" uuid=\"{ds_uuid}\" />\n\
       </administrativeInformation>\n\
     </metaInformation>\n\
     <flowData>\n{exchanges}    </flowData>\n\
@@ -1468,7 +1481,7 @@ impl ClassicLcaState {
             "olca-schema.json",
             serde_json::to_string_pretty(&serde_json::json!({
                 "version": "2.0",
-                "generator": "Soryntel HSC Sim LCA",
+                "generator": "Soryntel LCA",
                 "process": proc_uuid,
             }))
             .unwrap()
@@ -1479,7 +1492,7 @@ impl ClassicLcaState {
             serde_json::to_string_pretty(&serde_json::json!({
                 "@id": hsc_cat_uuid,
                 "@type": "Category",
-                "name": "HSC",
+                "name": "Soryntel",
                 "modelType": "PROCESS"
             }))
             .unwrap()
@@ -1533,7 +1546,7 @@ impl ClassicLcaState {
             "name": info.process_name,
             "description": info.general_comment,
             "version": info.version_number,
-            "category": { "@id": hsc_cat_uuid, "@type": "Category", "name": "HSC" },
+            "category": { "@id": hsc_cat_uuid, "@type": "Category", "name": "Soryntel" },
             "location": { "@type": "Location", "name": info.location, "code": info.location },
             "processDocumentation": {
                 "technologyDescription": info.technology,
@@ -1829,6 +1842,7 @@ impl BetaLcaMode {
 pub struct BetaSpeciesIndicatorRow {
     pub formula: String,
     pub phase_label: String,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub amount: f64,
     pub unit: String,
     pub flow_type: LcaFlowType,
@@ -1844,6 +1858,7 @@ pub struct BetaStreamRow {
     pub is_manual: bool,
     pub stream_name: String,
     pub unit_name: String,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub amount: f64,
     pub unit: String, // "t/h", "kW", "MJ"
     pub flow_type: LcaFlowType,
@@ -1871,9 +1886,12 @@ pub struct LciaResultStreamLine {
     pub flow_mapping: String,
     pub provider: String,
     pub location: String,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub stream_amount: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub normalized_amount: f64,
     pub amount_unit: String,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub normalized_result: f64,
     pub is_reference_flow: bool,
 }
@@ -1882,9 +1900,12 @@ pub struct LciaResultStreamLine {
 pub struct LciaResultUnitBlock {
     pub unit_name: String,
     pub inputs: Vec<LciaResultStreamLine>,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub inputs_total: f64,
     pub outputs: Vec<LciaResultStreamLine>,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub outputs_total: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub unit_total: f64,
 }
 
@@ -1895,8 +1916,10 @@ pub struct LciaCategoryResult {
     pub category_name: String,
     pub result_unit: String,
     pub reference_stream_name: String,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub reference_amount_t_h: f64,
     pub units: Vec<LciaResultUnitBlock>,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub grand_total: f64,
 }
 
@@ -1904,6 +1927,7 @@ pub struct LciaCategoryResult {
 pub struct SyntheticUnitProcessSummary {
     pub process_name: String,
     pub synthetic_ref_flow: String,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub synthetic_ref_amount_kg: f64,
     pub exchanges: Vec<(String, String, f64, String)>, // (Flow, Provider/Loc, Amount, Unit)
 }
@@ -2305,7 +2329,7 @@ impl BetaLcaState {
                     return Err("Parent stream converted to indicators cannot be mapped directly.".to_string());
                 }
                 if row.flow_type == LcaFlowType::ReferenceProductFlow {
-                    return Err("Reference Flow (Product) represents the HSC output and must not be mapped.".to_string());
+                    return Err("Reference Flow (Product) represents the simulation output and must not be mapped.".to_string());
                 }
                 (row.unit.clone(), row.flow_type)
             }
@@ -3075,7 +3099,7 @@ pub fn preset_classic_zn_tsl_fuming_lca(project: &SimProject) -> ClassicLcaState
     state.process_info = ClassicProcessInfo {
         process_name: "TSL Furnace".to_string(),
         technology: "Pyro".to_string(),
-        general_comment: "Black-box Zn TSL Fuming LCI benchmark (HSC Sim LCA Ch. 49.3)".to_string(),
+        general_comment: "Black-box Zn TSL Fuming LCI benchmark".to_string(),
         hsc_ver_last_save: "10.0.0.1".to_string(),
         location: "FI".to_string(),
         location_comment: "Finland benchmark".to_string(),

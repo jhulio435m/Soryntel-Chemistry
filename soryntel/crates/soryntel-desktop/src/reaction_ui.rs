@@ -17,7 +17,6 @@ use soryntel_application::models::reaction::{
     ReactionYAxis,
 };
 
-const DEFAULT_REA8_PATH: &str = "soryntel_reaction.rea8";
 const DEFAULT_SVG_PATH: &str = "soryntel_reaction_chart.svg";
 
 const SERIES_PALETTE: [egui::Color32; 6] = [
@@ -69,6 +68,9 @@ pub struct ReactionModuleState {
     pub file_path_buf: String,
     pub request_open_browser: bool,
     pub plot_reset_counter: u64,
+    /// `true` cuando el último cálculo falló: los resultados guardados ya no corresponden a
+    /// los parámetros visibles y no se muestran ni se exportan.
+    pub results_stale: bool,
 }
 
 impl ReactionModuleState {
@@ -106,16 +108,37 @@ impl ReactionModuleState {
             show_help_modal: false,
             show_file_modal: false,
             file_modal_is_save: true,
-            file_path_buf: crate::ui_common::temp_file_path(DEFAULT_REA8_PATH),
+            file_path_buf: String::new(),
             request_open_browser: false,
             plot_reset_counter: 0,
+            results_stale: false,
         };
         state.run_calculate(db);
         state
     }
 
     pub fn active_sheet(&self) -> Option<&ReactionCollectedSheet> {
+        if self.results_stale {
+            return None;
+        }
         self.sheets.get(self.active_sheet_idx)
+    }
+
+    /// Cambia la unidad de temperatura convirtiendo Desde/Hasta/Paso para que representen las
+    /// mismas temperaturas, y recalcula.
+    pub fn change_temp_unit(&mut self, new_unit: TemperatureUnit, db: &dyn SpeciesCatalogPort) {
+        self.convert_temperature_range(self.temp_unit, new_unit);
+        self.temp_unit = new_unit;
+        self.run_calculate(db);
+    }
+
+    fn convert_temperature_range(&mut self, old: TemperatureUnit, new: TemperatureUnit) {
+        if old == new {
+            return;
+        }
+        self.t_from = new.from_kelvin(old.to_kelvin(self.t_from));
+        self.t_to = new.from_kelvin(old.to_kelvin(self.t_to));
+        self.t_step = old.step_to_kelvin(self.t_step) / new.step_to_kelvin(1.0);
     }
 
     pub fn active_response(&self) -> Option<&CalculationResponse> {
@@ -170,6 +193,7 @@ impl ReactionModuleState {
 
                 self.status_msg = format!("Cálculo completado: {}", resp.normalized_input);
                 self.status_ok = true;
+                self.results_stale = false;
 
                 if self.collect_data && !self.sheets.is_empty() {
                     let next_num = self.sheets.len() + 1;
@@ -197,6 +221,7 @@ impl ReactionModuleState {
             Err(e) => {
                 self.status_msg = format!("Error: {e}");
                 self.status_ok = false;
+                self.results_stale = true;
             }
         }
     }
@@ -279,10 +304,18 @@ impl ReactionModuleState {
     }
 
     pub fn load_rea8(&mut self, path: &str) {
-        match std::fs::read_to_string(path)
-            .map_err(|e| soryntel_core::SoryntelError::DatabaseError(e.to_string()))
-            .and_then(|raw| ReactionUseCases::deserialize_rea8_workbook(&raw))
-        {
+        // Carga atómica: se valida el libro completo antes de tocar el estado.
+        let loaded = std::fs::read_to_string(path)
+            .map_err(|e| e.to_string())
+            .and_then(|raw| ReactionUseCases::deserialize_rea8_workbook(&raw).map_err(|e| e.to_string()))
+            .and_then(|wb| {
+                if wb.sheets.is_empty() {
+                    Err("el libro no contiene hojas de resultados".to_string())
+                } else {
+                    Ok(wb)
+                }
+            });
+        match loaded {
             Ok(wb) => {
                 self.formula_input = wb.formula_input;
                 self.smallest_coeff = wb.smallest_coeff;
@@ -299,10 +332,12 @@ impl ReactionModuleState {
                 self.plot_all_data = wb.plot_all_data;
                 self.log_y_scale = wb.log_y_scale;
                 self.decimals = wb.decimals.clamp(1, 8);
-                if !wb.sheets.is_empty() {
-                    self.active_sheet_idx = wb.active_sheet_idx.min(wb.sheets.len() - 1);
-                    self.sheets = wb.sheets;
-                }
+                self.active_sheet_idx = wb.active_sheet_idx.min(wb.sheets.len() - 1);
+                self.sheets = wb.sheets;
+                // Estado derivado del libro anterior.
+                self.results_stale = false;
+                self.selected_cell = None;
+                self.plot_reset_counter = self.plot_reset_counter.wrapping_add(1);
                 self.status_msg = format!("Libro cargado desde {path}");
                 self.status_ok = true;
             }
@@ -344,7 +379,7 @@ impl ReactionModuleState {
             t!("reaction.open")
         };
         if let Some(path) =
-            crate::reaction_actions::choose_file(save, &title, "rea8", "reacciones.rea8")
+            crate::reaction_actions::choose_file(save, &title, "rea8", "reacciones.rea8", Some(std::path::Path::new(&self.file_path_buf)))
         {
             self.file_path_buf = path.to_string_lossy().into_owned();
             let path = self.file_path_buf.clone();
@@ -368,6 +403,7 @@ impl ReactionModuleState {
             &title,
             extension,
             &format!("reacciones.{extension}"),
+            Some(std::path::Path::new(&self.file_path_buf)),
         ) else {
             return;
         };
@@ -545,7 +581,8 @@ impl ReactionModuleState {
         self.status_ok = true;
     }
 
-    pub fn ui(&mut self, ctx: &egui::Context, db: &dyn SpeciesCatalogPort) {
+    pub fn ui(&mut self, root_ui: &mut egui::Ui, db: &dyn SpeciesCatalogPort) {
+        let ctx = &root_ui.ctx().clone();
         let yellow_bg = excel_grid::EXCEL_YELLOW_BG;
 
         // Keyboard shortcut Ctrl+C for copying selected cell or sheet
@@ -558,20 +595,18 @@ impl ReactionModuleState {
         }
 
         // 1. Top Menu Bar (Fig. 1: File | Edit | Format | Sheet | Options | Help)
-        egui::TopBottomPanel::top("reaction_menu_bar").show(ctx, |ui| {
-            egui::menu::bar(ui, |ui| {
+        egui::Panel::top("reaction_menu_bar").show(root_ui, |ui| {
+            egui::MenuBar::new().ui(ui, |ui| {
                 ui.menu_button(t!("common.020"), |ui| {
                     if ui.button(t!("review.000")).clicked() {
                         self.file_modal_is_save = false;
-                        self.file_path_buf = crate::ui_common::temp_file_path(DEFAULT_REA8_PATH);
                         self.show_file_modal = true;
-                        ui.close_menu();
+                        ui.close_kind(egui::UiKind::Menu);
                     }
                     if ui.button(t!("review.001")).clicked() {
                         self.file_modal_is_save = true;
-                        self.file_path_buf = crate::ui_common::temp_file_path(DEFAULT_REA8_PATH);
                         self.show_file_modal = true;
-                        ui.close_menu();
+                        ui.close_kind(egui::UiKind::Menu);
                     }
                     ui.separator();
                     if ui
@@ -580,7 +615,7 @@ impl ReactionModuleState {
                         .clicked()
                     {
                         self.choose_export("xlsx");
-                        ui.close_menu();
+                        ui.close_kind(egui::UiKind::Menu);
                     }
                     if ui
                         .button(t!("review.002"))
@@ -588,7 +623,7 @@ impl ReactionModuleState {
                         .clicked()
                     {
                         self.export_active_csv();
-                        ui.close_menu();
+                        ui.close_kind(egui::UiKind::Menu);
                     }
                     if ui
                         .button(t!("review.003"))
@@ -596,20 +631,20 @@ impl ReactionModuleState {
                         .clicked()
                     {
                         self.choose_export("svg");
-                        ui.close_menu();
+                        ui.close_kind(egui::UiKind::Menu);
                     }
                     ui.separator();
                     if ui.button(t!("reaction.save_png")).clicked() {
                         self.choose_export("png");
-                        ui.close_menu();
+                        ui.close_kind(egui::UiKind::Menu);
                     }
                     if ui.button(t!("review.004")).clicked() {
                         self.request_open_browser = true;
-                        ui.close_menu();
+                        ui.close_kind(egui::UiKind::Menu);
                     }
                     if ui.button(t!("review.005")).clicked() {
                         self.show_print_modal = true;
-                        ui.close_menu();
+                        ui.close_kind(egui::UiKind::Menu);
                     }
                 });
 
@@ -620,20 +655,20 @@ impl ReactionModuleState {
                             self.status_msg = format!("Celda copiada: {val}");
                             self.status_ok = true;
                         }
-                        ui.close_menu();
+                        ui.close_kind(egui::UiKind::Menu);
                     }
                     if ui.button(t!("review.007")).clicked() {
                         self.copy_active_sheet_to_clipboard(ctx);
-                        ui.close_menu();
+                        ui.close_kind(egui::UiKind::Menu);
                     }
                     ui.separator();
                     if ui.button(t!("review.008")).clicked() {
                         self.copy_chart_vector(ctx);
-                        ui.close_menu();
+                        ui.close_kind(egui::UiKind::Menu);
                     }
                     if ui.button(t!("review.009")).clicked() {
                         self.copy_chart_series_data(ctx);
-                        ui.close_menu();
+                        ui.close_kind(egui::UiKind::Menu);
                     }
                 });
 
@@ -644,7 +679,7 @@ impl ReactionModuleState {
                             .radio_value(&mut self.decimals, dec, format!("{dec} decimals"))
                             .clicked()
                         {
-                            ui.close_menu();
+                            ui.close_kind(egui::UiKind::Menu);
                         }
                     }
                     ui.separator();
@@ -666,7 +701,7 @@ impl ReactionModuleState {
                         .changed();
                     if changed {
                         self.run_calculate(db);
-                        ui.close_menu();
+                        ui.close_kind(egui::UiKind::Menu);
                     }
                 });
 
@@ -676,30 +711,31 @@ impl ReactionModuleState {
                         self.collect_data = true;
                         self.run_calculate(db);
                         self.collect_data = prev;
-                        ui.close_menu();
+                        ui.close_kind(egui::UiKind::Menu);
                     }
                     if ui.button(t!("review.014")).clicked() {
                         self.copy_active_sheet_to_clipboard(ctx);
-                        ui.close_menu();
+                        ui.close_kind(egui::UiKind::Menu);
                     }
                     if self.sheets.len() > 1 && ui.button(t!("common.051")).clicked() {
                         self.sheets.remove(self.active_sheet_idx);
                         if self.active_sheet_idx >= self.sheets.len() {
                             self.active_sheet_idx = self.sheets.len() - 1;
                         }
-                        ui.close_menu();
+                        ui.close_kind(egui::UiKind::Menu);
                     }
                     if ui.button(t!("review.015")).clicked() {
                         if let Some(first) = self.sheets.first().cloned() {
                             self.sheets = vec![first];
                             self.active_sheet_idx = 0;
                         }
-                        ui.close_menu();
+                        ui.close_kind(egui::UiKind::Menu);
                     }
                 });
 
                 ui.menu_button(t!("review.016"), |ui| {
                     let mut recalc = false;
+                    let prev_unit = self.temp_unit;
                     ui.label(egui::RichText::new(t!("common.052")).strong());
                     recalc |= ui
                         .radio_value(
@@ -718,6 +754,10 @@ impl ReactionModuleState {
                             "°F (Fahrenheit)",
                         )
                         .changed();
+                    if self.temp_unit != prev_unit {
+                        let new_unit = self.temp_unit;
+                        self.convert_temperature_range(prev_unit, new_unit);
+                    }
                     ui.separator();
                     ui.label(egui::RichText::new(t!("review.017")).strong());
                     recalc |= ui
@@ -762,7 +802,7 @@ impl ReactionModuleState {
                         self.t_to = 300.0;
                         self.t_step = 25.0;
                         recalc = true;
-                        ui.close_menu();
+                        ui.close_kind(egui::UiKind::Menu);
                     }
                     if recalc {
                         self.run_calculate(db);
@@ -772,13 +812,13 @@ impl ReactionModuleState {
                 ui.menu_button(t!("common.022"), |ui| {
                     if ui.button(t!("review.020")).clicked() {
                         self.show_help_modal = true;
-                        ui.close_menu();
+                        ui.close_kind(egui::UiKind::Menu);
                     }
                 });
 
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     ui.label(
-                        egui::RichText::new(format!("🗄 Maindb6: {} especies", CatalogUseCases::species_count(db)))
+                        egui::RichText::new(format!("Catálogo: {} especies", CatalogUseCases::species_count(db)))
                             .small()
                             .color(egui::Color32::from_rgb(71, 85, 105)),
                     );
@@ -787,17 +827,17 @@ impl ReactionModuleState {
         });
 
         // 2. Icon Toolbar Strip (Quick actions + Format/Unit pills)
-        egui::TopBottomPanel::top("reaction_icon_toolbar")
+        egui::Panel::top("reaction_icon_toolbar")
             .frame(
-                egui::Frame::none()
+                egui::Frame::NONE
                     .fill(egui::Color32::from_rgb(248, 250, 252))
                     .stroke(egui::Stroke::new(
                         1.0,
                         egui::Color32::from_rgb(226, 232, 240),
                     ))
-                    .inner_margin(egui::Margin::symmetric(10.0, 4.0)),
+                    .inner_margin(egui::Margin::symmetric(10, 4)),
             )
-            .show(ctx, |ui| {
+            .show(root_ui, |ui| {
                 ui.horizontal_wrapped(|ui| {
                     if ui
                         .button(t!("common.009"))
@@ -805,7 +845,6 @@ impl ReactionModuleState {
                         .clicked()
                     {
                         self.file_modal_is_save = false;
-                        self.file_path_buf = crate::ui_common::temp_file_path(DEFAULT_REA8_PATH);
                         self.show_file_modal = true;
                     }
                     if ui
@@ -860,7 +899,7 @@ impl ReactionModuleState {
                     }
                     if ui
                         .button(t!("review.025"))
-                        .on_hover_text("Abrir navegador de base de datos (Maindb6 / OwnDB6)")
+                        .on_hover_text("Abrir navegador de base de datos (catálogo principal y OwnDB)")
                         .clicked()
                     {
                         self.request_open_browser = true;
@@ -892,8 +931,7 @@ impl ReactionModuleState {
                             .clicked()
                             && self.temp_unit != u
                         {
-                            self.temp_unit = u;
-                            self.run_calculate(db);
+                            self.change_temp_unit(u, db);
                         }
                     }
                     for eu in [EnergyUnit::Kilojoules, EnergyUnit::Kilocalories] {
@@ -909,34 +947,37 @@ impl ReactionModuleState {
                 });
             });
 
-        // Keep controls scrollable so small windows retain space for results.
-        egui::TopBottomPanel::top("reaction_top_controls").show(ctx, |ui| {
-            egui::ScrollArea::vertical()
-                .id_salt("reaction_controls_scroll")
-                .max_height((ctx.screen_rect().height() * 0.32).clamp(90.0, 280.0))
-                .show(ui, |ui| {
-                    if ui.available_width() >= 860.0 {
-                        ui.columns(2, |cols| {
-                            self.render_specifications_box(&mut cols[0], db, yellow_bg);
-                            self.render_chart_controls_box(&mut cols[1], ctx, db, yellow_bg);
-                        });
-                    } else {
-                        self.render_specifications_box(ui, db, yellow_bg);
-                        egui::CollapsingHeader::new("Opciones del gráfico").show(ui, |ui| {
-                            self.render_chart_controls_box(ui, ctx, db, yellow_bg);
-                        });
-                    }
-                });
-        });
+        let wide = ctx.content_rect().width() >= 880.0;
+        if wide || !self.compact_chart {
+            let controls_height = (ctx.content_rect().height() * 0.26).clamp(88.0, 155.0);
+            egui::Panel::top("reaction_top_controls").show(root_ui, |ui| {
+                ui.spacing_mut().scroll.floating = false;
+                ui.set_min_height(controls_height);
+                egui::ScrollArea::vertical()
+                    .id_salt("reaction_controls_scroll")
+                    .max_height(controls_height)
+                    .min_scrolled_height(controls_height)
+                    .show(ui, |ui| {
+                        if wide {
+                            ui.columns(2, |cols| {
+                                self.render_specifications_box(&mut cols[0], db, yellow_bg);
+                                self.render_chart_controls_box(&mut cols[1], ctx, db, yellow_bg);
+                            });
+                        } else {
+                            self.render_specifications_box(ui, db, yellow_bg);
+                        }
+                    });
+            });
+        }
 
         // 4. Bottom Status Bar (with Outotec/Soryntel badge matching Fig. 1)
-        egui::TopBottomPanel::bottom("reaction_status_bar").show(ctx, |ui| {
+        egui::Panel::bottom("reaction_status_bar").show(root_ui, |ui| {
             let color = if self.status_ok {
                 egui::Color32::from_rgb(21, 128, 61)
             } else {
                 egui::Color32::from_rgb(185, 28, 28)
             };
-            ui.horizontal(|ui| {
+            ui.horizontal_wrapped(|ui| {
                 ui.label(
                     egui::RichText::new("Soryntel")
                         .strong()
@@ -962,9 +1003,8 @@ impl ReactionModuleState {
         });
 
         // 5. Main Central Split (Responsive: Left Excel Tables | Right Chart + Fig. 2 Tools)
-        egui::CentralPanel::default().show(ctx, |ui| {
-            let avail_w = ui.available_width();
-            if avail_w >= 880.0 {
+        egui::CentralPanel::default().show(root_ui, |ui| {
+            if wide {
                 ui.columns(2, |cols| {
                     self.render_left_spreadsheet_pane(&mut cols[0], db);
                     self.render_right_chart_pane(&mut cols[1], ctx);
@@ -975,6 +1015,9 @@ impl ReactionModuleState {
                     ui.selectable_value(&mut self.compact_chart, true, "Gráfico");
                 });
                 if self.compact_chart {
+                    egui::CollapsingHeader::new("Opciones del gráfico").show(ui, |ui| {
+                        self.render_chart_controls_box(ui, ctx, db, yellow_bg);
+                    });
                     self.render_right_chart_pane(ui, ctx);
                 } else {
                     self.render_left_spreadsheet_pane(ui, db);
@@ -1081,7 +1124,7 @@ impl ReactionModuleState {
                     if let Some(res) = self.active_response().cloned() {
                         let is_delta = res.result_format == ResultFormat::Delta;
                         let selected_lbl = self.y_axis.axis_label(&res, self.log_y_scale);
-                        egui::Frame::none().fill(yellow_bg).show(ui, |ui| {
+                        egui::Frame::NONE.fill(yellow_bg).show(ui, |ui| {
                             egui::ComboBox::from_id_salt("reaction_y_axis_combo")
                                 .selected_text(selected_lbl)
                                 .width(185.0)
@@ -1199,6 +1242,59 @@ impl ReactionModuleState {
     }
 
     fn render_left_spreadsheet_pane(&mut self, ui: &mut egui::Ui, db: &dyn SpeciesCatalogPort) {
+        ui.spacing_mut().scroll.floating = false;
+        egui::ScrollArea::horizontal()
+            .id_salt("reaction_sheet_tabs")
+            .show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    if ui
+                        .small_button("|<")
+                        .on_hover_text("Primera hoja")
+                        .clicked()
+                    {
+                        self.active_sheet_idx = 0;
+                    }
+                    if ui
+                        .small_button("<")
+                        .on_hover_text("Hoja anterior")
+                        .clicked()
+                        && self.active_sheet_idx > 0
+                    {
+                        self.active_sheet_idx -= 1;
+                    }
+                    if ui
+                        .small_button(">")
+                        .on_hover_text("Siguiente hoja")
+                        .clicked()
+                        && self.active_sheet_idx + 1 < self.sheets.len()
+                    {
+                        self.active_sheet_idx += 1;
+                    }
+                    if ui.small_button(">|").on_hover_text("Última hoja").clicked()
+                        && !self.sheets.is_empty()
+                    {
+                        self.active_sheet_idx = self.sheets.len() - 1;
+                    }
+                    ui.separator();
+                    for (idx, sheet) in self.sheets.iter().enumerate() {
+                        let selected = idx == self.active_sheet_idx;
+                        if ui.selectable_label(selected, &sheet.name).clicked() {
+                            self.active_sheet_idx = idx;
+                        }
+                    }
+                    if ui
+                        .small_button("➕")
+                        .on_hover_text("Colectar cálculo actual en una nueva hoja")
+                        .clicked()
+                    {
+                        let prev = self.collect_data;
+                        self.collect_data = true;
+                        self.run_calculate(db);
+                        self.collect_data = prev;
+                    }
+                });
+            });
+        ui.separator();
         let Some(sheet_clone) = self.active_sheet().cloned() else {
             return;
         };
@@ -1207,9 +1303,10 @@ impl ReactionModuleState {
         let mut new_scale = sheet_clone.amount_scale;
 
         egui::Frame::group(ui.style()).show(ui, |ui| {
-            let total_h = ui.available_height().max(320.0);
-            let rxn_table_h = (total_h * 0.56).clamp(180.0, 520.0);
-            let sp_table_h = (total_h * 0.28).clamp(115.0, 240.0);
+            // Reserva una línea para las cantidades y espacio para las barras de desplazamiento.
+            let tables_h = (ui.available_height() - 52.0).max(0.0);
+            let sp_table_h = (tables_h * 0.29).min(240.0);
+            let rxn_table_h = (tables_h - sp_table_h).min(520.0);
 
             // Upper Excel Grid: Formula/Reaction Banner + Reaction Data (Figs. 1, 5, 9)
             egui::ScrollArea::both()
@@ -1644,56 +1741,6 @@ impl ReactionModuleState {
                             }
                         });
                 });
-
-            ui.separator();
-            // Bottom Excel Sheet Tabs Bar (`|< < > >|  S1  S2 ... +` matching Fig. 1)
-            ui.horizontal(|ui| {
-                if ui
-                    .small_button("|<")
-                    .on_hover_text("Primera hoja")
-                    .clicked()
-                {
-                    self.active_sheet_idx = 0;
-                }
-                if ui
-                    .small_button("<")
-                    .on_hover_text("Hoja anterior")
-                    .clicked()
-                    && self.active_sheet_idx > 0
-                {
-                    self.active_sheet_idx -= 1;
-                }
-                if ui
-                    .small_button(">")
-                    .on_hover_text("Siguiente hoja")
-                    .clicked()
-                    && self.active_sheet_idx + 1 < self.sheets.len()
-                {
-                    self.active_sheet_idx += 1;
-                }
-                if ui.small_button(">|").on_hover_text("Última hoja").clicked()
-                    && !self.sheets.is_empty()
-                {
-                    self.active_sheet_idx = self.sheets.len() - 1;
-                }
-                ui.separator();
-                for (idx, sheet) in self.sheets.iter().enumerate() {
-                    let selected = idx == self.active_sheet_idx;
-                    if ui.selectable_label(selected, &sheet.name).clicked() {
-                        self.active_sheet_idx = idx;
-                    }
-                }
-                if ui
-                    .small_button("➕")
-                    .on_hover_text("Colectar cálculo actual en una nueva hoja")
-                    .clicked()
-                {
-                    let prev = self.collect_data;
-                    self.collect_data = true;
-                    self.run_calculate(db);
-                    self.collect_data = prev;
-                }
-            });
         });
 
         if let Some(sheet) = self.sheets.get_mut(self.active_sheet_idx) {
@@ -1702,81 +1749,86 @@ impl ReactionModuleState {
     }
 
     fn render_right_chart_pane(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
-        egui::Frame::group(ui.style()).show(ui, |ui| {
-            // Check compatibility when Plot All Data is enabled (Ch. 10.1 Step 4)
-            let mut incompatible_names = Vec::new();
-            if self.plot_all_data && self.sheets.len() > 1 {
-                if let Some(primary) = self.active_response().cloned() {
-                    for s in &self.sheets {
-                        if s.visible_in_plot
-                            && !ReactionUseCases::are_reaction_sheets_plot_compatible(
-                                &primary,
-                                &s.response,
-                            )
-                        {
-                            incompatible_names.push(s.name.clone());
+        ui.spacing_mut().scroll.floating = false;
+        egui::ScrollArea::vertical()
+            .id_salt("reaction_chart_scroll")
+            .show(ui, |ui| {
+                egui::Frame::group(ui.style()).show(ui, |ui| {
+                    // Check compatibility when Plot All Data is enabled (Ch. 10.1 Step 4)
+                    let mut incompatible_names = Vec::new();
+                    if self.plot_all_data && self.sheets.len() > 1 {
+                        if let Some(primary) = self.active_response().cloned() {
+                            for s in &self.sheets {
+                                if s.visible_in_plot
+                                    && !ReactionUseCases::are_reaction_sheets_plot_compatible(
+                                        &primary,
+                                        &s.response,
+                                    )
+                                {
+                                    incompatible_names.push(s.name.clone());
+                                }
+                            }
+                        }
+                        ui.horizontal_wrapped(|ui| {
+                            ui.label(egui::RichText::new(t!("review.035")).strong().size(11.5));
+                            for sheet in &mut self.sheets {
+                                ui.checkbox(
+                                    &mut sheet.visible_in_plot,
+                                    format!("{}: {}", sheet.name, sheet.response.normalized_input),
+                                );
+                            }
+                        });
+                        if !incompatible_names.is_empty() {
+                            ui.colored_label(
+                                egui::Color32::from_rgb(180, 83, 9),
+                                format!(
+                                    "⚠ Ch. 10.1: Hojas {:?} omitidas por tener distinto modo (sustancia vs reacción), unidades o formato Normal/Delta.",
+                                    incompatible_names
+                                ),
+                            );
                         }
                     }
-                }
-                ui.horizontal_wrapped(|ui| {
-                    ui.label(egui::RichText::new(t!("review.035")).strong().size(11.5));
-                    for sheet in &mut self.sheets {
-                        ui.checkbox(
-                            &mut sheet.visible_in_plot,
-                            format!("{}: {}", sheet.name, sheet.response.normalized_input),
-                        );
+
+                    if self.show_chart_toolbox {
+                        egui::Frame::NONE
+                            .fill(egui::Color32::from_rgb(241, 245, 249))
+                            .corner_radius(4)
+                            .inner_margin(egui::Margin::symmetric(8, 4))
+                            .show(ui, |ui| {
+                                ui.horizontal_wrapped(|ui| {
+                                    ui.strong("🎨 Herramientas del gráfico:");
+                                    ui.checkbox(&mut self.show_grid, "Cuadrícula");
+                                    ui.checkbox(&mut self.show_curve_labels, "Etiquetas de curvas");
+                                    ui.checkbox(&mut self.log_y_scale, "Log10(K)");
+                                    ui.label(t!("review.036"));
+                                    ui.add(
+                                        egui::DragValue::new(&mut self.line_width)
+                                            .speed(0.1)
+                                            .range(1.0..=5.0),
+                                    );
+                                });
+                            });
                     }
-                });
-                if !incompatible_names.is_empty() {
-                    ui.colored_label(
-                        egui::Color32::from_rgb(180, 83, 9),
-                        format!(
-                            "⚠ Ch. 10.1: Hojas {:?} omitidas por tener distinto modo (sustancia vs reacción), unidades o formato Normal/Delta.",
-                            incompatible_names
-                        ),
-                    );
-                }
-            }
 
-            if self.show_chart_toolbox {
-                egui::Frame::none()
-                    .fill(egui::Color32::from_rgb(241, 245, 249))
-                    .rounding(4.0)
-                    .inner_margin(egui::Margin::symmetric(8.0, 4.0))
-                    .show(ui, |ui| {
-                        ui.horizontal_wrapped(|ui| {
-                            ui.strong("🎨 Herramientas del gráfico:");
-                            ui.checkbox(&mut self.show_grid, "Cuadrícula");
-                            ui.checkbox(&mut self.show_curve_labels, "Etiquetas de curvas");
-                            ui.checkbox(&mut self.log_y_scale, "Log10(K)");
-                            ui.label(t!("review.036"));
-                            ui.add(
-                                egui::DragValue::new(&mut self.line_width)
-                                    .speed(0.1)
-                                    .range(1.0..=5.0),
-                            );
-                        });
+                    // Horizontal layout: Left Vertical Chart Tools Strip (Fig. 2) | Right Plot Canvas
+                    ui.horizontal_wrapped(|ui| {
+                        self.render_fig2_chart_tools_strip(ui, ctx);
                     });
-            }
-
-            // Horizontal layout: Left Vertical Chart Tools Strip (Fig. 2) | Right Plot Canvas
-            ui.horizontal_wrapped(|ui| {
-                self.render_fig2_chart_tools_strip(ui, ctx);
+                    self.render_chart(ui, "thermo_plot_main");
+                });
             });
-            self.render_chart(ui, "thermo_plot_main");
-        });
     }
 
     /// Vertical 6-icon Chart Tools bar matching Fig. 2 (`Save, Copy, Print, Clone, Redraw, Toolbox`).
     fn render_fig2_chart_tools_strip(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
-        egui::Frame::none()
+        egui::Frame::NONE
             .fill(egui::Color32::from_rgb(248, 250, 252))
             .stroke(egui::Stroke::new(
                 1.0,
                 egui::Color32::from_rgb(214, 220, 229),
             ))
-            .rounding(5.0)
-            .inner_margin(egui::Margin::symmetric(4.0, 6.0))
+            .corner_radius(5)
+            .inner_margin(egui::Margin::symmetric(4, 6))
             .show(ui, |ui| {
                 ui.horizontal_wrapped(|ui| {
                     ui.spacing_mut().item_spacing.x = 6.0;
@@ -1836,7 +1888,7 @@ impl ReactionModuleState {
         let full_id = format!("{plot_id}_{}", self.plot_reset_counter);
         let plot = Plot::new(full_id)
             .width(ui.available_width().max(1.0))
-            .height(ui.available_height().clamp(320.0, 1200.0))
+            .height(ui.available_height().clamp(290.0, 1200.0))
             .x_axis_label(x_label)
             .y_axis_label(y_label)
             .show_grid(self.show_grid)
@@ -1864,8 +1916,8 @@ impl ReactionModuleState {
                     );
                     let color = SERIES_PALETTE[idx % SERIES_PALETTE.len()];
                     plot_ui.line(
-                        Line::new(PlotPoints::from(raw_pts.clone()))
-                            .name(&sheet.response.normalized_input)
+                        Line::new(&sheet.response.normalized_input, PlotPoints::from(raw_pts.clone()))
+                            .id(("reaction_curve", idx))
                             .color(color)
                             .width(line_w),
                     );
@@ -1875,12 +1927,13 @@ impl ReactionModuleState {
                         let [mx, my] = raw_pts[mid];
                         plot_ui.text(
                             PlotText::new(
+                                "",
                                 [mx, my].into(),
                                 egui::RichText::new(&sheet.response.normalized_input)
                                     .strong()
                                     .size(11.5)
                                     .color(color),
-                            )
+                            ).id(("reaction_curve_label", idx))
                             .anchor(egui::Align2::LEFT_BOTTOM),
                         );
                     }
@@ -1893,8 +1946,7 @@ impl ReactionModuleState {
                 );
                 let color = SERIES_PALETTE[0];
                 plot_ui.line(
-                    Line::new(PlotPoints::from(raw_pts.clone()))
-                        .name(&primary.normalized_input)
+                    Line::new(&primary.normalized_input, PlotPoints::from(raw_pts.clone()))
                         .color(color)
                         .width(line_w),
                 );
@@ -1903,12 +1955,13 @@ impl ReactionModuleState {
                     let [mx, my] = raw_pts[mid];
                     plot_ui.text(
                         PlotText::new(
+                            "",
                             [mx, my].into(),
                             egui::RichText::new(&primary.normalized_input)
                                 .strong()
                                 .size(12.0)
                                 .color(color),
-                        )
+                        ).id("reaction_curve_label")
                         .anchor(egui::Align2::LEFT_BOTTOM),
                     );
                 }
@@ -2018,7 +2071,7 @@ fn chart_tool_icon_btn(ui: &mut egui::Ui, icon: &str, tooltip: &str) -> egui::Re
         [28.0, 28.0],
         egui::Button::new(egui::RichText::new(icon).size(15.0))
             .fill(egui::Color32::WHITE)
-            .rounding(4.0),
+            .corner_radius(4),
     )
     .on_hover_text(tooltip)
 }
@@ -2041,12 +2094,13 @@ mod tests {
             for chart in [false, true] {
                 state.compact_chart = chart;
                 for _ in 0..2 {
-                    let output = ctx.run(
+                    let output = crate::ui_common::run_test_frame(
+                        &ctx,
                         egui::RawInput {
                             screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
                             ..Default::default()
                         },
-                        |ctx| state.ui(ctx, &db),
+                        |root_ui| state.ui(root_ui, &db),
                     );
                     assert!(!output.shapes.is_empty());
                 }
@@ -2075,8 +2129,8 @@ mod tests {
                 )),
                 ..Default::default()
             };
-            let _ = ctx.run(input, |ctx| {
-                state.ui(ctx, &db);
+            let _ = crate::ui_common::run_test_frame(&ctx, input, |root_ui| {
+                state.ui(root_ui, &db);
             });
         }
         assert!(state.status_ok);
@@ -2094,8 +2148,8 @@ mod tests {
                 )),
                 ..Default::default()
             };
-            let _ = ctx.run(input, |ctx| {
-                state.ui(ctx, &db);
+            let _ = crate::ui_common::run_test_frame(&ctx, input, |root_ui| {
+                state.ui(root_ui, &db);
             });
         }
 
@@ -2108,5 +2162,78 @@ mod tests {
         assert_eq!(state.sheets.len(), 3);
         let svg = state.build_chart_svg().expect("chart svg");
         assert!(svg.contains("<svg") && svg.contains("Mg = Mg(g)"));
+    }
+
+    #[test]
+    fn switching_temperature_unit_keeps_results_consistent() {
+        let db = ThermoDatabase::with_open_defaults();
+        let mut state = ReactionModuleState::new(&db);
+        assert!(state.status_ok, "{}", state.status_msg);
+        // Mismo camino que el botón «K» de la barra: cambia la unidad y recalcula.
+        state.change_temp_unit(TemperatureUnit::Kelvin, &db);
+        assert!((state.t_from - 273.15).abs() < 1e-9 && (state.t_to - 2273.15).abs() < 1e-9);
+        state.change_temp_unit(TemperatureUnit::Fahrenheit, &db);
+        assert!((state.t_from - 32.0).abs() < 1e-9 && (state.t_step - 180.0).abs() < 1e-9);
+        state.change_temp_unit(TemperatureUnit::Kelvin, &db);
+        let label = state.active_response().map(|r| r.temp_unit_label.clone());
+        assert!(
+            state.status_ok && label.as_deref() == Some("K"),
+            "estado={:?} «{}», tabla en {label:?} con t_from={} {:?}",
+            state.status_ok, state.status_msg, state.t_from, state.temp_unit
+        );
+        // Un cálculo fallido invalida lo mostrado en lugar de dejar la hoja anterior.
+        state.t_from = 0.0;
+        state.run_calculate(&db);
+        assert!(!state.status_ok);
+        assert!(state.active_response().is_none(), "resultados obsoletos visibles tras un error");
+        assert!(state.build_chart_svg().is_none());
+    }
+
+    #[test]
+    fn species_missing_from_catalog_shows_an_error_not_zeros() {
+        let db = ThermoDatabase::with_open_defaults(); // sin MainDB: no trae H2O
+        let mut state = ReactionModuleState::new(&db);
+        state.formula_input = "H2O".into();
+        state.run_calculate(&db);
+        assert!(!state.status_ok, "{}", state.status_msg);
+        assert!(state.active_response().is_none(), "se muestran resultados de otra especie o ceros");
+    }
+
+    #[test]
+    fn loading_rea8_without_sheets_does_not_keep_previous_results() {
+        let db = ThermoDatabase::with_open_defaults();
+        let mut state = ReactionModuleState::new(&db); // hoja S1 con Al2O3
+        let wb = ReactionWorkbookFile {
+            version: "HSC-REA8-10.0".to_string(),
+            formula_input: "Zn = Zn(g)".to_string(),
+            smallest_coeff: 1.0,
+            t_from: 500.0,
+            t_to: 1000.0,
+            t_step: 100.0,
+            temp_unit: TemperatureUnit::Celsius,
+            energy_unit: EnergyUnit::Kilojoules,
+            result_format: ResultFormat::Normal,
+            show_transitions: true,
+            criss_cobble: false,
+            y_axis: ReactionYAxis::K,
+            collect_data: false,
+            plot_all_data: false,
+            log_y_scale: false,
+            decimals: 3,
+            sheets: Vec::new(),
+            active_sheet_idx: 0,
+        };
+        let path = std::env::temp_dir().join(format!("soryntel-c07-{}.rea8", std::process::id()));
+        std::fs::write(&path, ReactionUseCases::serialize_rea8_workbook(&wb).unwrap()).unwrap();
+        state.load_rea8(path.to_str().unwrap());
+        let _ = std::fs::remove_file(&path);
+        // El libro se rechaza y el anterior queda intacto y coherente.
+        assert!(!state.status_ok, "{}", state.status_msg);
+        assert_eq!(state.formula_input, "Al2O3");
+        let shown = state.active_response().map(|r| r.normalized_input.clone());
+        assert!(
+            shown.as_deref().is_some_and(|s| s.contains("Al2O3")),
+            "la tabla muestra {shown:?} con la fórmula {}", state.formula_input
+        );
     }
 }

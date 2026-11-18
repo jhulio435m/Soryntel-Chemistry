@@ -269,7 +269,7 @@ pub const UNIT_ICON_GALLERY: &[UnitIconMeta] = &[
     UnitIconMeta { key: "filter_plant", label: "Pressure Filter", category: "Particles", default_kind: UnitKind::Distributions },
     UnitIconMeta { key: "dewatering", label: "Dewatering Unit", category: "Particles", default_kind: UnitKind::Distributions },
     UnitIconMeta { key: "reactor_tank", label: "Leach Reactor", category: "Hydro", default_kind: UnitKind::Dynamic },
-    UnitIconMeta { key: "conditioner", label: "OUTOTEC Conditioner", category: "Particles", default_kind: UnitKind::Distributions },
+    UnitIconMeta { key: "conditioner", label: "Conditioner", category: "Particles", default_kind: UnitKind::Distributions },
     UnitIconMeta { key: "hydrocyclone", label: "Hydrocyclone", category: "Particles", default_kind: UnitKind::Distributions },
     UnitIconMeta { key: "rotary_kiln", label: "Rotary Mill / Kiln", category: "Pyro", default_kind: UnitKind::Distributions },
     UnitIconMeta { key: "tankcell_200", label: "TankCell-200", category: "Particles", default_kind: UnitKind::Distributions },
@@ -396,7 +396,7 @@ pub fn builtin_unit_model_catalog() -> Vec<UnitModelCatalogEntry> {
             category: ModelLibraryTab::Particles,
             version: "10.3.1".into(),
             calculation: "First-order Kinetics".into(),
-            description: "Outotec TankCell flotation model separating Concentrate and Tails".into(),
+            description: "Flotation cell model separating Concentrate and Tails".into(),
         },
         UnitModelCatalogEntry {
             model_name: "OKTOP Conditioner".into(),
@@ -512,7 +512,7 @@ pub fn empty_project() -> SimProject {
         logs: vec![SimLogEntry {
             severity: LogSeverity::Success,
             duration_s: 0.05,
-            message: "Initialized empty HSC Sim project".into(),
+            message: "Initialized empty simulation project".into(),
             children: Vec::new(),
         }],
     }

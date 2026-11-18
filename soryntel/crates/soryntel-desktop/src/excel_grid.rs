@@ -33,7 +33,7 @@ pub fn header_cell(ui: &mut egui::Ui, text: &str, width: f32) {
     if ui.is_rect_visible(rect) {
         let p = ui.painter();
         p.rect_filled(rect, 0.0, EXCEL_HEADER_BG);
-        p.rect_stroke(rect, 0.0, egui::Stroke::new(1.0, EXCEL_HEADER_BORDER));
+        p.rect_stroke(rect, 0.0, egui::Stroke::new(1.0, EXCEL_HEADER_BORDER), egui::StrokeKind::Middle);
         p.text(
             rect.center(),
             egui::Align2::CENTER_CENTER,
@@ -55,7 +55,7 @@ pub fn section_cell(ui: &mut egui::Ui, text: &str, width: f32, center: bool) {
     if ui.is_rect_visible(rect) {
         let p = ui.painter();
         p.rect_filled(rect, 0.0, EXCEL_SECTION_BG);
-        p.rect_stroke(rect, 0.0, egui::Stroke::new(1.0, EXCEL_HEADER_BORDER));
+        p.rect_stroke(rect, 0.0, egui::Stroke::new(1.0, EXCEL_HEADER_BORDER), egui::StrokeKind::Middle);
         let (pos, align) = if center {
             (rect.center(), egui::Align2::CENTER_CENTER)
         } else {
@@ -91,7 +91,7 @@ pub fn text_cell(
         } else {
             egui::Stroke::new(1.0, EXCEL_GRID_BORDER)
         };
-        p.rect_stroke(rect, 0.0, stroke);
+        p.rect_stroke(rect, 0.0, stroke, egui::StrokeKind::Middle);
         if selected {
             let handle = egui::Rect::from_min_size(
                 rect.right_bottom() - egui::vec2(4.0, 4.0),
@@ -133,7 +133,7 @@ pub fn widget_cell(
         } else {
             egui::Stroke::new(1.0, EXCEL_GRID_BORDER)
         };
-        p.rect_stroke(rect, 0.0, stroke);
+        p.rect_stroke(rect, 0.0, stroke, egui::StrokeKind::Middle);
         if selected {
             let handle = egui::Rect::from_min_size(
                 rect.right_bottom() - egui::vec2(4.0, 4.0),
@@ -153,13 +153,36 @@ pub fn widget_cell(
     vis.inactive.bg_fill = egui::Color32::TRANSPARENT;
     vis.inactive.weak_bg_fill = egui::Color32::TRANSPARENT;
     vis.inactive.bg_stroke = egui::Stroke::NONE;
-    vis.inactive.rounding = egui::Rounding::ZERO;
+    vis.inactive.corner_radius = egui::CornerRadius::ZERO;
     vis.hovered.bg_fill = egui::Color32::from_rgb(239, 246, 255);
     vis.hovered.weak_bg_fill = egui::Color32::from_rgb(239, 246, 255);
     vis.hovered.bg_stroke = egui::Stroke::new(1.0, egui::Color32::from_rgb(147, 197, 253));
-    vis.hovered.rounding = egui::Rounding::ZERO;
+    vis.hovered.corner_radius = egui::CornerRadius::ZERO;
     vis.active.bg_fill = egui::Color32::WHITE;
     vis.active.bg_stroke = egui::Stroke::new(1.0, egui::Color32::from_rgb(37, 99, 235));
-    vis.active.rounding = egui::Rounding::ZERO;
+    vis.active.corner_radius = egui::CornerRadius::ZERO;
     add_contents(&mut child_ui);
+}
+
+/// Parse a finite UI number with a point or a decimal comma.
+///
+/// Delegates to the canonical [`crate::ui_common::parse_user_number`] so every module
+/// accepts and rejects exactly the same inputs.
+pub(crate) fn parse_decimal_input(raw: &str) -> Option<f64> {
+    crate::ui_common::parse_user_number(raw).ok()
+}
+
+#[cfg(test)]
+mod decimal_input_tests {
+    use super::parse_decimal_input;
+
+    #[test]
+    fn accepts_finite_decimal_inputs_without_grouping() {
+        for input in ["40.5", " 40,5 ", "4,05e1"] {
+            assert_eq!(parse_decimal_input(input), Some(40.5), "{input:?}");
+        }
+        for input in ["", "1,2.3", "1,000,000", "1 000", "NaN", "inf", "1e999", "-"] {
+            assert_eq!(parse_decimal_input(input), None, "{input:?}");
+        }
+    }
 }

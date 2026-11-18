@@ -63,18 +63,18 @@ pub enum LauncherCommand {
 }
 
 pub fn render_hsc10_header(
-    ctx: &egui::Context,
+    root_ui: &mut egui::Ui,
     ui_state: &mut LauncherUiState,
     species_count: usize,
 ) {
-    egui::TopBottomPanel::top("hsc10_launcher_header")
+    egui::Panel::top("hsc10_launcher_header")
         .frame(
-            egui::Frame::none()
+            egui::Frame::NONE
                 .fill(egui::Color32::from_rgb(245, 247, 250))
                 .stroke(egui::Stroke::new(1.0, egui::Color32::from_rgb(214, 220, 229)))
-                .inner_margin(egui::Margin::symmetric(14.0, 6.0)),
+                .inner_margin(egui::Margin::symmetric(14, 6)),
         )
-        .show(ctx, |ui| {
+        .show(root_ui, |ui| {
             ui.set_height(38.0);
             let rect = ui.max_rect();
 
@@ -150,21 +150,21 @@ pub fn render_hsc10_header(
 }
 
 pub fn render_hsc10_footer(
-    ctx: &egui::Context,
+    root_ui: &mut egui::Ui,
     ui_state: &mut LauncherUiState,
     open_count: usize,
 ) -> LauncherCommand {
     let mut cmd = LauncherCommand::None;
-    egui::TopBottomPanel::bottom("hsc10_launcher_footer")
+    egui::Panel::bottom("hsc10_launcher_footer")
         .frame(
-            egui::Frame::none()
+            egui::Frame::NONE
                 .fill(egui::Color32::from_rgb(245, 247, 250))
                 .stroke(egui::Stroke::new(1.0, egui::Color32::from_rgb(214, 220, 229)))
-                .inner_margin(egui::Margin::symmetric(14.0, 5.0)),
+                .inner_margin(egui::Margin::symmetric(14, 5)),
         )
-        .show(ctx, |ui| {
+        .show(root_ui, |ui| {
             ui.set_height(30.0);
-            ui.horizontal(|ui| {
+            ui.horizontal_wrapped(|ui| {
                 // Orange RSS-style badge + release status line matching Fig. 1
                 let (rss_rect, _) =
                     ui.allocate_exact_size(egui::vec2(18.0, 18.0), egui::Sense::hover());
@@ -211,131 +211,134 @@ pub fn render_hsc10_footer(
                                     .color(egui::Color32::from_rgb(185, 28, 28)),
                             )
                             .fill(egui::Color32::from_rgb(254, 226, 226))
-                            .rounding(4.0),
+                            .corner_radius(4),
                         )
                         .clicked()
                 {
                     cmd = LauncherCommand::KillAll;
                 }
-
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    ui.label(
-                        egui::RichText::new("Soryntel:Thermo")
-                            .strong()
-                            .size(17.5)
-                            .color(egui::Color32::from_rgb(15, 23, 42)),
-                    );
-                });
             });
+            ui.label(
+                egui::RichText::new(rust_i18n::t!("nav.sorynteldb_attribution").as_ref())
+                    .size(11.0)
+                    .color(egui::Color32::from_rgb(71, 85, 105)),
+            );
         });
     cmd
 }
 
 pub fn render_hsc10_grid_canvas(
-    ctx: &egui::Context,
+    root_ui: &mut egui::Ui,
     ui_state: &mut LauncherUiState,
     tiles: &[TileSpec; 24],
     species_count: usize,
 ) -> LauncherCommand {
+        let ctx = &root_ui.ctx().clone();
     let mut cmd = LauncherCommand::None;
 
     egui::CentralPanel::default()
-        .frame(egui::Frame::none().fill(egui::Color32::from_rgb(10, 32, 64)))
-        .show(ctx, |ui| {
+        .frame(egui::Frame::NONE.fill(egui::Color32::from_rgb(10, 32, 64)))
+        .show(root_ui, |ui| {
             let canvas = ui.max_rect();
             paint_industrial_backdrop(ui.painter(), canvas);
 
-            // Centered & responsively scaled workspace grid (matches Fig. 1 proportions without clipping)
-            let scale = ((canvas.width() - 36.0) / 964.0)
-                .min((canvas.height() - 28.0) / 452.0)
-                .clamp(0.68, 1.12);
-            let card_w = (196.0 * scale).round();
-            let card_h = (104.0 * scale).round();
-            let card_gap_y = (8.0 * scale).round();
-            let col_gap = (28.0 * scale).round();
-            let tile_w = (112.0 * scale).round();
-            let tile_h = (102.0 * scale).round();
-            let tile_gap_x = (12.0 * scale).round();
-            let tile_gap_y = (10.0 * scale).round();
+            let compact = ui.available_width() < 880.0;
+            let columns = if compact { 4 } else { 6 };
+            let scale = (ui.available_width() / 1000.0).clamp(0.85, 1.12);
+            let card_size = egui::vec2(196.0, 104.0) * scale;
+            let tile_width = if compact {
+                ((ui.available_width() - 76.0) / columns as f32).min(160.0)
+            } else {
+                112.0 * scale
+            };
+            let tile_size = egui::vec2(tile_width, 102.0 * scale);
+            let gap = 10.0;
+            let categories = [
+                (ShowcaseCategory::Products, crate::i18n::text("nav.004")),
+                (ShowcaseCategory::Services, crate::i18n::text("nav.005")),
+                (ShowcaseCategory::Sustainability, crate::i18n::text("nav.006")),
+                (ShowcaseCategory::ResearchDev, crate::i18n::text("nav.007")),
+            ];
 
-            let total_w = card_w + col_gap + 6.0 * tile_w + 5.0 * tile_gap_x;
-            let total_h = (4.0 * card_h + 3.0 * card_gap_y).max(4.0 * tile_h + 3.0 * tile_gap_y);
-            let pad_x = ((canvas.width() - total_w) * 0.5).max(16.0);
-            let pad_y = ((canvas.height() - total_h) * 0.5).max(12.0);
-            let inner = canvas.shrink2(egui::vec2(pad_x, pad_y));
-
-            ui.allocate_new_ui(egui::UiBuilder::new().max_rect(inner), |ui| {
-                ui.horizontal(|ui| {
-                    // Left Column: 4 stacked visual showcase panels (Fig. 1 left)
-                    ui.vertical(|ui| {
-                        ui.spacing_mut().item_spacing.y = card_gap_y;
-                        for (cat, title) in [
-                            (ShowcaseCategory::Products, crate::i18n::text("nav.004")),
-                            (ShowcaseCategory::Services, crate::i18n::text("nav.005")),
-                            (ShowcaseCategory::Sustainability, crate::i18n::text("nav.006")),
-                            (ShowcaseCategory::ResearchDev, crate::i18n::text("nav.007")),
-                        ] {
-                            let active = ui_state.selected_category == cat;
-                            let (rect, resp) = ui.allocate_exact_size(
-                                egui::vec2(card_w, card_h),
-                                egui::Sense::click(),
-                            );
-                            paint_showcase_card(ui.painter(), rect, cat, title, active, resp.hovered());
-                            if resp.clicked() {
-                                ui_state.selected_category = if active {
-                                    ShowcaseCategory::None
-                                } else {
-                                    cat
-                                };
-                            }
-                        }
-                    });
-
-                    ui.add_space(col_gap);
-
-                    // Right Area: 6 columns x 4 rows translucent frosted glass tiles
-                    ui.vertical(|ui| {
-                        ui.spacing_mut().item_spacing.y = tile_gap_y;
-
-                        for r in 0..4 {
-                            ui.horizontal(|ui| {
-                                ui.spacing_mut().item_spacing.x = tile_gap_x;
-                                for c in 0..6 {
-                                    let idx = r * 6 + c;
-                                    let tile = &tiles[idx];
-                                    let dimmed = ui_state.selected_category != ShowcaseCategory::None
-                                        && tile.category != ui_state.selected_category
-                                        && matches!(tile.action, TileAction::Launch(_));
-                                    let (rect, resp) = ui.allocate_exact_size(
-                                        egui::vec2(tile_w, tile_h),
-                                        egui::Sense::click(),
-                                    );
-                                    paint_glass_tile(
-                                        ui.painter(),
-                                        rect,
-                                        tile,
-                                        resp.hovered(),
-                                        dimmed,
-                                    );
-                                    if resp.clicked() {
-                                        match tile.action {
-                                            TileAction::Launch(m) => {
-                                                cmd = LauncherCommand::OpenModule(m);
-                                            }
-                                            TileAction::Help => {
-                                                ui_state.show_help = !ui_state.show_help;
-                                            }
-                                            TileAction::SubMenu => {
-                                                ui_state.show_submenu = !ui_state.show_submenu;
-                                            }
-                                        }
+            ui.spacing_mut().scroll.floating = false;
+            egui::ScrollArea::vertical()
+                .id_salt("launcher_module_scroll")
+                .auto_shrink([false, false])
+                .show(ui, |ui| {
+                    ui.visuals_mut().override_text_color = Some(egui::Color32::WHITE);
+                    ui.add_space(16.0);
+                    ui.vertical_centered(|ui| {
+                        if compact {
+                            ui.horizontal_wrapped(|ui| {
+                                ui.add_space(14.0);
+                                for (category, title) in categories {
+                                    let active = ui_state.selected_category == category;
+                                    if ui.selectable_label(active, title).clicked() {
+                                        toggle_category(ui_state, category);
                                     }
                                 }
                             });
+                            ui.add_space(8.0);
                         }
+
+                        let grid_width = columns as f32 * tile_size.x + (columns - 1) as f32 * gap;
+                        let content_width = grid_width
+                            + if compact { 0.0 } else { card_size.x + 22.0 };
+                        ui.horizontal(|ui| {
+                            ui.spacing_mut().item_spacing.x = 0.0;
+                            ui.add_space(((ui.available_width() - content_width) * 0.5).max(10.0));
+                            if !compact {
+                                ui.vertical(|ui| {
+                                    ui.spacing_mut().item_spacing.y = gap;
+                                    for (category, title) in categories {
+                                        let active = ui_state.selected_category == category;
+                                        let (rect, response) =
+                                            ui.allocate_exact_size(card_size, egui::Sense::click());
+                                        paint_showcase_card(
+                                            ui.painter(), rect, category, title, active, response.hovered(),
+                                        );
+                                        if response.clicked() {
+                                            toggle_category(ui_state, category);
+                                        }
+                                    }
+                                });
+                                ui.add_space(22.0);
+                            }
+                            ui.vertical(|ui| {
+                                ui.spacing_mut().item_spacing.y = gap;
+                                for row in tiles.chunks(columns) {
+                                    ui.horizontal(|ui| {
+                                        ui.spacing_mut().item_spacing.x = gap;
+                                        for tile in row {
+                                            let dimmed = ui_state.selected_category != ShowcaseCategory::None
+                                                && tile.category != ui_state.selected_category
+                                                && matches!(tile.action, TileAction::Launch(_));
+                                            let (rect, response) =
+                                                ui.allocate_exact_size(tile_size, egui::Sense::click());
+                                            paint_glass_tile(
+                                                ui.painter(), rect, tile, response.hovered(), dimmed,
+                                            );
+                                            if response.clicked() {
+                                                match tile.action {
+                                                    TileAction::Launch(module) => {
+                                                        cmd = LauncherCommand::OpenModule(module);
+                                                    }
+                                                    TileAction::Help => {
+                                                        ui_state.show_help = !ui_state.show_help;
+                                                    }
+                                                    TileAction::SubMenu => {
+                                                        ui_state.show_submenu = !ui_state.show_submenu;
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    });
+                                }
+                            });
+                        });
                     });
+                    ui.add_space(16.0);
                 });
-            });
         });
 
     if ui_state.show_submenu {
@@ -424,6 +427,14 @@ pub fn render_hsc10_grid_canvas(
     cmd
 }
 
+fn toggle_category(ui_state: &mut LauncherUiState, category: ShowcaseCategory) {
+    ui_state.selected_category = if ui_state.selected_category == category {
+        ShowcaseCategory::None
+    } else {
+        category
+    };
+}
+
 // ---------------------------------------------------------------------------
 // Painter Renderers for Fig. 1 Industrial Scene, Left Cards & Frosted Tiles
 // ---------------------------------------------------------------------------
@@ -467,11 +478,11 @@ fn paint_industrial_backdrop(p: &egui::Painter, rect: egui::Rect) {
     p.circle_filled(
         egui::pos2(rect.center().x, rect.min.y + rect.height() * 0.56),
         rect.width() * 0.42,
-        egui::Color32::from_rgba_unmultiplied(120, 185, 245, 28),
+        egui::Color32::from_rgba_unmultiplied(120, 185, 245, 12),
     );
 
     // Subtle metallurgical towers / pipe silhouettes at lower horizon
-    let sil_col = egui::Color32::from_rgba_unmultiplied(10, 18, 30, 135);
+    let sil_col = egui::Color32::from_rgba_unmultiplied(10, 18, 30, 82);
     let hi_col = egui::Color32::from_rgba_unmultiplied(165, 200, 235, 32);
     let base_y = rect.max.y;
     let specs: [(f32, f32, f32); 11] = [
@@ -581,7 +592,7 @@ fn paint_showcase_card(
     } else {
         egui::Stroke::new(1.0, egui::Color32::from_rgba_unmultiplied(255, 255, 255, 85))
     };
-    p.rect_stroke(rect, 2.0, border);
+    p.rect_stroke(rect, 2.0, border, egui::StrokeKind::Middle);
 }
 
 fn paint_glass_tile(
@@ -591,18 +602,14 @@ fn paint_glass_tile(
     hovered: bool,
     dimmed: bool,
 ) {
-    let alpha_fill = if dimmed {
-        16
+    let fill = if dimmed {
+        egui::Color32::from_rgba_unmultiplied(17, 34, 55, 185)
     } else if hovered {
-        76
+        egui::Color32::from_rgb(43, 86, 128)
     } else {
-        44
+        egui::Color32::from_rgba_unmultiplied(27, 57, 88, 240)
     };
-    p.rect_filled(
-        rect,
-        2.0,
-        egui::Color32::from_rgba_unmultiplied(240, 246, 255, alpha_fill),
-    );
+    p.rect_filled(rect, 4.0, fill);
     let border_alpha = if tile.running {
         220
     } else if hovered {
@@ -617,9 +624,9 @@ fn paint_glass_tile(
     } else {
         egui::Color32::from_rgba_unmultiplied(255, 255, 255, border_alpha)
     };
-    p.rect_stroke(rect, 2.0, egui::Stroke::new(if tile.running { 1.6 } else { 1.0 }, border_col));
+    p.rect_stroke(rect, 2.0, egui::Stroke::new(if tile.running { 1.6 } else { 1.0 }, border_col), egui::StrokeKind::Middle);
 
-    let text_alpha = if dimmed { 110 } else { 255 };
+    let text_alpha = if dimmed { 180 } else { 255 };
     let main_col = egui::Color32::from_rgba_unmultiplied(255, 255, 255, text_alpha);
     let sub_col = egui::Color32::from_rgba_unmultiplied(230, 238, 248, text_alpha);
 
@@ -628,8 +635,8 @@ fn paint_glass_tile(
         // Layered SUB MENU graphic matching Fig. 1 bottom-right tile
         let r1 = egui::Rect::from_min_size(rect.left_top() + egui::vec2(14.0 * s, 16.0 * s), egui::vec2(15.0 * s, 15.0 * s));
         let r2 = egui::Rect::from_min_size(rect.left_top() + egui::vec2(20.0 * s, 21.0 * s), egui::vec2(15.0 * s, 15.0 * s));
-        p.rect_stroke(r1, 3.0, egui::Stroke::new(1.8, main_col));
-        p.rect_stroke(r2, 3.0, egui::Stroke::new(1.8, main_col));
+        p.rect_stroke(r1, 3.0, egui::Stroke::new(1.8, main_col), egui::StrokeKind::Middle);
+        p.rect_stroke(r2, 3.0, egui::Stroke::new(1.8, main_col), egui::StrokeKind::Middle);
         p.text(
             rect.left_bottom() + egui::vec2(13.0 * s, -14.0 * s),
             egui::Align2::LEFT_BOTTOM,

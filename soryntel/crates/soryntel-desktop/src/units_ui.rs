@@ -10,6 +10,7 @@
 //! - Bottom Excel Sheet Tab Bar (`|< < > >| Convert / Units / Constants / Mesh / Air / H2O`) + `Outotec` footer
 //! - `WaterInAir 3D` interactive golden wireframe surface modal (`Fig. 3`).
 
+use crate::excel_grid::parse_decimal_input;
 use eframe::egui;
 use egui_plot::{Legend, Line, Plot, PlotPoints};
 use soryntel_application::use_cases::MiscUseCases;
@@ -557,27 +558,29 @@ impl UnitsModuleState {
                 }
             }
         }
-        let path = format!(
-            "/tmp/soryntel_units_{}.csv",
-            self.active_sheet.label().to_ascii_lowercase()
-        );
+        let suggested = format!("soryntel_units_{}.csv", self.active_sheet.label().to_ascii_lowercase());
+        let Some(path) = crate::storage::choose_file(true, "Export CSV", "csv", &suggested, None) else {
+            return;
+        };
+        let path = path.display().to_string();
         match crate::storage::write_atomic(&path, out) {
             Ok(()) => self.status_msg = format!("Exported {} sheet to {path}", self.active_sheet.label()),
             Err(e) => self.status_msg = format!("CSV export failed: {e}"),
         }
     }
 
-    pub fn ui(&mut self, ctx: &egui::Context) {
+    pub fn ui(&mut self, root_ui: &mut egui::Ui) {
+        let ctx = &root_ui.ctx().clone();
         // 1. Top Menu Bar (`File | Edit | Help`, matching Fig. 1 & Fig. 2)
-        egui::TopBottomPanel::top("units_menu_bar")
+        egui::Panel::top("units_menu_bar")
             .frame(
-                egui::Frame::none()
+                egui::Frame::NONE
                     .fill(egui::Color32::from_rgb(240, 242, 246))
                     .stroke(egui::Stroke::new(0.5, egui::Color32::from_rgb(208, 212, 220)))
-                    .inner_margin(egui::Margin::symmetric(8.0, 3.0)),
+                    .inner_margin(egui::Margin::symmetric(8, 3)),
             )
-            .show(ctx, |ui| {
-                egui::menu::bar(ui, |ui| {
+            .show(root_ui, |ui| {
+                egui::MenuBar::new().ui(ui, |ui| {
                     ui.menu_button(crate::i18n::text("common.001"), |ui| {
                         if ui.button("Clear Convert Sheet").clicked() {
                             self.workbook.convert_rows.clear();
@@ -585,24 +588,24 @@ impl UnitsModuleState {
                             self.active_col = 0;
                             self.formula_buf.clear();
                             self.status_msg = "Cleared Convert sheet rows.".to_string();
-                            ui.close_menu();
+                            ui.close_kind(egui::UiKind::Menu);
                         }
                         if ui.button("Add Custom Unit...").clicked() {
                             self.show_add_unit_modal = true;
-                            ui.close_menu();
+                            ui.close_kind(egui::UiKind::Menu);
                         }
                         if ui.button("Add New Quantity...").clicked() {
                             self.show_add_qty_modal = true;
-                            ui.close_menu();
+                            ui.close_kind(egui::UiKind::Menu);
                         }
                         ui.separator();
                         if ui.button("Export Active Sheet CSV...").clicked() {
                             self.export_active_csv();
-                            ui.close_menu();
+                            ui.close_kind(egui::UiKind::Menu);
                         }
-                        if ui.button("Reset Default HSC6 Database").clicked() {
+                        if ui.button("Reset Default Database").clicked() {
                             *self = Self::default();
-                            ui.close_menu();
+                            ui.close_kind(egui::UiKind::Menu);
                         }
                         ui.separator();
                         if ui.button(crate::i18n::text("common.016")).clicked() {
@@ -615,7 +618,7 @@ impl UnitsModuleState {
                             std::mem::swap(&mut self.unit1, &mut self.unit2);
                             std::mem::swap(&mut self.prefix1, &mut self.prefix2);
                             self.reconvert_active_convert_row_if_numeric();
-                            ui.close_menu();
+                            ui.close_kind(egui::UiKind::Menu);
                         }
                         if ui
                             .checkbox(&mut self.delta_temp_mode, "Differential ΔT Mode (Temperature)")
@@ -626,41 +629,41 @@ impl UnitsModuleState {
                         if ui.button("Copy Active Cell Value").clicked() {
                             ctx.copy_text(self.formula_buf.clone());
                             self.status_msg = format!("Copied '{}' to clipboard.", self.formula_buf);
-                            ui.close_menu();
+                            ui.close_kind(egui::UiKind::Menu);
                         }
                     });
 
                     ui.menu_button(crate::i18n::text("common.003"), |ui| {
                         if ui.button("Sampler (All Equivalents)").clicked() {
                             self.show_sampler_modal = true;
-                            ui.close_menu();
+                            ui.close_kind(egui::UiKind::Menu);
                         }
                         if ui.button("Water in Air (2D Curves)").clicked() {
                             self.show_water_air_2d_modal = true;
-                            ui.close_menu();
+                            ui.close_kind(egui::UiKind::Menu);
                         }
                         if ui.button("Water in Air 3D Graph").clicked() {
                             self.show_water_air_3d_modal = true;
-                            ui.close_menu();
+                            ui.close_kind(egui::UiKind::Menu);
                         }
                         ui.separator();
                         if ui.button(crate::i18n::text("common.091")).clicked() {
                             self.show_about_modal = true;
-                            ui.close_menu();
+                            ui.close_kind(egui::UiKind::Menu);
                         }
                     });
                 });
             });
 
         // 2. Bottom Outotec Brand Footer + Excel Workbook Sheet Tabs (matching Fig. 1 & Fig. 2)
-        egui::TopBottomPanel::bottom("units_bottom_footer_and_tabs")
-            .frame(egui::Frame::none().fill(egui::Color32::from_rgb(236, 238, 242)))
-            .show(ctx, |ui| {
+        egui::Panel::bottom("units_bottom_footer_and_tabs")
+            .frame(egui::Frame::NONE.fill(egui::Color32::from_rgb(236, 238, 242)))
+            .show(root_ui, |ui| {
                 // Sheet tab strip (`|< < > >|  Convert / Units / Constants / Mesh / Air / H2O`)
-                egui::Frame::none()
+                egui::Frame::NONE
                     .fill(egui::Color32::from_rgb(228, 230, 236))
                     .stroke(egui::Stroke::new(0.8, egui::Color32::from_rgb(176, 182, 192)))
-                    .inner_margin(egui::Margin::symmetric(6.0, 2.0))
+                    .inner_margin(egui::Margin::symmetric(6, 2))
                     .show(ui, |ui| {
                         ui.horizontal(|ui| {
                             ui.spacing_mut().item_spacing = egui::vec2(2.0, 0.0);
@@ -715,11 +718,11 @@ impl UnitsModuleState {
                                             egui::Color32::from_rgb(172, 178, 190)
                                         },
                                     ))
-                                    .rounding(egui::Rounding {
-                                        nw: 0.0,
-                                        ne: 0.0,
-                                        sw: 4.0,
-                                        se: 4.0,
+                                    .corner_radius(egui::CornerRadius {
+                                        nw: 0,
+                                        ne: 0,
+                                        sw: 4,
+                                        se: 4,
                                     })
                                     .min_size(egui::vec2(58.0, 20.0));
                                 if ui.add(btn).clicked() {
@@ -730,13 +733,13 @@ impl UnitsModuleState {
                     });
 
                 // Red `Outotec` brand bar (Fig. 1)
-                egui::Frame::none()
+                egui::Frame::NONE
                     .fill(egui::Color32::from_rgb(232, 234, 238))
-                    .inner_margin(egui::Margin::symmetric(10.0, 4.0))
+                    .inner_margin(egui::Margin::symmetric(10, 4))
                     .show(ui, |ui| {
                         ui.horizontal(|ui| {
                             ui.label(
-                                egui::RichText::new("Outotec")
+                                egui::RichText::new("Soryntel")
                                     .strong()
                                     .size(16.0)
                                     .color(egui::Color32::from_rgb(198, 42, 34)),
@@ -752,13 +755,13 @@ impl UnitsModuleState {
             });
 
         // 3. Top Control Ribbon (`Unit Conversion` & `Sampler and Graphs`) + Formula Bar
-        egui::TopBottomPanel::top("units_controls_and_formula")
+        egui::Panel::top("units_controls_and_formula")
             .frame(
-                egui::Frame::none()
+                egui::Frame::NONE
                     .fill(egui::Color32::from_rgb(240, 242, 246))
-                    .inner_margin(egui::Margin::symmetric(8.0, 6.0)),
+                    .inner_margin(egui::Margin::symmetric(8, 6)),
             )
-            .show(ctx, |ui| {
+            .show(root_ui, |ui| {
                 self.render_top_groupboxes(ui);
                 ui.add_space(5.0);
                 self.render_formula_bar(ui);
@@ -766,8 +769,8 @@ impl UnitsModuleState {
 
         // 4. Main Central Workbook Grid (`Convert`, `Units`, `Constants`, `Mesh`, `Air`, `H2O`)
         egui::CentralPanel::default()
-            .frame(egui::Frame::none().fill(egui::Color32::WHITE))
-            .show(ctx, |ui| match self.active_sheet {
+            .frame(egui::Frame::NONE.fill(egui::Color32::WHITE))
+            .show(root_ui, |ui| match self.active_sheet {
                 UnitsSheetTab::Convert => self.render_convert_sheet(ui),
                 UnitsSheetTab::Units => self.render_units_db_sheet(ui),
                 UnitsSheetTab::Constants => self.render_constants_sheet(ui),
@@ -822,11 +825,11 @@ impl UnitsModuleState {
                 egui::vec2(left_w, box_h),
                 egui::Layout::top_down(egui::Align::LEFT),
                 |ui| {
-                    egui::Frame::none()
+                    egui::Frame::NONE
                         .fill(egui::Color32::from_rgb(242, 244, 248))
                         .stroke(egui::Stroke::new(1.0, egui::Color32::from_rgb(196, 202, 212)))
-                        .rounding(2.5)
-                        .inner_margin(egui::Margin::symmetric(8.0, 5.0))
+                        .corner_radius(3)
+                        .inner_margin(egui::Margin::symmetric(8, 5))
                         .show(ui, |ui| {
                             ui.set_min_width(left_w - 18.0);
                             ui.set_min_height(box_h - 12.0);
@@ -1026,11 +1029,11 @@ impl UnitsModuleState {
                 egui::vec2(right_w, box_h),
                 egui::Layout::top_down(egui::Align::LEFT),
                 |ui| {
-                    egui::Frame::none()
+                    egui::Frame::NONE
                         .fill(egui::Color32::from_rgb(242, 244, 248))
                         .stroke(egui::Stroke::new(1.0, egui::Color32::from_rgb(196, 202, 212)))
-                        .rounding(2.5)
-                        .inner_margin(egui::Margin::symmetric(8.0, 5.0))
+                        .corner_radius(3)
+                        .inner_margin(egui::Margin::symmetric(8, 5))
                         .show(ui, |ui| {
                             ui.set_min_width(right_w - 18.0);
                             ui.set_min_height(box_h - 12.0);
@@ -1062,10 +1065,10 @@ impl UnitsModuleState {
         let cell_ref = format!("{}{}", col_letter(self.active_col), self.active_row);
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing = egui::vec2(6.0, 0.0);
-            egui::Frame::none()
+            egui::Frame::NONE
                 .fill(egui::Color32::WHITE)
                 .stroke(egui::Stroke::new(1.0, egui::Color32::from_rgb(176, 182, 192)))
-                .inner_margin(egui::Margin::symmetric(6.0, 2.0))
+                .inner_margin(egui::Margin::symmetric(6, 2))
                 .show(ui, |ui| {
                     ui.set_min_width(72.0);
                     ui.horizontal(|ui| {
@@ -1309,10 +1312,10 @@ impl UnitsModuleState {
 
     fn render_units_db_sheet(&mut self, ui: &mut egui::Ui) {
         // Quick filter + add buttons strip above Excel grid (Fig. 2)
-        egui::Frame::none()
+        egui::Frame::NONE
             .fill(egui::Color32::from_rgb(246, 247, 250))
             .stroke(egui::Stroke::new(0.5, EXCEL_GRID_BORDER))
-            .inner_margin(egui::Margin::symmetric(8.0, 4.0))
+            .inner_margin(egui::Margin::symmetric(8, 4))
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
                     ui.label(egui::RichText::new("Filter Quantity:").size(11.5));
@@ -1436,7 +1439,7 @@ impl UnitsModuleState {
                                             self.formula_buf = cell_txt;
                                         }
                                         if resp.changed() {
-                                            if let Ok(v) = edit_coef.trim().parse::<f64>() {
+                                            if let Some(v) = parse_decimal_input(&edit_coef) {
                                                 if v > 0.0 && v.is_finite() {
                                                     self.workbook.quantities[q_idx].units[ci]
                                                         .coef = v;
@@ -1482,10 +1485,10 @@ impl UnitsModuleState {
     }
 
     fn render_constants_sheet(&mut self, ui: &mut egui::Ui) {
-        egui::Frame::none()
+        egui::Frame::NONE
             .fill(egui::Color32::from_rgb(246, 247, 250))
             .stroke(egui::Stroke::new(0.5, EXCEL_GRID_BORDER))
-            .inner_margin(egui::Margin::symmetric(8.0, 4.0))
+            .inner_margin(egui::Margin::symmetric(8, 4))
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
                     ui.label(egui::RichText::new("Search Constant:").size(11.5));
@@ -1602,10 +1605,10 @@ impl UnitsModuleState {
 
     fn render_mesh_sheet(&mut self, ui: &mut egui::Ui) {
         // Inline Mesh <-> Opening interpolator strip at top of Mesh sheet
-        egui::Frame::none()
+        egui::Frame::NONE
             .fill(egui::Color32::from_rgb(246, 247, 250))
             .stroke(egui::Stroke::new(0.5, EXCEL_GRID_BORDER))
-            .inner_margin(egui::Margin::symmetric(8.0, 5.0))
+            .inner_margin(egui::Margin::symmetric(8, 5))
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
                     ui.label(egui::RichText::new("Sieve Interpolator (log-log):").strong().size(11.5));
@@ -1614,12 +1617,14 @@ impl UnitsModuleState {
                         .add(egui::TextEdit::singleline(&mut self.mesh_in_buf).desired_width(68.0))
                         .changed()
                     {
-                        if let Ok(m) = self.mesh_in_buf.trim().parse::<f64>() {
+                        if let Some(m) = parse_decimal_input(&self.mesh_in_buf) {
                             if let Some(mm) = self.workbook.interpolate_mesh_to_mm(m) {
                                 self.mesh_mm_buf = format!("{mm:.4}");
                                 self.status_msg =
                                     format!("{m} mesh ≈ {mm:.4} mm ({:.1} µm)", mm * 1000.0);
                             }
+                        } else {
+                            ui.colored_label(egui::Color32::RED, "Número inválido");
                         }
                     }
                     ui.label("<->  Opening [mm]:");
@@ -1627,11 +1632,13 @@ impl UnitsModuleState {
                         .add(egui::TextEdit::singleline(&mut self.mesh_mm_buf).desired_width(76.0))
                         .changed()
                     {
-                        if let Ok(mm) = self.mesh_mm_buf.trim().parse::<f64>() {
+                        if let Some(mm) = parse_decimal_input(&self.mesh_mm_buf) {
                             if let Some(m) = self.workbook.interpolate_mm_to_mesh(mm) {
                                 self.mesh_in_buf = format!("{m:.1}");
                                 self.status_msg = format!("{mm:.4} mm ≈ {m:.1} mesh");
                             }
+                        } else {
+                            ui.colored_label(egui::Color32::RED, "Número inválido");
                         }
                     }
                 });
@@ -1747,10 +1754,10 @@ impl UnitsModuleState {
     }
 
     fn render_air_sheet(&mut self, ui: &mut egui::Ui) {
-        egui::Frame::none()
+        egui::Frame::NONE
             .fill(egui::Color32::from_rgb(246, 247, 250))
             .stroke(egui::Stroke::new(0.5, EXCEL_GRID_BORDER))
-            .inner_margin(egui::Margin::symmetric(8.0, 5.0))
+            .inner_margin(egui::Margin::symmetric(8, 5))
             .show(ui, |ui| {
                 ui.horizontal_wrapped(|ui| {
                     ui.label(egui::RichText::new("Air Humidity Calc:").strong().size(11.5));
@@ -1767,10 +1774,10 @@ impl UnitsModuleState {
                         .add(egui::TextEdit::singleline(&mut self.air_calc_p_buf).desired_width(54.0))
                         .changed();
                     if changed {
-                        if let (Ok(t), Ok(rh), Ok(p)) = (
-                            self.air_calc_temp_buf.trim().parse::<f64>(),
-                            self.air_calc_rh_buf.trim().parse::<f64>(),
-                            self.air_calc_p_buf.trim().parse::<f64>(),
+                        if let (Some(t), Some(rh), Some(p)) = (
+                            parse_decimal_input(&self.air_calc_temp_buf),
+                            parse_decimal_input(&self.air_calc_rh_buf),
+                            parse_decimal_input(&self.air_calc_p_buf),
                         ) {
                             self.air_calc_res =
                                 MiscUseCases::compute_air_humidity_point(t, rh, p).ok();
@@ -2065,7 +2072,7 @@ impl UnitsModuleState {
                                     egui::Color32::from_rgb(190, 24, 93),
                                     egui::Color32::from_rgb(107, 114, 128),
                                 ][rh_i];
-                                plot_ui.line(Line::new(pts).name(format!("RH = {rh:.0}%")).color(col).width(2.0));
+                                plot_ui.line(Line::new((format!("RH = {rh:.0}%")).to_string(), pts).color(col).width(2.0));
                             }
                         });
                 });
@@ -2156,7 +2163,7 @@ impl UnitsModuleState {
                     });
                     ui.horizontal(|ui| {
                         if ui.button("Add Unit").clicked() {
-                            if let Ok(c) = self.new_unit_coef.trim().parse::<f64>() {
+                            if let Some(c) = parse_decimal_input(&self.new_unit_coef) {
                                 match self.workbook.add_unit_to_quantity(
                                     self.selected_qty,
                                     self.new_unit_name.clone(),
@@ -2471,7 +2478,7 @@ fn excel_col_header(ui: &mut egui::Ui, text: &str, width: f32, active: bool) {
             EXCEL_HEADER_BG
         };
         p.rect_filled(rect, 0.0, bg);
-        p.rect_stroke(rect, 0.0, egui::Stroke::new(1.0, EXCEL_HEADER_BORDER));
+        p.rect_stroke(rect, 0.0, egui::Stroke::new(1.0, EXCEL_HEADER_BORDER), egui::StrokeKind::Middle);
         p.text(
             rect.center(),
             egui::Align2::CENTER_CENTER,
@@ -2492,7 +2499,7 @@ fn excel_row_header(ui: &mut egui::Ui, row_num: usize, width: f32, active: bool)
             EXCEL_HEADER_BG
         };
         p.rect_filled(rect, 0.0, bg);
-        p.rect_stroke(rect, 0.0, egui::Stroke::new(1.0, EXCEL_HEADER_BORDER));
+        p.rect_stroke(rect, 0.0, egui::Stroke::new(1.0, EXCEL_HEADER_BORDER), egui::StrokeKind::Middle);
         p.text(
             rect.center(),
             egui::Align2::CENTER_CENTER,
@@ -2519,7 +2526,7 @@ fn draw_sheet_static_cell(
     if ui.is_rect_visible(rect) {
         let p = ui.painter();
         p.rect_filled(rect, 0.0, bg);
-        p.rect_stroke(rect, 0.0, egui::Stroke::new(1.0, EXCEL_GRID_BORDER));
+        p.rect_stroke(rect, 0.0, egui::Stroke::new(1.0, EXCEL_GRID_BORDER), egui::StrokeKind::Middle);
         let clipped = p.with_clip_rect(rect.shrink2(egui::vec2(4.0, 1.0)));
         let (pos, align) = if center {
             (rect.center(), egui::Align2::CENTER_CENTER)
@@ -2540,7 +2547,7 @@ fn draw_sheet_static_cell(
             clipped.text(pos + egui::vec2(0.45, 0.0), align, text, font, fg);
         }
         if active {
-            p.rect_stroke(rect.shrink(0.5), 0.0, egui::Stroke::new(1.6, EXCEL_ACTIVE_BORDER));
+            p.rect_stroke(rect.shrink(0.5), 0.0, egui::Stroke::new(1.6, EXCEL_ACTIVE_BORDER), egui::StrokeKind::Middle);
         }
     }
     resp
@@ -2558,7 +2565,7 @@ fn draw_editable_sheet_cell(
     let (rect, _) = ui.allocate_exact_size(egui::vec2(w, 21.0), egui::Sense::hover());
     ui.painter().rect_filled(rect, 0.0, bg);
     ui.painter()
-        .rect_stroke(rect, 0.0, egui::Stroke::new(1.0, EXCEL_GRID_BORDER));
+        .rect_stroke(rect, 0.0, egui::Stroke::new(1.0, EXCEL_GRID_BORDER), egui::StrokeKind::Middle);
     let mut child = ui.new_child(egui::UiBuilder::new().max_rect(rect.shrink(1.5)));
     let align = if right {
         egui::Align::RIGHT
@@ -2567,16 +2574,16 @@ fn draw_editable_sheet_cell(
     };
     let resp = child.add(
         egui::TextEdit::singleline(buf)
-            .id(egui::Id::new(id_salt))
+            .id(egui::Id::unique(id_salt))
             .desired_width(w - 6.0)
-            .frame(false)
-            .horizontal_align(align)
+            .frame(egui::Frame::NONE)
+            .align(egui::Align2([align, egui::Align::Center]))
             .text_color(egui::Color32::from_rgb(18, 22, 28))
             .font(egui::FontId::proportional(11.5)),
     );
     if active {
         ui.painter()
-            .rect_stroke(rect.shrink(0.5), 0.0, egui::Stroke::new(1.6, EXCEL_ACTIVE_BORDER));
+            .rect_stroke(rect.shrink(0.5), 0.0, egui::Stroke::new(1.6, EXCEL_ACTIVE_BORDER), egui::StrokeKind::Middle);
         // Small Excel fill handle square at bottom-right matching Fig. 1 (`A7`)
         let sq = egui::Rect::from_center_size(rect.right_bottom() - egui::vec2(1.5, 1.5), egui::vec2(4.0, 4.0));
         ui.painter().rect_filled(sq, 0.0, EXCEL_ACTIVE_BORDER);
@@ -2594,22 +2601,8 @@ fn hsc_btn(ui: &mut egui::Ui, label: &str, w: f32) -> egui::Response {
         )
         .fill(egui::Color32::from_rgb(230, 233, 240))
         .stroke(egui::Stroke::new(1.0, egui::Color32::from_rgb(168, 175, 188)))
-        .rounding(2.0),
+        .corner_radius(2),
     )
-}
-
-fn parse_decimal_input(raw: &str) -> Option<f64> {
-    let trimmed = raw.trim();
-    if trimmed.is_empty() {
-        return None;
-    }
-    let normalized = if trimmed.contains(',') && !trimmed.contains('.') {
-        trimmed.replace(',', ".")
-    } else {
-        trimmed.to_string()
-    };
-    let val = normalized.parse::<f64>().ok()?;
-    val.is_finite().then_some(val)
 }
 
 fn is_incomplete_numeric_prefix(raw: &str) -> bool {

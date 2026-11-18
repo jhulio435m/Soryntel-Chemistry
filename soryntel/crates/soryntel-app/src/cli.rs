@@ -11,10 +11,10 @@ pub(crate) fn run() {
     let mut pos_args = Vec::new();
     let mut i = 1;
     while i < args.len() {
-        if args[i] == "--hsc-db" && i + 1 < args.len() {
+        if matches!(args[i].as_str(), "--database" | "--hsc-db") && i + 1 < args.len() {
             hsc_db_path = Some(args[i + 1].clone());
             i += 2;
-        } else if let Some(path) = args[i].strip_prefix("--hsc-db=") {
+        } else if let Some(path) = args[i].strip_prefix("--database=").or_else(|| args[i].strip_prefix("--hsc-db=")) {
             hsc_db_path = Some(path.to_owned());
             i += 1;
         } else {
@@ -27,7 +27,7 @@ pub(crate) fn run() {
 
     match pos_args.first().map(|s| s.as_str()) {
         Some("--help") | Some("-h") => {
-            println!("Soryntel Chemistry\n  balance \"<ecuación>\"\n  calc \"<fórmula o reacción>\" [desde] [hasta] [paso]\n  --port <puerto>\n  --hsc-db <archivo>\nTemperaturas de la CLI en °C; energías en kJ.");
+            println!("Soryntel Chemistry\n  balance \"<ecuación>\"\n  calc \"<fórmula o reacción>\" [desde] [hasta] [paso]\n  --port <puerto>\n  --database <archivo>\nTemperaturas de la CLI en °C; energías en kJ.");
         }
         Some("balance") => {
             let eq = pos_args.get(1).unwrap_or_else(|| {
@@ -76,7 +76,10 @@ pub(crate) fn run() {
                 .and_then(|idx| pos_args.get(idx + 1))
                 .and_then(|p| p.parse::<u16>().ok())
                 .unwrap_or(8765);
-            http::run_server(db, port);
+            if let Err(error) = http::run_server(db, port) {
+                eprintln!("{error}");
+                std::process::exit(1);
+            }
         }
     }
 }

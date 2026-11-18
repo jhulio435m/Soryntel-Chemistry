@@ -7,9 +7,15 @@
 !endif
 !define PUBLISHER "Soryntel Chemistry Team"
 !define EXE_NAME "soryntel-desktop.exe"
+!ifndef SORYNTEL_SDB_DIR
+  !define SORYNTEL_SDB_DIR "..\..\Databases"
+!endif
+!ifndef OUTPUT_DIR
+  !define OUTPUT_DIR "..\..\dist"
+!endif
 
 Name "${APP_NAME} ${APP_VERSION}"
-OutFile "..\..\dist\Soryntel-Chemistry-${APP_VERSION}-win64-setup.exe"
+OutFile "${OUTPUT_DIR}\Soryntel-Chemistry-${APP_VERSION}-win64-setup.exe"
 InstallDir "$PROGRAMFILES64\Soryntel Chemistry"
 InstallDirRegKey HKLM "Software\SoryntelChemistry" "InstallDir"
 RequestExecutionLevel admin
@@ -37,6 +43,12 @@ Section "Soryntel Chemistry" SecMain
     File "..\..\target\x86_64-pc-windows-gnu\release\${EXE_NAME}"
     File "..\soryntel-icon.ico"
     CreateDirectory "$INSTDIR\Databases"
+    !if /FileExists "${SORYNTEL_SDB_DIR}\soryntel.sdb"
+        File "..\..\..\LICENSE-DATA.md"
+        SetOutPath "$INSTDIR\Databases"
+        File "${SORYNTEL_SDB_DIR}\soryntel.sdb"
+        SetOutPath "$INSTDIR"
+    !endif
 
     WriteUninstaller "$INSTDIR\uninstall.exe"
 
@@ -63,6 +75,8 @@ Section "Uninstall"
     Delete "$INSTDIR\${EXE_NAME}"
     Delete "$INSTDIR\soryntel-icon.ico"
     Delete "$INSTDIR\uninstall.exe"
+    Delete "$INSTDIR\LICENSE-DATA.md"
+    Delete "$INSTDIR\Databases\soryntel.sdb"
     RMDir "$INSTDIR\Databases"
     RMDir "$INSTDIR"
     DeleteRegKey HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\SoryntelChemistry"

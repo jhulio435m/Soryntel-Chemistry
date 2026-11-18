@@ -152,8 +152,20 @@ impl ChemDatabase {
             "#,
         )?;
 
-        self.seed_species()?;
-        self.seed_minerals()?;
+        let transaction = rusqlite::Transaction::new_unchecked(&self.conn, rusqlite::TransactionBehavior::Immediate)?;
+        let species_empty = transaction.query_row(
+            "SELECT NOT EXISTS(SELECT 1 FROM species_thermo)", [], |row| row.get::<_, bool>(0),
+        )?;
+        if species_empty {
+            self.seed_species()?;
+        }
+        let minerals_empty = transaction.query_row(
+            "SELECT NOT EXISTS(SELECT 1 FROM minerals)", [], |row| row.get::<_, bool>(0),
+        )?;
+        if minerals_empty {
+            self.seed_minerals()?;
+        }
+        transaction.commit()?;
         Ok(())
     }
 
@@ -269,7 +281,11 @@ impl ChemDatabase {
                 |r| {
                     let wt_json: String = r.get(12)?;
                     let elements_wt_pct: BTreeMap<String, f64> =
-                        serde_json::from_str(&wt_json).unwrap_or_default();
+                        serde_json::from_str(&wt_json).map_err(|error| {
+                            rusqlite::Error::FromSqlConversionFailure(
+                                12, rusqlite::types::Type::Text, Box::new(error)
+                            )
+                        })?;
                     Ok(MineralRow {
                         id: r.get(0)?,
                         code: r.get(1)?,

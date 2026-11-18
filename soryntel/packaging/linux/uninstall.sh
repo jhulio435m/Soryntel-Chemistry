@@ -19,6 +19,9 @@ rm -f "${BIN_DIR}/soryntel-desktop" \
       "${APP_SHARE}/soryntel-chemistry.desktop" \
       "${ICON_PNG_DIR}/soryntel-chemistry.png" \
       "${ICON_SVG_DIR}/soryntel-chemistry.svg"
-rm -rf "${LIB_DIR}"
+rm -f "${LIB_DIR}/soryntel-desktop" \
+      "${LIB_DIR}/LICENSE-DATA.md" \
+      "${LIB_DIR}/Databases/soryntel.sdb"
+rmdir --ignore-fail-on-non-empty "${LIB_DIR}/Databases" "${LIB_DIR}" 2>/dev/null || true
 
 echo "✔ Soryntel Chemistry desinstalado."

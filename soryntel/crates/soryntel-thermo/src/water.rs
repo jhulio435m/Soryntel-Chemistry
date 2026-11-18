@@ -225,13 +225,16 @@ impl WaterDensityUnit {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WaterPointInput {
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub temp: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub pressure: f64,
     pub phase: WaterPhaseMode,
     /// Percentage [0..100] of the FIRST named phase in saturated pairs:
     /// - `Sat. (g,l)` -> gas percentage (steam dryness %)
     /// - `Sat. (g,s)` -> gas percentage
     /// - `Sat. (l,s)` -> liquid percentage
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub mixture_pct: f64,
     /// When true and phase is pure, auto-detect phase from (T, P) region.
     pub auto_phase: bool,
@@ -239,6 +242,7 @@ pub struct WaterPointInput {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WaterCalcRequest {
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub amount: f64,
     pub amount_unit: WaterAmountUnit,
     pub temp_unit: WaterTempUnit,
@@ -251,21 +255,34 @@ pub struct WaterCalcRequest {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WaterPointOutput {
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub temp_display: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub pressure_display: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub temp_k: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub pressure_bar: f64,
     pub resolved_phase: WaterPhaseMode,
     pub temp_is_auto: bool,
     pub pressure_is_auto: bool,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub h: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub s: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub h_specific: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub g: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub cp: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub density: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub exergy_ph: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub exergy_ch: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub exergy_tot: f64,
     pub warning: Option<String>,
 }
@@ -275,27 +292,42 @@ pub struct WaterCalcResult {
     pub point1: WaterPointOutput,
     pub point2: WaterPointOutput,
     /// `Delta` for input coordinates: `point1 - point2` (matches HSC6 Fig. 1 & Fig. 4).
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub delta_temp: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub delta_pressure: f64,
     /// `Delta` for thermodynamic properties: `point2 - point1` (matches HSC6 Fig. 1–4).
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub delta_h: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub delta_s: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub delta_h_specific: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub delta_g: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub delta_cp: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub delta_density: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub delta_exergy_ph: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub delta_exergy_ch: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub delta_exergy_tot: f64,
     pub isentropic_summary: Option<IsentropicSummary>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IsentropicSummary {
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub dh_real: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub dh_isentropic: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub efficiency: f64,
     pub mode_label: String,
+    #[serde(default, with = "soryntel_core::serde_nonfinite::option")]
     pub target_mixture_pct: Option<f64>,
 }
 

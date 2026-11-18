@@ -1,3 +1,4 @@
+use crate::excel_grid::parse_decimal_input;
 use eframe::egui;
 use serde::{Deserialize, Serialize};
 use soryntel_application::use_cases::{CatalogUseCases, MiscUseCases};
@@ -141,7 +142,7 @@ impl DiagramRow {
     }
 
     fn coeff(&self) -> f64 {
-        self.coeff_str.trim().parse::<f64>().unwrap_or(1.0).max(1e-6)
+        parse_decimal_input(&self.coeff_str).unwrap_or(1.0).max(1e-6)
     }
 
     fn db_badge(&self) -> &'static str {
@@ -178,8 +179,7 @@ pub struct DiagramsModuleState {
     show_db_browser: bool,
     db_query: String,
     db_matches: Vec<ChemicalSpecies>,
-    show_file_modal: bool,
-    file_modal_is_save: bool,
+    /// Archivo `.dia8` actual (vacío hasta abrir o guardar uno).
     file_path_buf: String,
     show_help_modal: bool,
 }
@@ -230,9 +230,7 @@ impl DiagramsModuleState {
             show_db_browser: false,
             db_query: "Fe".to_string(),
             db_matches: CatalogUseCases::search_species(db, "Fe", 40),
-            show_file_modal: false,
-            file_modal_is_save: true,
-            file_path_buf: "/home/nando/.gemini/antigravity/scratch/diagram.dia8".to_string(),
+            file_path_buf: String::new(),
             show_help_modal: false,
         };
         st.recalculate(db);
@@ -240,9 +238,18 @@ impl DiagramsModuleState {
     }
 
     fn recalculate(&mut self, db: &dyn SpeciesWorkspacePort) {
-        let t_min_val: f64 = self.t_min_str.trim().parse().unwrap_or(0.0);
-        let t_max_val: f64 = self.t_max_str.trim().parse().unwrap_or(2000.0);
-        let step_val: f64 = self.t_step_str.trim().parse().unwrap_or(50.0);
+        let (Some(t_min_val), Some(t_max_val), Some(step_val)) = (
+            parse_decimal_input(&self.t_min_str),
+            parse_decimal_input(&self.t_max_str),
+            parse_decimal_input(&self.t_step_str),
+        ) else {
+            self.status_error = Some("Invalid temperature or step.".into());
+            return;
+        };
+        if self.rows.iter().any(|row| !row.formula.trim().is_empty() && parse_decimal_input(&row.coeff_str).is_none()) {
+            self.status_error = Some("Invalid species coefficient.".into());
+            return;
+        }
         let off = if self.temp_in_kelvin { 0.0 } else { 273.15 };
 
         let species: Vec<DiagramSpeciesInput> = self
@@ -318,7 +325,10 @@ impl DiagramsModuleState {
     }
 
     fn balance_element_amounts(&mut self) {
-        let target: f64 = self.balance_amount_str.trim().parse().unwrap_or(2.0);
+        let Some(target) = parse_decimal_input(&self.balance_amount_str) else {
+            self.status_error = Some("Invalid balance amount.".into());
+            return;
+        };
         if target <= 0.0 || self.balance_element.is_empty() {
             return;
         }
@@ -396,6 +406,63 @@ impl DiagramsModuleState {
         }
     }
 
+    fn current_file(&self) -> Option<std::path::PathBuf> {
+        let path = self.file_path_buf.trim();
+        (!path.is_empty()).then(|| std::path::PathBuf::from(path))
+    }
+
+    /// Abre o guarda un `.dia8` con el diálogo nativo; la ruta elegida pasa a ser la actual
+    /// si la operación termina sin error.
+    fn choose_dia8(&mut self, db: &dyn SpeciesWorkspacePort, save: bool) {
+        let title = if save {
+            "Save Thermochemical Diagram (.dia8)"
+        } else {
+            "Open Thermochemical Diagram (.dia8)"
+        };
+        let current = self.current_file();
+        let suggested = current
+            .as_deref()
+            .and_then(|p| p.file_stem())
+            .map(|stem| crate::storage::suggested_file_name(&stem.to_string_lossy(), "dia8"))
+            .unwrap_or_else(|| "diagram.dia8".to_string());
+        let Some(path) = crate::storage::choose_file(save, title, "dia8", &suggested, current.as_deref()) else {
+            return;
+        };
+        let path = path.to_string_lossy().into_owned();
+        if save {
+            self.save_dia8(&path);
+        } else {
+            self.open_dia8(db, &path);
+        }
+        if self.status_error.is_none() {
+            self.file_path_buf = path;
+        }
+    }
+
+    /// Pide la ruta de exportación con el diálogo nativo (carpeta del diagrama actual o de
+    /// documentos). Sin resultados calculados muestra el error y no abre el diálogo.
+    fn choose_export_path(&mut self, title: &str, extension: &str, suggested: &str) -> Option<String> {
+        if self.result.is_none() {
+            self.status_error = Some("No calculated diagram data to export.".to_string());
+            return None;
+        }
+        let current = self.current_file();
+        crate::storage::choose_file(true, title, extension, suggested, current.as_deref())
+            .map(|path| path.to_string_lossy().into_owned())
+    }
+
+    fn export_chart_svg_dialog(&mut self) {
+        if let Some(path) = self.choose_export_path("Export Chart SVG", "svg", "diagram_chart.svg") {
+            self.export_chart_svg(&path);
+        }
+    }
+
+    fn export_ydata_csv_dialog(&mut self) {
+        if let Some(path) = self.choose_export_path("Export Y-data CSV", "csv", "diagram_ydata.csv") {
+            self.export_ydata_csv(&path);
+        }
+    }
+
     fn save_dia8(&mut self, path: &str) {
         let sf = self.build_save_file();
         match serde_json::to_string_pretty(&sf) {
@@ -420,7 +487,7 @@ impl DiagramsModuleState {
                         .map(|r| {
                             let mut row = DiagramRow::new(
                                 &r.formula,
-                                r.coeff_str.trim().parse().unwrap_or(1.0),
+                                parse_decimal_input(&r.coeff_str).unwrap_or(1.0),
                                 r.db_no,
                                 db,
                                 sf.temp_in_kelvin,
@@ -497,15 +564,23 @@ impl DiagramsModuleState {
         }
     }
 
+    fn plot_limits(&self) -> Option<(f64, f64, f64, f64)> {
+        let t_min = parse_decimal_input(&self.t_min_str)?;
+        let t_max = parse_decimal_input(&self.t_max_str)?.max(t_min + 1.0);
+        let y_min = parse_decimal_input(&self.y_min_str)?;
+        let y_max = parse_decimal_input(&self.y_max_str)?.max(y_min + 1.0);
+        Some((t_min, t_max, y_min, y_max))
+    }
+
     fn export_chart_svg(&mut self, path: &str) {
         let Some(res) = &self.result else {
             self.status_error = Some("No diagram chart to export.".to_string());
             return;
         };
-        let t_min: f64 = self.t_min_str.trim().parse().unwrap_or(0.0);
-        let t_max: f64 = self.t_max_str.trim().parse::<f64>().unwrap_or(2000.0).max(t_min + 1.0);
-        let y_min: f64 = self.y_min_str.trim().parse().unwrap_or(-1200.0);
-        let y_max: f64 = self.y_max_str.trim().parse::<f64>().unwrap_or(0.0).max(y_min + 1.0);
+        let Some((t_min, t_max, y_min, y_max)) = self.plot_limits() else {
+            self.status_error = Some("Invalid plot limits.".into());
+            return;
+        };
         let off = if self.temp_in_kelvin { 0.0 } else { 273.15 };
         let (w, h, ml, mr, mt, mb) = (900.0_f64, 620.0_f64, 82.0, 32.0, 48.0, 62.0);
         let (pw, ph) = (w - ml - mr, h - mt - mb);
@@ -564,32 +639,31 @@ impl DiagramsModuleState {
         }
     }
 
-    pub fn ui(&mut self, ctx: &egui::Context, db: &dyn SpeciesWorkspacePort) {
+    pub fn ui(&mut self, root_ui: &mut egui::Ui, db: &dyn SpeciesWorkspacePort) {
+        let ctx = &root_ui.ctx().clone();
         let mut vis = egui::Visuals::light();
         vis.panel_fill = egui::Color32::from_rgb(240, 242, 245);
         vis.window_fill = egui::Color32::WHITE;
         ctx.set_visuals(vis);
 
         // Top menu bar (§19 Fig. 1 File | Format | Help)
-        egui::TopBottomPanel::top("diag_top_menu")
+        egui::Panel::top("diag_top_menu")
             .frame(
-                egui::Frame::none()
+                egui::Frame::NONE
                     .fill(egui::Color32::from_rgb(236, 240, 246))
                     .stroke(egui::Stroke::new(1.0, EXCEL_GRID_BORDER))
-                    .inner_margin(egui::Margin::symmetric(8.0, 4.0)),
+                    .inner_margin(egui::Margin::symmetric(8, 4)),
             )
-            .show(ctx, |ui| {
+            .show(root_ui, |ui| {
                 ui.horizontal_wrapped(|ui| {
                     ui.menu_button(crate::i18n::text("common.001"), |ui| {
                         if ui.button("Open (.dia8)...").clicked() {
-                            self.file_modal_is_save = false;
-                            self.show_file_modal = true;
-                            ui.close_menu();
+                            ui.close_kind(egui::UiKind::Menu);
+                            self.choose_dia8(db, false);
                         }
                         if ui.button("Save (.dia8)...").clicked() {
-                            self.file_modal_is_save = true;
-                            self.show_file_modal = true;
-                            ui.close_menu();
+                            ui.close_kind(egui::UiKind::Menu);
+                            self.choose_dia8(db, true);
                         }
                         ui.separator();
                         if ui.button("Example: Ellingham Oxides (Fig. 2–4)").clicked() {
@@ -611,7 +685,7 @@ impl DiagramsModuleState {
                                 2.0,
                                 2000.0,
                             );
-                            ui.close_menu();
+                            ui.close_kind(egui::UiKind::Menu);
                         }
                         if ui.button("Example: H Heat Content (Fig. 1)").clicked() {
                             self.load_preset(
@@ -631,7 +705,7 @@ impl DiagramsModuleState {
                                 1.0,
                                 2000.0,
                             );
-                            ui.close_menu();
+                            ui.close_kind(egui::UiKind::Menu);
                         }
                         if ui.button("Example: Exergy (total) Curves").clicked() {
                             self.load_preset(
@@ -648,16 +722,16 @@ impl DiagramsModuleState {
                                 1.0,
                                 1500.0,
                             );
-                            ui.close_menu();
+                            ui.close_kind(egui::UiKind::Menu);
                         }
                         ui.separator();
                         if ui.button("Export Chart SVG...").clicked() {
-                            self.export_chart_svg("/home/nando/.gemini/antigravity/scratch/diagram_chart.svg");
-                            ui.close_menu();
+                            ui.close_kind(egui::UiKind::Menu);
+                            self.export_chart_svg_dialog();
                         }
                         if ui.button("Export Y-data CSV...").clicked() {
-                            self.export_ydata_csv("/home/nando/.gemini/antigravity/scratch/diagram_ydata.csv");
-                            ui.close_menu();
+                            ui.close_kind(egui::UiKind::Menu);
+                            self.export_ydata_csv_dialog();
                         }
                     });
                     ui.menu_button(crate::i18n::text("common.019"), |ui| {
@@ -667,13 +741,13 @@ impl DiagramsModuleState {
                         if ui.button("Fit Y-Axis Now").clicked() {
                             self.y_auto = true;
                             self.update_auto_y_range();
-                            ui.close_menu();
+                            ui.close_kind(egui::UiKind::Menu);
                         }
                     });
                     ui.menu_button(crate::i18n::text("common.003"), |ui| {
                         if ui.button("H, S, C and G Diagrams Guide (Ch. 19)").clicked() {
                             self.show_help_modal = true;
-                            ui.close_menu();
+                            ui.close_kind(egui::UiKind::Menu);
                         }
                     });
                     ui.separator();
@@ -698,18 +772,18 @@ impl DiagramsModuleState {
             });
 
         // 1. Left Resizable Spreadsheet Panel (X-data / Y-data)
-        egui::SidePanel::left("diag_left_sheet")
+        egui::Panel::left("diag_left_sheet")
             .resizable(true)
-            .default_width(395.0)
-            .min_width(195.0)
-            .max_width(680.0)
+            .default_size(395.0)
+            .min_size(195.0)
+            .max_size(680.0)
             .frame(
-                egui::Frame::none()
+                egui::Frame::NONE
                     .fill(egui::Color32::WHITE)
                     .stroke(egui::Stroke::new(1.0, EXCEL_GRID_BORDER))
-                    .inner_margin(egui::Margin::same(4.0)),
+                    .inner_margin(egui::Margin::same(4)),
             )
-            .show(ctx, |ui| {
+            .show(root_ui, |ui| {
                 ui.horizontal(|ui| {
                     if ui
                         .selectable_label(self.sheet_tab == DataSheetTab::XData, "X-data")
@@ -727,7 +801,7 @@ impl DiagramsModuleState {
                         self.rows.push(DiagramRow::empty());
                     }
                     if self.sheet_tab == DataSheetTab::YData && ui.small_button(crate::i18n::text("common.031")).clicked() {
-                        self.export_ydata_csv("/home/nando/.gemini/antigravity/scratch/diagram_ydata.csv");
+                        self.export_ydata_csv_dialog();
                     }
                 });
                 ui.separator();
@@ -741,18 +815,18 @@ impl DiagramsModuleState {
             });
 
         // 2. Center Resizable Controls Panel
-        egui::SidePanel::left("diag_center_controls")
+        egui::Panel::left("diag_center_controls")
             .resizable(true)
-            .default_width(245.0)
-            .min_width(175.0)
-            .max_width(420.0)
+            .default_size(245.0)
+            .min_size(175.0)
+            .max_size(420.0)
             .frame(
-                egui::Frame::none()
+                egui::Frame::NONE
                     .fill(egui::Color32::from_rgb(240, 242, 245))
                     .stroke(egui::Stroke::new(1.0, EXCEL_GRID_BORDER))
-                    .inner_margin(egui::Margin::same(8.0)),
+                    .inner_margin(egui::Margin::same(8)),
             )
-            .show(ctx, |ui| {
+            .show(root_ui, |ui| {
                 egui::ScrollArea::both().show(ui, |ui| {
                     ui.label(egui::RichText::new("Diagram Type").strong().size(11.5));
                     egui::ComboBox::from_id_salt("diag_type_combo")
@@ -800,10 +874,10 @@ impl DiagramsModuleState {
                         ui.horizontal(|ui| {
                             if ui.radio(!self.temp_in_kelvin, "°C").clicked() && self.temp_in_kelvin {
                                 self.temp_in_kelvin = false;
-                                if let Ok(v) = self.t_min_str.trim().parse::<f64>() {
+                                if let Some(v) = parse_decimal_input(&self.t_min_str) {
                                     self.t_min_str = format!("{:.2}", v - 273.15);
                                 }
-                                if let Ok(v) = self.t_max_str.trim().parse::<f64>() {
+                                if let Some(v) = parse_decimal_input(&self.t_max_str) {
                                     self.t_max_str = format!("{:.2}", v - 273.15);
                                 }
                                 for r in &mut self.rows {
@@ -813,10 +887,10 @@ impl DiagramsModuleState {
                             }
                             if ui.radio(self.temp_in_kelvin, "K").clicked() && !self.temp_in_kelvin {
                                 self.temp_in_kelvin = true;
-                                if let Ok(v) = self.t_min_str.trim().parse::<f64>() {
+                                if let Some(v) = parse_decimal_input(&self.t_min_str) {
                                     self.t_min_str = format!("{:.2}", v + 273.15);
                                 }
-                                if let Ok(v) = self.t_max_str.trim().parse::<f64>() {
+                                if let Some(v) = parse_decimal_input(&self.t_max_str) {
                                     self.t_max_str = format!("{:.2}", v + 273.15);
                                 }
                                 for r in &mut self.rows {
@@ -891,10 +965,10 @@ impl DiagramsModuleState {
                         );
                     });
 
-                    egui::Frame::none()
+                    egui::Frame::NONE
                         .fill(egui::Color32::WHITE)
                         .stroke(egui::Stroke::new(1.0, EXCEL_GRID_BORDER))
-                        .inner_margin(egui::Margin::same(3.0))
+                        .inner_margin(egui::Margin::same(3))
                         .show(ui, |ui| {
                             egui::Grid::new("diag_elem_grid_9col")
                                 .spacing(egui::vec2(1.5, 1.5))
@@ -950,11 +1024,11 @@ impl DiagramsModuleState {
         // 3. Right Central Chart Panel
         egui::CentralPanel::default()
             .frame(
-                egui::Frame::none()
+                egui::Frame::NONE
                     .fill(egui::Color32::WHITE)
-                    .inner_margin(egui::Margin::same(8.0)),
+                    .inner_margin(egui::Margin::same(8)),
             )
-            .show(ctx, |ui| {
+            .show(root_ui, |ui| {
                 egui::ScrollArea::both()
                     .id_salt("diag_chart_scroll")
                     .auto_shrink([false, false])
@@ -966,7 +1040,7 @@ impl DiagramsModuleState {
         if self.show_db_browser {
             self.ui_db_browser(ctx, db);
         }
-        self.ui_extra_modals(ctx, db);
+        self.ui_extra_modals(ctx);
     }
 
     fn ui_xdata_grid(&mut self, ui: &mut egui::Ui, db: &dyn SpeciesWorkspacePort) {
@@ -1160,20 +1234,10 @@ impl DiagramsModuleState {
             outer_rect.max - egui::vec2(margin_r, margin_b),
         );
 
-        let t_min: f64 = self.t_min_str.trim().parse().unwrap_or(0.0);
-        let t_max: f64 = self
-            .t_max_str
-            .trim()
-            .parse::<f64>()
-            .unwrap_or(2000.0)
-            .max(t_min + 1.0);
-        let y_min: f64 = self.y_min_str.trim().parse().unwrap_or(-1200.0);
-        let y_max: f64 = self
-            .y_max_str
-            .trim()
-            .parse::<f64>()
-            .unwrap_or(0.0)
-            .max(y_min + 1.0);
+        let Some((t_min, t_max, y_min, y_max)) = self.plot_limits() else {
+            ui.colored_label(egui::Color32::RED, "Invalid plot limits.");
+            return;
+        };
         let off = if self.temp_in_kelvin { 0.0 } else { 273.15 };
 
         let x_to_px = |t_disp: f64| -> f32 {
@@ -1234,8 +1298,10 @@ impl DiagramsModuleState {
         let clipped = painter.with_clip_rect(plot_rect);
 
         // Constant pO2 iso-lines on Ellingham diagrams (§19 Appendix 1 Eq. 11)
-        let bal_atoms: f64 = self.balance_amount_str.trim().parse().unwrap_or(2.0);
-        if res.diagram_type == DiagramType::DeltaGEllingham && self.show_po2_lines && !self.per_kg {
+        let bal_atoms = parse_decimal_input(&self.balance_amount_str);
+        if let Some(bal_atoms) = bal_atoms.filter(|_| {
+            res.diagram_type == DiagramType::DeltaGEllingham && self.show_po2_lines && !self.per_kg
+        }) {
             let iso_col = egui::Color32::from_rgba_unmultiplied(120, 130, 150, 125);
             let iso_stroke = egui::Stroke::new(0.85, iso_col);
             for &log_po2 in &[-40.0, -30.0, -20.0, -15.0, -10.0, -5.0, 0.0] {
@@ -1297,7 +1363,7 @@ impl DiagramsModuleState {
             }
         }
 
-        painter.rect_stroke(plot_rect, 0.0, egui::Stroke::new(1.3, egui::Color32::BLACK));
+        painter.rect_stroke(plot_rect, 0.0, egui::Stroke::new(1.3, egui::Color32::BLACK), egui::StrokeKind::Middle);
         let x_lbl = if self.temp_in_kelvin {
             "Temperature (K)"
         } else {
@@ -1327,7 +1393,9 @@ impl DiagramsModuleState {
                 let t_hov = t_min + fx as f64 * (t_max - t_min);
                 let y_hov = y_min + fy as f64 * (y_max - y_min);
                 let mut tip = format!("T: {t_hov:.1}\nY: {y_hov:.2} {}", res.y_unit);
-                if res.diagram_type == DiagramType::DeltaGEllingham && !self.per_kg {
+                if let Some(bal_atoms) = bal_atoms.filter(|_| {
+                    res.diagram_type == DiagramType::DeltaGEllingham && !self.per_kg
+                }) {
                     let sc = MiscUseCases::ellingham_scales_at(
                         (t_hov + off).max(1.0),
                         y_hov,
@@ -1413,44 +1481,10 @@ impl DiagramsModuleState {
         }
     }
 
-    fn ui_extra_modals(&mut self, ctx: &egui::Context, db: &dyn SpeciesWorkspacePort) {
-        if self.show_file_modal {
-            let mut open = self.show_file_modal;
-            let title = if self.file_modal_is_save {
-                "Save Thermochemical Diagram (.dia8)"
-            } else {
-                "Open Thermochemical Diagram (.dia8)"
-            };
-            let mut action = false;
-            egui::Window::new(title).open(&mut open).default_width(420.0).show(ctx, |ui| {
-                ui.label(crate::i18n::text("common.085"));
-                ui.text_edit_singleline(&mut self.file_path_buf);
-                ui.horizontal(|ui| {
-                    let lbl = if self.file_modal_is_save { "Save" } else { "Open" };
-                    if ui.button(lbl).clicked() {
-                        action = true;
-                    }
-                    if ui.button(crate::i18n::text("common.000")).clicked() {
-                        self.show_file_modal = false;
-                    }
-                });
-            });
-            if action {
-                let p = self.file_path_buf.trim().to_string();
-                if self.file_modal_is_save {
-                    self.save_dia8(&p);
-                } else {
-                    self.open_dia8(db, &p);
-                }
-                self.show_file_modal = false;
-            } else if !open {
-                self.show_file_modal = false;
-            }
-        }
-
+    fn ui_extra_modals(&mut self, ctx: &egui::Context) {
         if self.show_help_modal {
             let mut open = self.show_help_modal;
-            egui::Window::new("H, S, C and G Diagrams Guide (HSC Ch. 19)")
+            egui::Window::new("H, S, C and G Diagrams Guide (Ch. 19)")
                 .open(&mut open)
                 .default_width(460.0)
                 .show(ctx, |ui| {
@@ -1555,12 +1589,11 @@ mod tests {
 
     #[test]
     fn maindb6_ellingham_and_heat_content_presets_if_present() {
-        let path = "/home/nando/Descargas/HSC6/Databases/Maindb6.HSC";
-        if !std::path::Path::new(path).exists() {
+        let Some(path) = crate::test_support::test_maindb("maindb6_ellingham_and_heat_content_presets_if_present") else {
             return;
-        }
+        };
         let mut db = ThermoDatabase::with_open_defaults();
-        db.load_main_hsc(path).expect("Maindb6 opens");
+        db.load_main_hsc(path).expect("catálogo principal opens");
         let st = DiagramsModuleState::new(&db);
         assert!(st.status_error.is_none(), "{:?}", st.status_error);
         let res = st.result.as_ref().unwrap();

@@ -8,7 +8,8 @@ soryntel-core = { path = "../soryntel-core" }
 soryntel-solver = { path = "../soryntel-solver" }
 soryntel-thermo = { path = "../soryntel-thermo" }
 serde.workspace = true
-serde_json.workspace = true
+# `float_roundtrip`: SoryntelDB guarda los f64 del parser HSC y debe releerlos bit a bit.
+serde_json = { workspace = true, features = ["float_roundtrip"] }
 
 [dev-dependencies]
 approx.workspace = true

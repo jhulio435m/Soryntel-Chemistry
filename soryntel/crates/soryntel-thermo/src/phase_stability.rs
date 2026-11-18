@@ -658,12 +658,14 @@ pub fn calculate_phase_stability(
 
     let mut table_rows = Vec::with_capacity(candidates.len());
     for cand in &candidates {
-        let g_abs_j = g_si(&cand.species, ref_t_k).unwrap_or(0.0);
+        // ΔfG is NaN (shown as such) when a reference element is missing, instead of
+        // reporting absolute G as ΔfG (BUG-B14).
+        let g_abs_j = g_si(&cand.species, ref_t_k).unwrap_or(f64::NAN);
         let g_elem_j = parse_term(&cand.species.formula)
             .ok()
             .and_then(|term| sum_element_references(&term, ref_t_k, false, repo).ok())
             .map(|(_, _, g, _)| g)
-            .unwrap_or(0.0);
+            .unwrap_or(f64::NAN);
         let delta_g_kcal = (g_abs_j - g_elem_j) / (1000.0 * CAL_TO_JOULE);
         table_rows.push(PhaseStabilitySpeciesRow {
             formula: cand.species.formula.clone(),

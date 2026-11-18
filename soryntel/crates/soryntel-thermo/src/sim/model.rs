@@ -95,8 +95,11 @@ pub enum StreamPhaseKind {
 pub struct StreamSpeciesFlow {
     pub formula: String,
     pub phase: StreamPhaseKind,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub mass_flow_t_h: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub enthalpy_kw: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub exergy_kw: f64,
 }
 
@@ -128,32 +131,59 @@ pub struct SimStream {
     pub end_arrow_style: ArrowHeadStyle,
     pub end_arrow_size: u8,
     // Thermodynamic / particulate process state (Figs. 24-26, 67)
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub temp_c: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub pressure_bar: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub mass_flow_t_h: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub gas_flow_nm3_h: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub liquid_flow_t_h: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub solids_flow_t_h: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub solids_rec_pct: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub liquid_rec_pct: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub pulp_vol_m3_h: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub solids_sg: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub liquid_sg: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub pulp_sg: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub pct_solids: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub cu_wt_pct: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub fe_wt_pct: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub s_wt_pct: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub ccp_rec_pct: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub cu_rec_pct: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub p80_um: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub p50_um: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub enthalpy_kw: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub exergy_kw: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub cp_kj_kg_k: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub thermal_energy_kw: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub heat_content_kw: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub pressure_drop_bar: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub delay_s: f64,
     pub species_flows: Vec<StreamSpeciesFlow>,
 }
@@ -288,6 +318,7 @@ pub struct SimUnit {
     pub model_name: String,
     pub technology: String,
     pub sub_technology: String,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub availability_pct: f64,
     pub icon_key: Option<String>,
     pub show_unit_image: bool,
@@ -400,25 +431,36 @@ pub struct SimControlLoop {
     pub control_name: String,
     pub location_unit: String,
     pub active: bool,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub set_point: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub measured: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub tolerance: f64,
     pub y_target_name: String,
     pub y_unit: String,
     pub y_cell_ref: String,
     pub x_var_name: String,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub control_variable: f64,
     pub x_unit: String,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub x_min: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub x_max: f64,
+    #[serde(default, with = "soryntel_core::serde_nonfinite::option")]
     pub x_max_step: Option<f64>,
     pub x_cell_ref: String,
     pub control_type: String, // "Internal" | "External"
     pub method: ControlMethod,
     pub max_iter: usize,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub kp: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub ti_s: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub td_s: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub tdf_s: f64,
 }
 
@@ -426,6 +468,7 @@ pub struct SimControlLoop {
 pub struct SimCellReference {
     pub unit_name: String,
     pub ref_name: String,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub value: f64,
     pub sheet: String,
     pub cell: String,
@@ -453,13 +496,17 @@ pub struct SimCalcSettings {
     pub run_until_convergence: bool,
     pub run_until_controls_converge: bool,
     pub criteria: ConvergenceCriteria,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub tolerance_pct: f64,
     pub max_rounds: usize,
     // Dynamic settings (Fig. 35)
     pub speed_full: bool,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub start_time_s: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub time_step_s: f64,
     pub run_until_paused: bool,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub end_time_s: f64,
     pub empty_tanks_before_start: bool,
     // Diagnostics
@@ -494,12 +541,19 @@ impl Default for SimCalcSettings {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ConvergenceRound {
     pub round: usize,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub mb_pct: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub eb_pct: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub total_mass_in: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub total_mass_out: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub total_h_in: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub total_h_out: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub max_control_err: f64,
     pub converged: bool,
 }
@@ -532,12 +586,19 @@ pub struct ScenarioColumn {
     pub cell_ref: String,
     pub monte_carlo_on: bool,
     pub dist_type: MonteCarloDist,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub mc_min: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub mc_max: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub mc_mean: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub mc_sd: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub mc_b: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub mc_c: f64,
+    #[serde(default, with = "soryntel_core::serde_nonfinite::option")]
     pub round_to_nearest: Option<f64>,
     pub decimals: usize,
 }
@@ -686,7 +747,9 @@ pub struct VisualizationSettings {
     pub color_mode: SankeyColorMode,
     pub color_1: [u8; 3],
     pub color_2: [u8; 3],
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub range_min: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub range_max: f64,
     pub use_absolute_values: bool,
     pub multiplier_pow10: i32,
@@ -839,6 +902,7 @@ pub enum LogSeverity {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SimLogEntry {
     pub severity: LogSeverity,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub duration_s: f64,
     pub message: String,
     pub children: Vec<SimLogEntry>,
@@ -866,6 +930,7 @@ pub struct SimProject {
     pub canvas_settings: DefaultCanvasSettings,
     pub visualization: VisualizationSettings,
     pub lock_state: LockState,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub dynamic_time_s: f64,
     pub dynamic_progress_val: usize,
     pub convergence_history: Vec<ConvergenceRound>,

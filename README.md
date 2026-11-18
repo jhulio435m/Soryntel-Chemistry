@@ -1,10 +1,10 @@
-# HSC-REA / Soryntel Chemistry
+# Soryntel Chemistry
 
-Aplicación Rust de química, termodinámica y simulación de procesos reconstruida a partir de análisis de HSC Chemistry. El workspace está en `soryntel/`. La revisión científica está en curso; la existencia de un módulo o de pruebas automáticas no implica equivalencia certificada con HSC.
+Aplicación de escritorio para química, termodinámica y simulación de procesos. El workspace de Rust está en `soryntel/`.
 
 ## Ejecución
 
-Con Rust/Cargo y las dependencias gráficas de eframe disponibles:
+Con Rust 1.95 o posterior, Cargo y las dependencias gráficas de eframe:
 
 ```sh
 cd soryntel
@@ -13,18 +13,22 @@ cargo run -p soryntel-app -- balance "C + O2(g) = CO(g)"
 cargo run -p soryntel-app -- calc "CO(g)" 25 1000 25
 ```
 
-La aplicación `soryntel-app` sin subcomando abre un servidor local en el puerto 8765 para el módulo de reacciones. El escritorio contiene los veinte módulos. Ambos aceptan `--hsc-db <archivo>` para leer una base externa aportada por el usuario. El catálogo abierto incorporado tiene cobertura limitada: una especie ausente debe dar error, no sustituirse por datos inventados.
+La aplicación `soryntel-app` sin subcomando abre un servidor local en el puerto 8765 para el módulo de reacciones. El escritorio contiene los veinte módulos. Ambos aceptan `--database <archivo>` para leer una base externa aportada por el usuario. El catálogo abierto incorporado tiene cobertura limitada: una especie ausente debe dar error, no sustituirse por datos inventados.
 
 ## Organización
 
 - `soryntel-core`: constantes, unidades y errores compartidos.
 - `soryntel-solver`: fórmulas químicas y balanceo.
 - `soryntel-thermo`: modelos y cálculos de los módulos.
-- `soryntel-db`: catálogo y lectura de bases HSC/OwnDB.
+- `soryntel-db`: catálogo termoquímico, SoryntelDB y bases externas.
 - `soryntel-application`: casos de uso públicos que conectan UI y dominio.
 - `soryntel-desktop`: interfaz egui.
 - `soryntel-app`: CLI y servidor local de reacciones.
 - `chem_addin_core`: motor adicional para complementos de hojas de cálculo.
+
+## Licencia
+
+El código fuente se distribuye bajo la licencia MIT.
 
 ## Documentación y validación
 

@@ -216,7 +216,7 @@ mod tests {
 
         // EcoSpold v1.0 XML & OpenLCA JSON-LD zip + XLSX export
         let xml = lca.export_ecospold_v1_xml().expect("ecospold export");
-        assert!(xml.contains("FI: TSL Furnace [HSC] [Pyro]"));
+        assert!(xml.contains("FI: TSL Furnace [Soryntel] [Pyro]"));
         assert!(xml.contains("Zinc oxide"));
 
         let zip_bytes = lca.export_openlca_jsonld_zip().expect("json-ld zip");

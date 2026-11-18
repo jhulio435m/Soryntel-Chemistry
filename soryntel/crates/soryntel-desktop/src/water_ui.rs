@@ -10,6 +10,7 @@
 //!   `Gas Steam`, `Liquid Water`, `Solid Ice`, `Triple point`, `Critical point`,
 //!   drag-and-drop `[1]` (yellow active) and `[2]` (white inactive) markers, and red connector line.
 
+use crate::excel_grid::parse_decimal_input;
 use eframe::egui;
 use egui_plot::{Legend, Line, Plot, PlotPoints};
 use soryntel_application::use_cases::WaterUseCases;
@@ -143,7 +144,7 @@ impl WaterModuleState {
         self.req.point2.phase = self.result.point2.resolved_phase;
 
         let dp = self.decimal_places;
-        let focused = |id: &str| ctx.memory(|m| m.has_focus(egui::Id::new(id)));
+        let focused = |id: &str| ctx.memory(|m| m.has_focus(egui::Id::unique(id)));
         if !focused("wt_t1") {
             self.t1_buf = format!("{:.*}", dp, self.result.point1.temp_display);
         }
@@ -353,58 +354,59 @@ impl WaterModuleState {
         }
     }
 
-    pub fn ui(&mut self, ctx: &egui::Context, catalog: &dyn SpeciesCatalogPort) {
-        egui::TopBottomPanel::top("water_model_notice").show(ctx, |ui| {
+    pub fn ui(&mut self, root_ui: &mut egui::Ui, catalog: &dyn SpeciesCatalogPort) {
+        let ctx = &root_ui.ctx().clone();
+        egui::Panel::top("water_model_notice").show(root_ui, |ui| {
             ui.label("Modelo aproximado de agua y vapor. La correlación de saturación procede de IAPWS; las demás propiedades no implementan IF97 completo.");
         });
         // 1. Classic Top Menu Bar: File | Edit | Format | Show | Set | Help (Fig. 1)
-        egui::TopBottomPanel::top("water_menu_bar")
+        egui::Panel::top("water_menu_bar")
             .frame(
-                egui::Frame::none()
+                egui::Frame::NONE
                     .fill(egui::Color32::from_rgb(238, 240, 244))
                     .stroke(egui::Stroke::new(1.0, EXCEL_GRID_BORDER))
-                    .inner_margin(egui::Margin::symmetric(8.0, 2.0)),
+                    .inner_margin(egui::Margin::symmetric(8, 2)),
             )
-            .show(ctx, |ui| {
-                egui::menu::bar(ui, |ui| {
+            .show(root_ui, |ui| {
+                egui::MenuBar::new().ui(ui, |ui| {
                     ui.menu_button(crate::i18n::text("common.001"), |ui| {
                         if ui.button("Preset 1: 180 °C Steam → Triple Point (Fig. 1)").clicked() {
                             self.load_example_preset(1, catalog);
-                            ui.close_menu();
+                            ui.close_kind(egui::UiKind::Menu);
                         }
                         if ui.button("Preset 2: Ice Melting at 500 bar (Fig. 2)").clicked() {
                             self.load_example_preset(2, catalog);
-                            ui.close_menu();
+                            ui.close_kind(egui::UiKind::Menu);
                         }
                         if ui.button("Preset 3: Boiler Evaporation 285 °C (Fig. 3)").clicked() {
                             self.load_example_preset(3, catalog);
-                            ui.close_menu();
+                            ui.close_kind(egui::UiKind::Menu);
                         }
                         if ui.button("Preset 4: Steam Turbine 480 °C → 30 °C (Fig. 4)").clicked() {
                             self.load_example_preset(4, catalog);
-                            ui.close_menu();
+                            ui.close_kind(egui::UiKind::Menu);
                         }
                         ui.separator();
                         if ui.button("Export CSV (/tmp/soryntel_water_calc.csv)").clicked() {
                             self.export_csv();
-                            ui.close_menu();
+                            ui.close_kind(egui::UiKind::Menu);
                         }
                     });
                     ui.menu_button(crate::i18n::text("common.006"), |ui| {
                         if ui.button("Point 2 = Triple Point (Steam Table Ref)").clicked() {
                             self.active_point = ActiveWaterPoint::Point2;
                             self.set_active_to_triple_point(catalog);
-                            ui.close_menu();
+                            ui.close_kind(egui::UiKind::Menu);
                         }
                         if ui.button("Point 1 = Triple Point").clicked() {
                             self.active_point = ActiveWaterPoint::Point1;
                             self.set_active_to_triple_point(catalog);
-                            ui.close_menu();
+                            ui.close_kind(egui::UiKind::Menu);
                         }
                         if ui.button("Swap Point 1 ↔ Point 2").clicked() {
                             std::mem::swap(&mut self.req.point1, &mut self.req.point2);
                             self.recalculate(catalog);
-                            ui.close_menu();
+                            ui.close_kind(egui::UiKind::Menu);
                         }
                         if let Some(iso) = &self.result.isentropic_summary.clone() {
                             if let Some(mix) = iso.target_mixture_pct {
@@ -414,7 +416,7 @@ impl WaterModuleState {
                                 {
                                     self.req.point2.mixture_pct = mix;
                                     self.recalculate(catalog);
-                                    ui.close_menu();
+                                    ui.close_kind(egui::UiKind::Menu);
                                 }
                             }
                         }
@@ -430,7 +432,7 @@ impl WaterModuleState {
                             {
                                 self.decimal_places = dp;
                                 self.sync_input_buffers();
-                                ui.close_menu();
+                                ui.close_kind(egui::UiKind::Menu);
                             }
                         }
                     });
@@ -444,7 +446,7 @@ impl WaterModuleState {
                         ui.separator();
                         if ui.button("Cp vs T Steam Curves (Fig. 5)...").clicked() {
                             self.show_cp_diagram_modal = true;
-                            ui.close_menu();
+                            ui.close_kind(egui::UiKind::Menu);
                         }
                     });
                     ui.menu_button(crate::i18n::text("common.104"), |ui| {
@@ -456,7 +458,7 @@ impl WaterModuleState {
                             .clicked()
                         {
                             self.active_point = ActiveWaterPoint::Point1;
-                            ui.close_menu();
+                            ui.close_kind(egui::UiKind::Menu);
                         }
                         if ui
                             .selectable_label(
@@ -466,27 +468,27 @@ impl WaterModuleState {
                             .clicked()
                         {
                             self.active_point = ActiveWaterPoint::Point2;
-                            ui.close_menu();
+                            ui.close_kind(egui::UiKind::Menu);
                         }
                     });
                     ui.menu_button(crate::i18n::text("common.003"), |ui| {
                         if ui.button(crate::i18n::text("common.105")).clicked() {
                             self.show_about_modal = true;
-                            ui.close_menu();
+                            ui.close_kind(egui::UiKind::Menu);
                         }
                     });
                 });
             });
 
         // 2. Bottom Outotec Footer Bar (Fig. 1)
-        egui::TopBottomPanel::bottom("water_footer_bar")
+        egui::Panel::bottom("water_footer_bar")
             .frame(
-                egui::Frame::none()
+                egui::Frame::NONE
                     .fill(egui::Color32::from_rgb(236, 238, 242))
                     .stroke(egui::Stroke::new(1.0, EXCEL_GRID_BORDER))
-                    .inner_margin(egui::Margin::symmetric(10.0, 4.0)),
+                    .inner_margin(egui::Margin::symmetric(10, 4)),
             )
-            .show(ctx, |ui| {
+            .show(root_ui, |ui| {
                 ui.horizontal(|ui| {
                     ui.label(
                         egui::RichText::new("Soryntel")
@@ -511,15 +513,15 @@ impl WaterModuleState {
             });
 
         // 3. Left Worksheet Panel (~58% width clamped cleanly, scrollable if viewport is short)
-        let left_w = (ctx.screen_rect().width() * 0.56).clamp(430.0, 610.0);
-        egui::SidePanel::left("water_left_worksheet")
-            .exact_width(left_w)
+        let left_w = (ctx.content_rect().width() * 0.56).clamp(430.0, 610.0);
+        egui::Panel::left("water_left_worksheet")
+            .exact_size(left_w)
             .frame(
-                egui::Frame::none()
+                egui::Frame::NONE
                     .fill(egui::Color32::from_rgb(240, 241, 245))
-                    .inner_margin(egui::Margin::same(10.0)),
+                    .inner_margin(egui::Margin::same(10)),
             )
-            .show(ctx, |ui| {
+            .show(root_ui, |ui| {
                 egui::ScrollArea::both()
                     .id_salt("water_left_scroll")
                     .auto_shrink([false, false])
@@ -531,11 +533,11 @@ impl WaterModuleState {
         // 4. Right Interactive P-T Phase Diagram (Fig. 1-4)
         egui::CentralPanel::default()
             .frame(
-                egui::Frame::none()
+                egui::Frame::NONE
                     .fill(egui::Color32::from_rgb(240, 241, 245))
-                    .inner_margin(egui::Margin::same(10.0)),
+                    .inner_margin(egui::Margin::same(10)),
             )
-            .show(ctx, |ui| {
+            .show(root_ui, |ui| {
                 self.render_right_pt_diagram(ui, catalog);
             });
 
@@ -546,10 +548,10 @@ impl WaterModuleState {
         let mut needs_recalc = false;
 
         // Top Header Card matching Fig. 1
-        egui::Frame::none()
+        egui::Frame::NONE
             .fill(egui::Color32::from_rgb(242, 243, 246))
             .stroke(egui::Stroke::new(1.0, egui::Color32::from_rgb(206, 210, 218)))
-            .inner_margin(egui::Margin::symmetric(12.0, 8.0))
+            .inner_margin(egui::Margin::symmetric(12, 8))
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
                     ui.vertical(|ui| {
@@ -574,15 +576,17 @@ impl WaterModuleState {
                             let resp = ui.add(
                                 egui::TextEdit::singleline(&mut self.amount_buf)
                                     .desired_width(82.0)
-                                    .horizontal_align(egui::Align::Center)
+                                    .align(egui::Align2::CENTER_CENTER)
                                     .text_color(egui::Color32::from_rgb(190, 20, 20)),
                             );
                             if resp.changed() {
-                                if let Ok(v) = self.amount_buf.trim().parse::<f64>() {
+                                if let Some(v) = parse_decimal_input(&self.amount_buf) {
                                     if v > 0.0 {
                                         self.req.amount = v;
                                         needs_recalc = true;
                                     }
+                                } else {
+                                    self.input_error = Some("Número inválido. Se conserva el último resultado válido.".into());
                                 }
                             }
                             egui::ComboBox::from_id_salt("water_amt_unit")
@@ -612,7 +616,7 @@ impl WaterModuleState {
                                 false,
                                 egui::TextEdit::singleline(&mut mw_s)
                                     .desired_width(82.0)
-                                    .horizontal_align(egui::Align::Center),
+                                    .align(egui::Align2::CENTER_CENTER),
                             );
                             ui.label(egui::RichText::new("kg/kmol").strong().size(11.5));
                         });
@@ -620,9 +624,9 @@ impl WaterModuleState {
 
                     ui.add_space(12.0);
                     // Data Limits Frame (Fig. 1)
-                    egui::Frame::none()
+                    egui::Frame::NONE
                         .stroke(egui::Stroke::new(1.0, egui::Color32::from_rgb(206, 210, 218)))
-                        .inner_margin(egui::Margin::symmetric(10.0, 6.0))
+                        .inner_margin(egui::Margin::symmetric(10, 6))
                         .show(ui, |ui| {
                             ui.label(
                                 egui::RichText::new(crate::i18n::text("review.096"))
@@ -708,9 +712,11 @@ impl WaterModuleState {
                 c1,
                 !self.result.point1.temp_is_auto,
             ) {
-                if let Ok(v) = self.t1_buf.trim().parse::<f64>() {
+                if let Some(v) = parse_decimal_input(&self.t1_buf) {
                     self.req.point1.temp = v;
                     needs_recalc = true;
+                } else {
+                    self.input_error = Some("Número inválido. Se conserva el último resultado válido.".into());
                 }
             }
             let c2 = if self.result.point2.temp_is_auto {
@@ -733,9 +739,11 @@ impl WaterModuleState {
                 c2,
                 !self.result.point2.temp_is_auto,
             ) {
-                if let Ok(v) = self.t2_buf.trim().parse::<f64>() {
+                if let Some(v) = parse_decimal_input(&self.t2_buf) {
                     self.req.point2.temp = v;
                     needs_recalc = true;
+                } else {
+                    self.input_error = Some("Número inválido. Se conserva el último resultado válido.".into());
                 }
             }
             draw_cell_text(
@@ -749,7 +757,7 @@ impl WaterModuleState {
                 false,
                 true,
             );
-            egui::Frame::none()
+            egui::Frame::NONE
                 .fill(hdr_bg)
                 .stroke(egui::Stroke::new(1.0, EXCEL_GRID_BORDER))
                 .show(ui, |ui| {
@@ -802,7 +810,7 @@ impl WaterModuleState {
                 p_c1,
                 true,
             ) {
-                if let Ok(v) = self.p1_buf.trim().parse::<f64>() {
+                if let Some(v) = parse_decimal_input(&self.p1_buf) {
                     if v > 0.0 {
                         if self.req.point1.phase == WaterPhaseMode::SatGasLiquid {
                             let p_bar = self.req.pressure_unit.to_bar(v);
@@ -812,6 +820,8 @@ impl WaterModuleState {
                         self.req.point1.pressure = v;
                         needs_recalc = true;
                     }
+                } else {
+                    self.input_error = Some("Número inválido. Se conserva el último resultado válido.".into());
                 }
             }
             let p_c2 = if self.result.point2.pressure_is_auto {
@@ -834,7 +844,7 @@ impl WaterModuleState {
                 p_c2,
                 true,
             ) {
-                if let Ok(v) = self.p2_buf.trim().parse::<f64>() {
+                if let Some(v) = parse_decimal_input(&self.p2_buf) {
                     if v > 0.0 {
                         if self.req.point2.phase == WaterPhaseMode::SatGasLiquid {
                             let p_bar = self.req.pressure_unit.to_bar(v);
@@ -844,6 +854,8 @@ impl WaterModuleState {
                         self.req.point2.pressure = v;
                         needs_recalc = true;
                     }
+                } else {
+                    self.input_error = Some("Número inválido. Se conserva el último resultado válido.".into());
                 }
             }
             draw_cell_text(
@@ -857,7 +869,7 @@ impl WaterModuleState {
                 false,
                 true,
             );
-            egui::Frame::none()
+            egui::Frame::NONE
                 .fill(hdr_bg)
                 .stroke(egui::Stroke::new(1.0, EXCEL_GRID_BORDER))
                 .show(ui, |ui| {
@@ -880,7 +892,7 @@ impl WaterModuleState {
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing = egui::vec2(0.0, 0.0);
             draw_cell_text(ui, "Phase", w_lbl, r_h, hdr_bg, black_txt, true, true, false);
-            egui::Frame::none()
+            egui::Frame::NONE
                 .fill(input_bg)
                 .stroke(egui::Stroke::new(1.0, EXCEL_GRID_BORDER))
                 .show(ui, |ui| {
@@ -900,7 +912,7 @@ impl WaterModuleState {
                             }
                         });
                 });
-            egui::Frame::none()
+            egui::Frame::NONE
                 .fill(input_bg)
                 .stroke(egui::Stroke::new(1.0, EXCEL_GRID_BORDER))
                 .show(ui, |ui| {
@@ -949,9 +961,11 @@ impl WaterModuleState {
                     red_txt,
                     true,
                 ) {
-                    if let Ok(v) = self.mix1_buf.trim().parse::<f64>() {
+                    if let Some(v) = parse_decimal_input(&self.mix1_buf) {
                         self.req.point1.mixture_pct = v.clamp(0.0, 100.0);
                         needs_recalc = true;
+                    } else {
+                        self.input_error = Some("Número inválido. Se conserva el último resultado válido.".into());
                     }
                 }
             } else {
@@ -968,9 +982,11 @@ impl WaterModuleState {
                     red_txt,
                     true,
                 ) {
-                    if let Ok(v) = self.mix2_buf.trim().parse::<f64>() {
+                    if let Some(v) = parse_decimal_input(&self.mix2_buf) {
                         self.req.point2.mixture_pct = v.clamp(0.0, 100.0);
                         needs_recalc = true;
+                    } else {
+                        self.input_error = Some("Número inválido. Se conserva el último resultado válido.".into());
                     }
                 }
             } else {
@@ -1027,7 +1043,7 @@ impl WaterModuleState {
                 false,
                 true,
             );
-            egui::Frame::none()
+            egui::Frame::NONE
                 .fill(hdr_bg)
                 .stroke(egui::Stroke::new(1.0, EXCEL_GRID_BORDER))
                 .show(ui, |ui| {
@@ -1171,7 +1187,7 @@ impl WaterModuleState {
                 false,
                 true,
             );
-            egui::Frame::none()
+            egui::Frame::NONE
                 .fill(hdr_bg)
                 .stroke(egui::Stroke::new(1.0, EXCEL_GRID_BORDER))
                 .show(ui, |ui| {
@@ -1269,10 +1285,10 @@ impl WaterModuleState {
 
         if let Some(iso) = &self.result.isentropic_summary {
             ui.add_space(4.0);
-            egui::Frame::none()
+            egui::Frame::NONE
                 .fill(egui::Color32::from_rgb(232, 244, 252))
                 .stroke(egui::Stroke::new(1.0, egui::Color32::from_rgb(147, 197, 253)))
-                .inner_margin(egui::Margin::symmetric(8.0, 4.0))
+                .inner_margin(egui::Margin::symmetric(8, 4))
                 .show(ui, |ui| {
                     ui.label(
                         egui::RichText::new(format!(
@@ -1562,12 +1578,12 @@ impl WaterModuleState {
         // Draw [1] and [2] marker badges + handle click selection / canvas drag-and-drop
         let box1 = marker_badge_rect(p1_pos, egui::vec2(18.0, 12.0));
         let box2 = marker_badge_rect(p2_pos, egui::vec2(18.0, 18.0));
-        let r_b1 = ui.interact(box1, egui::Id::new("water_badge_1"), egui::Sense::click());
-        let r_b2 = ui.interact(box2, egui::Id::new("water_badge_2"), egui::Sense::click());
+        let r_b1 = ui.interact(box1, egui::Id::unique("water_badge_1"), egui::Sense::click());
+        let r_b2 = ui.interact(box2, egui::Id::unique("water_badge_2"), egui::Sense::click());
 
         let plot_resp = ui.interact(
             plot_rect,
-            egui::Id::new("water_pt_canvas"),
+            egui::Id::unique("water_pt_canvas"),
             egui::Sense::click_and_drag(),
         );
         if r_b1.clicked() {
@@ -1636,6 +1652,7 @@ impl WaterModuleState {
             plot_rect,
             0.0,
             egui::Stroke::new(1.0, egui::Color32::from_rgb(130, 140, 156)),
+            egui::StrokeKind::Middle,
         );
 
         // Y-axis ticks (-100..500 °C)
@@ -1704,7 +1721,7 @@ impl WaterModuleState {
                 .default_width(640.0)
                 .default_height(420.0)
                 .show(ctx, |ui| {
-                    ui.label("Pressure-corrected steam Cp functions vs ideal-gas H2O(g) [J/(kg·K)] from Maindb6 & Water EOS:");
+                    ui.label("Pressure-corrected steam Cp functions vs ideal-gas H2O(g) [J/(kg·K)] from catálogo principal & Water EOS:");
                     Plot::new("water_cp_fig5_plot")
                         .legend(Legend::default())
                         .x_axis_label(crate::i18n::text("common.090"))
@@ -1730,7 +1747,7 @@ impl WaterModuleState {
                                                 .map(|(pt, _)| [tc, pt.cp / 0.01801528])
                                         })
                                         .collect();
-                                    plot_ui.line(Line::new(pts).name(name).color(color).width(1.8));
+                                    plot_ui.line(Line::new(name.to_string(), pts).color(color).width(1.8));
                                 }
                             }
                         });
@@ -1840,7 +1857,7 @@ fn draw_cell_text(
     if ui.is_rect_visible(rect) {
         let p = ui.painter();
         p.rect_filled(rect, 0.0, bg);
-        p.rect_stroke(rect, 0.0, egui::Stroke::new(1.0, EXCEL_GRID_BORDER));
+        p.rect_stroke(rect, 0.0, egui::Stroke::new(1.0, EXCEL_GRID_BORDER), egui::StrokeKind::Middle);
         let clipped = p.with_clip_rect(rect.shrink2(egui::vec2(4.0, 1.0)));
         let _ = bold;
         let (pos, align) = if center {
@@ -1872,7 +1889,7 @@ fn draw_cell_btn(
     if ui.is_rect_visible(rect) {
         let p = ui.painter();
         p.rect_filled(rect, 0.0, bg);
-        p.rect_stroke(rect, 0.0, egui::Stroke::new(1.0, EXCEL_HEADER_BORDER));
+        p.rect_stroke(rect, 0.0, egui::Stroke::new(1.0, EXCEL_HEADER_BORDER), egui::StrokeKind::Middle);
         p.text(
             rect.center(),
             egui::Align2::CENTER_CENTER,
@@ -1899,13 +1916,13 @@ fn draw_edit_cell(
     let (rect, _) = ui.allocate_exact_size(egui::vec2(w, h), egui::Sense::hover());
     ui.painter().rect_filled(rect, 0.0, bg);
     ui.painter()
-        .rect_stroke(rect, 0.0, egui::Stroke::new(1.0, EXCEL_GRID_BORDER));
+        .rect_stroke(rect, 0.0, egui::Stroke::new(1.0, EXCEL_GRID_BORDER), egui::StrokeKind::Middle);
     let mut child = ui.new_child(egui::UiBuilder::new().max_rect(rect.shrink(1.0)));
     let te = egui::TextEdit::singleline(buf)
-        .id(egui::Id::new(id_salt))
+        .id(egui::Id::unique(id_salt))
         .desired_width(w - 4.0)
-        .frame(false)
-        .horizontal_align(egui::Align::RIGHT)
+        .frame(egui::Frame::NONE)
+        .align(egui::Align2::RIGHT_CENTER)
         .text_color(fg)
         .font(egui::FontId::proportional(11.5));
     let resp = child.add_enabled(enabled, te);
@@ -1925,7 +1942,7 @@ fn hsc_action_btn(ui: &mut egui::Ui, label: &str, w: f32) -> egui::Response {
         )
         .fill(egui::Color32::from_rgb(232, 235, 241))
         .stroke(egui::Stroke::new(1.0, egui::Color32::from_rgb(168, 175, 186)))
-        .rounding(2.5),
+        .corner_radius(3),
     )
 }
 
@@ -1954,6 +1971,7 @@ fn draw_callout_box(painter: &egui::Painter, center: egui::Pos2, text: &str, bg:
         rect,
         3.0,
         egui::Stroke::new(0.8, egui::Color32::from_rgba_unmultiplied(120, 140, 160, 120)),
+        egui::StrokeKind::Middle,
     );
     painter.text(
         rect.center(),
@@ -1987,6 +2005,7 @@ fn draw_point_marker(
         badge,
         1.5,
         egui::Stroke::new(1.0, egui::Color32::from_rgb(110, 118, 130)),
+        egui::StrokeKind::Middle,
     );
     painter.text(
         badge.center(),
@@ -2003,5 +2022,22 @@ fn format_clean(v: f64, decimals: usize) -> String {
         s.trim_end_matches('0').trim_end_matches('.').to_string()
     } else {
         s
+    }
+}
+
+#[cfg(test)]
+mod area_d_checks {
+    use super::*;
+    use soryntel_db::ThermoDatabase;
+
+    #[test]
+    fn water_outside_numerical_limits_reports_error_and_keeps_result() {
+        let db = ThermoDatabase::with_open_defaults();
+        let mut state = WaterModuleState::new(&db);
+        let previous = state.result.point1.temp_display;
+        state.req.point1.temp = state.req.temp_unit.from_kelvin(2300.0);
+        state.recalculate(&db);
+        assert!(state.input_error.as_deref().is_some_and(|error| error.contains("2273")));
+        assert_eq!(state.result.point1.temp_display, previous);
     }
 }

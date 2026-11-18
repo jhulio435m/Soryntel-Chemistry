@@ -18,6 +18,7 @@ concurrency:
 
 env:
   CARGO_TERM_COLOR: always
+  SORYNTEL_SDB_RELEASE: sdb-v2
 
 jobs:
   version:
@@ -66,12 +67,54 @@ jobs:
       - name: Tests
         working-directory: soryntel
         run: cargo test --workspace --locked
+      - &download_sdb
+        name: Descargar y verificar SoryntelDB
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.SORYNTEL_SDB_TOKEN }}
+          SORYNTEL_SDB_SHA256: ${{ secrets.SORYNTEL_SDB_SHA256 }}
+        run: |
+          workdir="$(mktemp -d "$RUNNER_TEMP/soryntel-db.XXXXXX")"
+          db_dir="$workdir/Databases"
+          mkdir -p "$db_dir"
+          echo "SORYNTEL_SDB_DIR=$db_dir" >> "$GITHUB_ENV"
+
+          unavailable() {
+            if [[ "$GITHUB_REF_TYPE" == tag ]]; then
+              echo "::error::$1"
+              exit 1
+            fi
+            echo "::warning::$1 Se empaquetará sin la base."
+            exit 0
+          }
+
+          if [[ -z "$GH_TOKEN" || -z "$SORYNTEL_SDB_SHA256" ]]; then
+            unavailable "Faltan secretos de SoryntelDB."
+          fi
+          if [[ ! "$SORYNTEL_SDB_SHA256" =~ ^[[:xdigit:]]{64}$ ]]; then
+            unavailable "El SHA-256 configurado para SoryntelDB no es válido."
+          fi
+
+          tmpdir="$(mktemp -d "$workdir/download.XXXXXX")"
+          trap 'rm -rf -- "$tmpdir"' EXIT
+          if ! gh release download "$SORYNTEL_SDB_RELEASE" -R jhulio435m/soryntel-data -p soryntel.sdb -D "$tmpdir" >/dev/null 2>&1; then
+            unavailable "No se pudo descargar SoryntelDB desde el release privado."
+          fi
+
+          tmp="$tmpdir/soryntel.sdb"
+          if ! [[ -s "$tmp" ]] ||
+             ! printf '%s  %s\n' "${SORYNTEL_SDB_SHA256,,}" "$tmp" | sha256sum --check --status; then
+            unavailable "La base descargada está vacía o no coincide con el SHA-256 esperado."
+          fi
+          mv "$tmp" "$db_dir/soryntel.sdb"
       - name: Compilar y empaquetar
         run: soryntel/packaging/build-releases.sh linux
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: dist-linux
-          path: soryntel/dist/*
+          path: |
+            soryntel/dist/Soryntel-Chemistry-*-linux-x86_64.tar.gz
+            soryntel/dist/Soryntel-Chemistry-*-linux-x86_64.run
           if-no-files-found: error
       - name: Binario para el paquete de Arch
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
@@ -100,19 +143,21 @@ jobs:
         with:
           workspaces: soryntel
           key: release-windows
+      - *download_sdb
       - name: Compilar y empaquetar
         run: soryntel/packaging/build-releases.sh windows
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: dist-windows
-          path: soryntel/dist/*
+          path: |
+            soryntel/dist/Soryntel-Chemistry-*-win64-setup.exe
+            soryntel/dist/Soryntel-Chemistry-*-win64-portable.zip
           if-no-files-found: error
 
   arch:
     name: Arch Linux (.pkg.tar.zst)
     needs: linux
     runs-on: ubuntu-24.04
-    container: archlinux:base-devel
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -122,13 +167,16 @@ jobs:
         with:
           name: linux-binary
           path: soryntel/target/release
+      - *download_sdb
       - name: Empaquetar con makepkg
         run: |
           chmod 755 soryntel/target/release/soryntel-desktop
-          useradd -m builder
-          chown -R builder: "$GITHUB_WORKSPACE"
-          # makepkg no se ejecuta como root.
-          su builder -c "cd '$GITHUB_WORKSPACE' && soryntel/packaging/build-releases.sh arch"
+          docker run --rm \
+            -v "$GITHUB_WORKSPACE:/workspace" \
+            -v "$SORYNTEL_SDB_DIR:/Databases:ro" \
+            -e SORYNTEL_SDB_DIR=/Databases -w /workspace archlinux:base-devel \
+            bash -euc 'useradd -m -u "$1" builder
+              runuser -u builder -- soryntel/packaging/build-releases.sh arch' bash "$(id -u)"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: dist-arch
@@ -206,4 +254,5 @@ jobs:
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: soryntel-chemistry-${{ env.VERSION }}
-          path: dist/*
+          path: release/*
+          if-no-files-found: error

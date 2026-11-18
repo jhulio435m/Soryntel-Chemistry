@@ -7,7 +7,9 @@
 mod locator;
 mod thermo_database;
 
-pub use locator::{DatabaseDirLocator, MAIN_DB_FILE, OWN_DB_FILE};
+pub use locator::{
+    DatabaseDirLocator, MAIN_DB_FILE, OWN_DB_FILE, SORYNTEL_DB_FILE, SORYNTEL_SDB_ENV,
+};
 pub use thermo_database::HscFileTools;
 
 use soryntel_core::{CatalogError, SoryntelError};

@@ -1,15 +1,18 @@
-//! Soryntel DB: Layered thermodynamic species repository (`OwnDB > MainDB > OpenDefault`),
-//! full `.HSC` / `.REF` / `.CAT` codecs, and stoichiometric / elemental / keyword search.
+//! Soryntel DB: Layered thermodynamic species repository
+//! (`OwnDB > MainDB > SoryntelDB > OpenDefault`), full `.HSC` / `.REF` / `.CAT` codecs, the
+//! SoryntelDB (`.sdb`) format and stoichiometric / elemental / keyword search.
 
 pub mod adapters;
+mod atomic_write;
 pub mod hsc_binary;
+pub mod sdb;
 
 use hsc_binary::{
     build_empty_hsc_bytes, detect_and_merge_datasets, discover_companion_ref, export_datasets_csv,
     group_records_to_datasets, import_datasets_csv, parse_hsc_binary_records, parse_ref_binary,
-    serialize_datasets_to_hsc, upgrade_legacy_datasets, write_catalogue_file, ReferenceEntry,
+    serialize_datasets_checked, upgrade_legacy_datasets, write_catalogue_file, ReferenceEntry,
 };
-use soryntel_core::{ChemicalSpecies, KelleyCoefficients, Phase, SpeciesCatalogPort, SpeciesMetadata, SpeciesRepository, SpeciesThermoInterval, SoryntelError, CAL_TO_JOULE};
+use soryntel_core::{CatalogError, ChemicalSpecies, KelleyCoefficients, Phase, SpeciesCatalogPort, SpeciesMetadata, SpeciesRepository, SpeciesThermoInterval, SoryntelError, CAL_TO_JOULE};
 use soryntel_thermo::species::{
     formula_sort_key, parse_hsc_formula_elements, stoichiometry_matches, DbMergeConflict, DbSource,
     ElementSearchMode, KeywordSearchField, MergeConflictDecision, PhaseFilterFlags,
@@ -23,8 +26,9 @@ pub use soryntel_core::catalog::DatabaseStatusSummary;
 
 /// In-memory layered thermodynamic database implementing `SpeciesRepository` & `SpeciesCatalogPort`.
 ///
-/// Resolution precedence mirrors HSC Chemistry 6 Ch. 28.17 strictly:
-/// **`OwnDB` > `MainDB` > `OpenDefault`**.
+/// Resolution precedence: **`OwnDB` > `MainDB` > `SoryntelDB` > `OpenDefault`**
+/// (HSC Chemistry 6 Ch. 28.17 plus the SoryntelDB base layer, ADR 0007). `OpenDefault` only
+/// takes part while no SoryntelDB is loaded.
 #[derive(Clone, Debug, Default)]
 pub struct ThermoDatabase {
     /// Active resolved layer used by calculation modules (`Reaction`, `Balance`, `Equilibrium`, etc.).
@@ -37,7 +41,7 @@ pub struct ThermoDatabase {
     composition_cache: HashMap<String, BTreeMap<String, f64>>,
 
     /// Three-layer storage preserving alternative temperature datasets per formula.
-    open_defaults: HashMap<String, SpeciesDataset>,
+    open_defaults: BTreeMap<String, SpeciesDataset>,
     main_datasets: HashMap<String, Vec<SpeciesDataset>>,
     main_order: Vec<String>,
     main_binary_records: usize,
@@ -46,6 +50,15 @@ pub struct ThermoDatabase {
     own_datasets: HashMap<String, Vec<SpeciesDataset>>,
     own_order: Vec<String>,
     own_binary_records: usize,
+
+    /// SoryntelDB (`.sdb`) base layer.
+    soryntel_datasets: HashMap<String, Vec<SpeciesDataset>>,
+    soryntel_order: Vec<String>,
+    soryntel_binary_records: usize,
+    /// Reference dictionary embedded in the loaded `.sdb`, used when no `.REF` is active.
+    soryntel_references: Vec<ReferenceEntry>,
+    /// `true` while `references` comes from the `.sdb` instead of a `.REF` file.
+    references_from_soryntel: bool,
 
     /// Active dataset index per `(DbSource, formula)` when a formula has multiple literature sets.
     active_dataset_choice: HashMap<(DbSource, String), usize>,
@@ -59,6 +72,25 @@ pub struct ThermoDatabase {
     main_db_path: Option<PathBuf>,
     own_db_path: Option<PathBuf>,
     ref_db_path: Option<PathBuf>,
+    soryntel_db_path: Option<PathBuf>,
+}
+
+fn write_hsc_with_catalogue(path: &Path, datasets: &[SpeciesDataset]) -> Result<(), SoryntelError> {
+    let bytes = serialize_datasets_checked(datasets)?;
+    let catalogue = path.with_extension("CAT");
+    if path.extension().and_then(|extension| extension.to_str()).is_some_and(|extension| extension.eq_ignore_ascii_case("cat"))
+        || catalogue.is_dir()
+    {
+        return Err(SoryntelError::DatabaseError(format!(
+            "Cannot write catalogue {}: it would overwrite the HSC or is a directory",
+            catalogue.display()
+        )));
+    }
+    atomic_write::write(path, &bytes).map_err(|error| {
+        SoryntelError::DatabaseError(format!("Cannot write {}: {error}", path.display()))
+    })?;
+    write_catalogue_file(path, datasets)?;
+    Ok(())
 }
 
 impl ThermoDatabase {
@@ -82,7 +114,8 @@ impl ThermoDatabase {
     }
 
     /// Rebuild `species`, `metadata`, `resolved_source`, `ordered_formulas`, and `composition_cache`
-    /// enforcing **`OwnDB > MainDB > OpenDefault`** precedence.
+    /// enforcing **`OwnDB > MainDB > SoryntelDB > OpenDefault`** precedence (`OpenDefault` only
+    /// without SoryntelDB).
     fn rebuild_resolved(&mut self) {
         self.species.clear();
         self.metadata.clear();
@@ -94,32 +127,34 @@ impl ThermoDatabase {
         let mut ordered_layers: Vec<SpeciesDataset> = Vec::new();
         let mut seen = BTreeSet::new();
 
-        // Apply MainDB first (or after OpenDefault depending on legacy `overwrite` flag)
-        if self.main_preserve_open_defaults {
-            for (f, ds) in &self.open_defaults {
-                ordered_layers.push(ds.clone());
-                seen.insert(f.clone());
-            }
-            for f in &self.main_order {
-                if !seen.contains(f) {
-                    if let Some(ds) = self.pick_active_dataset(DbSource::Main, f) {
-                        ordered_layers.push(ds);
-                        seen.insert(f.clone());
+        // Lower layers, highest precedence first. MainDB goes after OpenDefault only with the
+        // legacy `overwrite == false` loader; OpenDefault is dropped while SoryntelDB is loaded.
+        let use_open_defaults = self.soryntel_order.is_empty();
+        let layers: &[DbSource] = if self.main_preserve_open_defaults {
+            &[DbSource::OpenDefault, DbSource::Main, DbSource::Soryntel]
+        } else {
+            &[DbSource::Main, DbSource::Soryntel, DbSource::OpenDefault]
+        };
+        for &layer in layers {
+            match layer {
+                DbSource::OpenDefault if use_open_defaults => {
+                    for (f, ds) in &self.open_defaults {
+                        if seen.insert(f.clone()) {
+                            ordered_layers.push(ds.clone());
+                        }
                     }
                 }
-            }
-        } else {
-            for f in &self.main_order {
-                if let Some(ds) = self.pick_active_dataset(DbSource::Main, f) {
-                    ordered_layers.push(ds);
-                    seen.insert(f.clone());
+                DbSource::Main | DbSource::Soryntel => {
+                    for f in self.formula_list_for_layer(Some(layer)) {
+                        if !seen.contains(f) {
+                            if let Some(ds) = self.pick_active_dataset(layer, f) {
+                                ordered_layers.push(ds);
+                                seen.insert(f.clone());
+                            }
+                        }
+                    }
                 }
-            }
-            for (f, ds) in &self.open_defaults {
-                if !seen.contains(f) {
-                    ordered_layers.push(ds.clone());
-                    seen.insert(f.clone());
-                }
+                _ => {}
             }
         }
 
@@ -167,6 +202,7 @@ impl ThermoDatabase {
         let list = match source {
             DbSource::Main => self.main_datasets.get(formula)?,
             DbSource::Own => self.own_datasets.get(formula)?,
+            DbSource::Soryntel => self.soryntel_datasets.get(formula)?,
             DbSource::OpenDefault => return self.open_defaults.get(formula).cloned(),
         };
         let idx = self
@@ -174,7 +210,7 @@ impl ThermoDatabase {
             .get(&(source, formula.to_string()))
             .copied()
             .unwrap_or(0);
-        list.get(idx).or_else(|| list.first()).cloned()
+        list.iter().find(|dataset| dataset.dataset_index == idx).or_else(|| list.first()).cloned()
     }
 
     /// Insert or update a species in the high-priority `OwnDB` layer so all calculation modules
@@ -205,15 +241,16 @@ impl ThermoDatabase {
         if !self.own_datasets.contains_key(&f) {
             self.own_order.push(f.clone());
         }
+        let index = self.active_dataset_choice.get(&(DbSource::Own, f.clone())).copied().unwrap_or(0);
         let ds = SpeciesDataset {
             source: DbSource::Own,
             species: sp,
             metadata: meta,
-            dataset_index: 0,
+            dataset_index: index,
             raw_phase_code,
         };
-        self.own_datasets.insert(f.clone(), vec![ds.clone()]);
-        self.active_dataset_choice.insert((DbSource::Own, f.clone()), 0);
+        self.store_own_dataset(ds.clone());
+        self.active_dataset_choice.insert((DbSource::Own, f.clone()), index);
         if !self.species.contains_key(&f) {
             self.ordered_formulas.push(f.clone());
         }
@@ -224,6 +261,15 @@ impl ThermoDatabase {
             .flatten()
             .map(|d| d.species.intervals.len())
             .sum();
+    }
+
+    fn store_own_dataset(&mut self, dataset: SpeciesDataset) {
+        let formula = dataset.species.formula.clone();
+        let datasets = self.own_datasets.entry(formula).or_default();
+        match datasets.binary_search_by_key(&dataset.dataset_index, |item| item.dataset_index) {
+            Ok(index) => datasets[index] = dataset,
+            Err(index) => datasets.insert(index, dataset),
+        }
     }
 
     /// Delete a species from `OwnDB` (`CU-05` / `CU-09`). If `MainDB` has an entry with the same
@@ -250,12 +296,17 @@ impl ThermoDatabase {
             DbSource::Main => self
                 .main_datasets
                 .get(formula)
-                .map(|v| dataset_index < v.len())
+                .map(|v| v.iter().any(|dataset| dataset.dataset_index == dataset_index))
                 .unwrap_or(false),
             DbSource::Own => self
                 .own_datasets
                 .get(formula)
-                .map(|v| dataset_index < v.len())
+                .map(|v| v.iter().any(|dataset| dataset.dataset_index == dataset_index))
+                .unwrap_or(false),
+            DbSource::Soryntel => self
+                .soryntel_datasets
+                .get(formula)
+                .map(|v| v.iter().any(|dataset| dataset.dataset_index == dataset_index))
                 .unwrap_or(false),
             DbSource::OpenDefault => false,
         };
@@ -273,6 +324,7 @@ impl ThermoDatabase {
         match source {
             DbSource::Main => self.main_datasets.get(formula).cloned().unwrap_or_default(),
             DbSource::Own => self.own_datasets.get(formula).cloned().unwrap_or_default(),
+            DbSource::Soryntel => self.soryntel_datasets.get(formula).cloned().unwrap_or_default(),
             DbSource::OpenDefault => self
                 .open_defaults
                 .get(formula)
@@ -282,7 +334,7 @@ impl ThermoDatabase {
         }
     }
 
-    /// Return source layer (`OwnDB`, `MainDB`, `Built-in`) currently resolved for `formula`.
+    /// Return source layer (`OwnDB`, `MainDB`, `SoryntelDB`, `Built-in`) currently resolved for `formula`.
     pub fn resolved_source_of(&self, formula: &str) -> Option<DbSource> {
         self.resolved_source.get(formula).copied()
     }
@@ -303,15 +355,22 @@ impl ThermoDatabase {
         let (records, n_recs) = parse_hsc_binary_records(&buf)?;
         let (order, grouped) = group_records_to_datasets(records, DbSource::Main);
 
+        if let Some(ref_path) = discover_companion_ref(path.as_ref()) {
+            self.load_ref_dictionary(&ref_path)?;
+        } else if !self.soryntel_references.is_empty() {
+            let entries = self.soryntel_references.clone();
+            self.install_references(entries, self.soryntel_db_path.clone());
+            self.references_from_soryntel = true;
+        } else {
+            self.install_references(Vec::new(), None);
+            self.references_from_soryntel = false;
+        }
+        self.active_dataset_choice.retain(|(source, _), _| *source != DbSource::Main);
         self.main_preserve_open_defaults = !overwrite;
         self.main_order = order;
         self.main_datasets = grouped;
         self.main_binary_records = n_recs;
         self.main_db_path = Some(path.as_ref().to_path_buf());
-
-        if let Some(ref_path) = discover_companion_ref(path.as_ref()) {
-            let _ = self.load_ref_dictionary(&ref_path);
-        }
 
         self.rebuild_resolved();
         Ok(self.main_datasets.len())
@@ -323,6 +382,33 @@ impl ThermoDatabase {
         Ok((count, self.main_binary_records))
     }
 
+    /// Load SoryntelDB (`.sdb`) as the base layer below `MainDB`, replacing any previous one.
+    ///
+    /// While it is loaded the built-in `OpenDefault` species are not used. Its embedded
+    /// reference dictionary becomes active unless a `.REF` file is already loaded.
+    /// Returns `(unique species, temperature intervals)`.
+    pub fn load_soryntel_db<P: AsRef<Path>>(
+        &mut self,
+        path: P,
+    ) -> Result<(usize, usize), CatalogError> {
+        let file = sdb::read_sdb(path.as_ref())?;
+        let intervals = file.interval_count;
+        let (order, grouped) = sdb::into_datasets(file.species);
+        self.active_dataset_choice.retain(|(source, _), _| *source != DbSource::Soryntel);
+        self.soryntel_order = order;
+        self.soryntel_datasets = grouped;
+        self.soryntel_binary_records = intervals;
+        self.soryntel_references = file.references;
+        self.soryntel_db_path = Some(path.as_ref().to_path_buf());
+        if self.ref_db_path.is_none() || self.references_from_soryntel {
+            let entries = self.soryntel_references.clone();
+            self.install_references(entries, self.soryntel_db_path.clone());
+            self.references_from_soryntel = true;
+        }
+        self.rebuild_resolved();
+        Ok((self.soryntel_datasets.len(), intervals))
+    }
+
     /// Load active `OwnDB` (`.HSC`, overwriting any prior in-memory `OwnDB` edits).
     pub fn load_own_hsc<P: AsRef<Path>>(&mut self, path: P) -> Result<(usize, usize), SoryntelError> {
         let buf = fs::read(path.as_ref()).map_err(|e| {
@@ -331,6 +417,7 @@ impl ThermoDatabase {
         let (records, n_recs) = parse_hsc_binary_records(&buf)?;
         let (order, grouped) = group_records_to_datasets(records, DbSource::Own);
 
+        self.active_dataset_choice.retain(|(source, _), _| *source != DbSource::Own);
         self.own_order = order;
         self.own_datasets = grouped;
         self.own_binary_records = n_recs;
@@ -342,41 +429,27 @@ impl ThermoDatabase {
     /// Persist active `OwnDB` to a binary 256-byte `.HSC` file (plus refreshed `.CAT` index).
     pub fn save_own_hsc<P: AsRef<Path>>(&mut self, path: P) -> Result<usize, SoryntelError> {
         let ordered = self.collect_flat_datasets(DbSource::Own);
-        let bytes = serialize_datasets_to_hsc(&ordered);
-        fs::write(path.as_ref(), &bytes).map_err(|e| {
-            SoryntelError::DatabaseError(format!(
-                "Cannot write OwnDB {}: {e}",
-                path.as_ref().display()
-            ))
-        })?;
+        write_hsc_with_catalogue(path.as_ref(), &ordered)?;
         self.own_db_path = Some(path.as_ref().to_path_buf());
-        let _ = write_catalogue_file(path.as_ref(), &ordered);
         Ok(ordered.len())
     }
 
     /// Create a fresh empty `OwnDB` `.HSC` file (valid 256-byte `'0'` sentinel matching `OWNDB6.HSC`).
     pub fn create_empty_own_hsc<P: AsRef<Path>>(&mut self, path: P) -> Result<(), SoryntelError> {
-        let sentinel = build_empty_hsc_bytes();
-        fs::write(path.as_ref(), &sentinel).map_err(|e| {
-            SoryntelError::DatabaseError(format!("Cannot create {}: {e}", path.as_ref().display()))
-        })?;
+        write_hsc_with_catalogue(path.as_ref(), &[])?;
+        self.active_dataset_choice.retain(|(source, _), _| *source != DbSource::Own);
         self.own_order.clear();
         self.own_datasets.clear();
         self.own_binary_records = 0;
         self.own_db_path = Some(path.as_ref().to_path_buf());
         self.rebuild_resolved();
-        let _ = write_catalogue_file(path.as_ref(), &[]);
         Ok(())
     }
 
     /// Save active `MainDB` (as a custom copy or updated `.HSC`) to `path`.
     pub fn save_main_hsc_copy<P: AsRef<Path>>(&self, path: P) -> Result<usize, SoryntelError> {
         let ordered = self.collect_flat_datasets(DbSource::Main);
-        let bytes = serialize_datasets_to_hsc(&ordered);
-        fs::write(path.as_ref(), &bytes).map_err(|e| {
-            SoryntelError::DatabaseError(format!("Cannot write {}: {e}", path.as_ref().display()))
-        })?;
-        let _ = write_catalogue_file(path.as_ref(), &ordered);
+        write_hsc_with_catalogue(path.as_ref(), &ordered)?;
         Ok(ordered.len())
     }
 
@@ -385,7 +458,7 @@ impl ThermoDatabase {
         let path = match source {
             DbSource::Own => self.own_db_path.as_ref(),
             DbSource::Main => self.main_db_path.as_ref(),
-            DbSource::OpenDefault => None,
+            DbSource::OpenDefault | DbSource::Soryntel => None,
         }
         .ok_or_else(|| {
             SoryntelError::DatabaseError(format!("No active file path set for {}", source.label()))
@@ -405,6 +478,10 @@ impl ThermoDatabase {
                 self.main_order
                     .sort_by(|a, b| formula_sort_key(a).cmp(&formula_sort_key(b)));
             }
+            DbSource::Soryntel => {
+                self.soryntel_order
+                    .sort_by(|a, b| formula_sort_key(a).cmp(&formula_sort_key(b)));
+            }
             DbSource::OpenDefault => {}
         }
         self.rebuild_resolved();
@@ -419,6 +496,12 @@ impl ThermoDatabase {
             ))
         })?;
         let entries = parse_ref_binary(&buf);
+        self.install_references(entries, Some(path.as_ref().to_path_buf()));
+        self.references_from_soryntel = false;
+        Ok(self.references_total)
+    }
+
+    fn install_references(&mut self, entries: Vec<ReferenceEntry>, path: Option<PathBuf>) {
         self.references.clear();
         self.reference_keys_ordered.clear();
         self.references_total = entries.len();
@@ -429,8 +512,7 @@ impl ThermoDatabase {
             }
             self.references.entry(k_lower).or_default().push(e);
         }
-        self.ref_db_path = Some(path.as_ref().to_path_buf());
-        Ok(self.references_total)
+        self.ref_db_path = path;
     }
 
     /// Lookup citation entries referenced in a comma-separated interval `Reference` field
@@ -445,7 +527,9 @@ impl ThermoDatabase {
             if let Some(entries) = self.references.get(&k) {
                 out.extend(entries.iter().cloned());
             } else if let Some((_, entries)) =
-                self.references.iter().find(|(rk, _)| rk.starts_with(&k))
+                self.reference_keys_ordered.iter()
+                    .find(|key| key.starts_with(&k))
+                    .and_then(|key| self.references.get_key_value(key))
             {
                 // Partial match fallback for truncated 36-char `.HSC` reference field
                 out.extend(entries.iter().cloned());
@@ -503,14 +587,7 @@ impl ThermoDatabase {
 
         let (merged, conflicts) = detect_and_merge_datasets(&src_flat, &dst_flat, decisions);
         if !dry_run_conflicts_only {
-            let out_bytes = serialize_datasets_to_hsc(&merged);
-            fs::write(dst_path.as_ref(), &out_bytes).map_err(|e| {
-                SoryntelError::DatabaseError(format!(
-                    "Cannot write {}: {e}",
-                    dst_path.as_ref().display()
-                ))
-            })?;
-            let _ = write_catalogue_file(dst_path.as_ref(), &merged);
+            write_hsc_with_catalogue(dst_path.as_ref(), &merged)?;
         }
         Ok((merged.len(), conflicts))
     }
@@ -523,20 +600,25 @@ impl ThermoDatabase {
         let bytes = fs::read(src_path.as_ref()).map_err(|e| {
             SoryntelError::DatabaseError(format!("Cannot read {}: {e}", src_path.as_ref().display()))
         })?;
-        let datasets = if bytes.len() >= 256 && bytes.len() % 256 == 0 {
+        let text = std::str::from_utf8(&bytes).ok();
+        let extension = src_path.as_ref().extension().and_then(|value| value.to_str());
+        let csv = extension.is_some_and(|value| value.eq_ignore_ascii_case("csv"))
+            || text.is_some_and(|value| {
+                let first = value.trim_start_matches(|ch: char| ch == '\u{feff}' || ch.is_whitespace());
+                first.get(..8).is_some_and(|prefix| {
+                    prefix.eq_ignore_ascii_case("formula,") || prefix.eq_ignore_ascii_case("formula;")
+                })
+            });
+        let datasets = if !csv {
             let (recs, _) = parse_hsc_binary_records(&bytes)?;
             let (ord, map) = group_records_to_datasets(recs, DbSource::Main);
             ord.into_iter().filter_map(|f| map.get(&f).cloned()).flatten().collect()
         } else {
-            let txt = String::from_utf8_lossy(&bytes);
-            import_datasets_csv(&txt, DbSource::Main)?
+            let text = text.ok_or_else(|| SoryntelError::ParseError("CSV is not UTF-8".into()))?;
+            import_datasets_csv(text, DbSource::Main)?
         };
         let upgraded = upgrade_legacy_datasets(datasets);
-        let out_bytes = serialize_datasets_to_hsc(&upgraded);
-        fs::write(dst_path.as_ref(), &out_bytes).map_err(|e| {
-            SoryntelError::DatabaseError(format!("Cannot write {}: {e}", dst_path.as_ref().display()))
-        })?;
-        let _ = write_catalogue_file(dst_path.as_ref(), &upgraded);
+        write_hsc_with_catalogue(dst_path.as_ref(), &upgraded)?;
         Ok(upgraded.len())
     }
 
@@ -564,8 +646,13 @@ impl ThermoDatabase {
         let imported = import_datasets_csv(csv_text, DbSource::Own)?;
         let count = imported.len();
         for ds in imported {
-            self.upsert_own_dataset(ds.species, ds.metadata, ds.raw_phase_code);
+            if !self.own_datasets.contains_key(&ds.species.formula) {
+                self.own_order.push(ds.species.formula.clone());
+            }
+            self.store_own_dataset(ds);
         }
+        self.own_binary_records = self.own_datasets.values().flatten().map(|d| d.species.intervals.len()).sum();
+        self.rebuild_resolved();
         Ok(count)
     }
 
@@ -575,6 +662,9 @@ impl ThermoDatabase {
             main_path: self.main_db_path.clone(),
             own_path: self.own_db_path.clone(),
             ref_path: self.ref_db_path.clone(),
+            soryntel_path: self.soryntel_db_path.clone(),
+            soryntel_unique_species: self.soryntel_datasets.len(),
+            soryntel_binary_records: self.soryntel_binary_records,
             main_unique_species: self.main_datasets.len(),
             main_binary_records: self.main_binary_records,
             own_unique_species: self.own_datasets.len(),
@@ -598,6 +688,13 @@ impl ThermoDatabase {
                 .main_order
                 .iter()
                 .filter_map(|f| self.main_datasets.get(f))
+                .flatten()
+                .cloned()
+                .collect(),
+            DbSource::Soryntel => self
+                .soryntel_order
+                .iter()
+                .filter_map(|f| self.soryntel_datasets.get(f))
                 .flatten()
                 .cloned()
                 .collect(),
@@ -647,6 +744,11 @@ impl ThermoDatabase {
                 let dataset_count = match source {
                     DbSource::Main => self.main_datasets.get(formula).map(|v| v.len()).unwrap_or(1),
                     DbSource::Own => self.own_datasets.get(formula).map(|v| v.len()).unwrap_or(1),
+                    DbSource::Soryntel => self
+                        .soryntel_datasets
+                        .get(formula)
+                        .map(|v| v.len())
+                        .unwrap_or(1),
                     DbSource::OpenDefault => 1,
                 };
                 Some(SpeciesCatalogEntry {
@@ -692,6 +794,7 @@ impl ThermoDatabase {
             None | Some(DbSource::OpenDefault) => &self.ordered_formulas,
             Some(DbSource::Main) => &self.main_order,
             Some(DbSource::Own) => &self.own_order,
+            Some(DbSource::Soryntel) => &self.soryntel_order,
         }
     }
 
@@ -716,7 +819,7 @@ impl ThermoDatabase {
         filters: &PhaseFilterFlags,
         limit: usize,
     ) -> Vec<SpeciesCatalogEntry> {
-        let q = query.trim().to_ascii_lowercase();
+        let q = query.trim().to_lowercase();
         let formulas = self.formula_list_for_layer(source_filter);
         let mut out = Vec::new();
         for f in formulas {
@@ -730,25 +833,25 @@ impl ThermoDatabase {
                 true
             } else {
                 match field {
-                    KeywordSearchField::Formula => entry.formula.to_ascii_lowercase().contains(&q),
+                    KeywordSearchField::Formula => entry.formula.to_lowercase().contains(&q),
                     KeywordSearchField::StructuralFormula => {
-                        entry.metadata.structural_formula.to_ascii_lowercase().contains(&q)
+                        entry.metadata.structural_formula.to_lowercase().contains(&q)
                     }
                     KeywordSearchField::ChemicalName => {
-                        entry.species.name.to_ascii_lowercase().contains(&q)
+                        entry.species.name.to_lowercase().contains(&q)
                     }
                     KeywordSearchField::CommonName => {
-                        entry.metadata.common_name.to_ascii_lowercase().contains(&q)
+                        entry.metadata.common_name.to_lowercase().contains(&q)
                     }
                     KeywordSearchField::CasNumber => {
-                        entry.metadata.cas_number.to_ascii_lowercase().contains(&q)
+                        entry.metadata.cas_number.to_lowercase().contains(&q)
                     }
                     KeywordSearchField::Any => {
-                        entry.formula.to_ascii_lowercase().contains(&q)
-                            || entry.species.name.to_ascii_lowercase().contains(&q)
-                            || entry.metadata.common_name.to_ascii_lowercase().contains(&q)
-                            || entry.metadata.structural_formula.to_ascii_lowercase().contains(&q)
-                            || entry.metadata.cas_number.to_ascii_lowercase().contains(&q)
+                        entry.formula.to_lowercase().contains(&q)
+                            || entry.species.name.to_lowercase().contains(&q)
+                            || entry.metadata.common_name.to_lowercase().contains(&q)
+                            || entry.metadata.structural_formula.to_lowercase().contains(&q)
+                            || entry.metadata.cas_number.to_lowercase().contains(&q)
                     }
                 }
             };

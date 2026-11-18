@@ -89,6 +89,18 @@ fn split_side(side: &str) -> Result<Vec<ParsedTerm>, SoryntelError> {
             b'(' => depth += 1,
             b')' => depth -= 1,
             b'+' if depth == 0 => {
+                // A '+' glued to the previous term and followed by a space, another '+' or the
+                // end is an ionic charge written outside parentheses ("Na+ + e-"). Splitting there
+                // would silently turn Na+ into neutral Na (BUG-B23).
+                let glued = i > 0 && !bytes[i - 1].is_ascii_whitespace() && bytes[i - 1] != b'+';
+                let next = bytes.get(i + 1).copied();
+                let ends_term = matches!(next, None | Some(b' ') | Some(b'\t') | Some(b'+'));
+                if glued && ends_term {
+                    let term = side[start..=i].trim();
+                    return Err(SoryntelError::ParseError(format!(
+                        "Ionic charge outside parentheses in '{term}': use HSC notation, e.g. Na(+a)"
+                    )));
+                }
                 let slice = side[start..i].trim();
                 if !slice.is_empty() {
                     terms.push(parse_term(slice)?);
@@ -310,23 +322,43 @@ fn read_number(s: &str, start: usize) -> (f64, usize) {
 }
 
 /// Exact rational number for stoichiometric balancing without floating-point drift.
+///
+/// All arithmetic is overflow-checked so that debug and release builds behave
+/// identically: an overflow is reported as a `BalanceError` instead of a panic
+/// (debug) or a silent wrap-around (release).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct Rat {
     num: i128,
     den: i128,
 }
 
+fn overflow_err() -> SoryntelError {
+    SoryntelError::BalanceError(
+        "Coefficients too large for exact balancing (integer overflow)".into(),
+    )
+}
+
 impl Rat {
-    fn new(num: i128, den: i128) -> Self {
-        assert!(den != 0);
-        let (n, d) = if den < 0 { (-num, -den) } else { (num, den) };
-        let g = gcd(n.abs(), d);
-        Self { num: n / g, den: d / g }
+    fn new(num: i128, den: i128) -> Result<Self, SoryntelError> {
+        if den == 0 {
+            return Err(SoryntelError::BalanceError("Division by zero while balancing".into()));
+        }
+        let (n, d) = if den < 0 {
+            (num.checked_neg().ok_or_else(overflow_err)?, den.checked_neg().ok_or_else(overflow_err)?)
+        } else {
+            (num, den)
+        };
+        let g = gcd(n.checked_abs().ok_or_else(overflow_err)?, d);
+        Ok(Self { num: n / g, den: d / g })
     }
 
-    fn from_f64(v: f64) -> Self {
-        let scaled = (v * 1_000_000.0).round() as i128;
-        Self::new(scaled, 1_000_000)
+    fn from_f64(v: f64) -> Result<Self, SoryntelError> {
+        let scaled = (v * 1_000_000.0).round();
+        // Keep a wide margin below i128::MAX (~1.7e38) so products in the elimination stay checked.
+        if !scaled.is_finite() || scaled.abs() > 1e30 {
+            return Err(overflow_err());
+        }
+        Self::new(scaled as i128, 1_000_000)
     }
 
     fn zero() -> Self {
@@ -341,19 +373,27 @@ impl Rat {
         self.num == 0
     }
 
-    fn sub(self, o: Self) -> Self {
-        Self::new(self.num * o.den - o.num * self.den, self.den * o.den)
+    fn sub(self, o: Self) -> Result<Self, SoryntelError> {
+        let a = self.num.checked_mul(o.den).ok_or_else(overflow_err)?;
+        let b = o.num.checked_mul(self.den).ok_or_else(overflow_err)?;
+        let d = self.den.checked_mul(o.den).ok_or_else(overflow_err)?;
+        Self::new(a.checked_sub(b).ok_or_else(overflow_err)?, d)
     }
 
-    fn mul(self, o: Self) -> Self {
-        Self::new(self.num * o.num, self.den * o.den)
+    fn mul(self, o: Self) -> Result<Self, SoryntelError> {
+        let n = self.num.checked_mul(o.num).ok_or_else(overflow_err)?;
+        let d = self.den.checked_mul(o.den).ok_or_else(overflow_err)?;
+        Self::new(n, d)
     }
 
-    fn div(self, o: Self) -> Self {
-        Self::new(self.num * o.den, self.den * o.num)
+    fn div(self, o: Self) -> Result<Self, SoryntelError> {
+        let n = self.num.checked_mul(o.den).ok_or_else(overflow_err)?;
+        let d = self.den.checked_mul(o.num).ok_or_else(overflow_err)?;
+        Self::new(n, d)
     }
 
     fn neg(self) -> Self {
+        // `num` is never i128::MIN: `new` rejects values whose magnitude does not fit.
         Self { num: -self.num, den: self.den }
     }
 }
@@ -367,8 +407,8 @@ fn gcd(mut a: i128, mut b: i128) -> i128 {
     if a == 0 { 1 } else { a }
 }
 
-fn lcm(a: i128, b: i128) -> i128 {
-    (a / gcd(a, b)) * b
+fn lcm(a: i128, b: i128) -> Result<i128, SoryntelError> {
+    (a / gcd(a, b)).checked_mul(b).ok_or_else(overflow_err)
 }
 
 /// Balance a reaction equation using exact rational Gaussian elimination.
@@ -412,20 +452,20 @@ pub fn balance_reaction(
     for (j, t) in parsed.reactants.iter().enumerate() {
         for (e, &cnt) in &t.elements {
             let r = elem_set[e];
-            mat[r][j] = Rat::from_f64(cnt);
+            mat[r][j] = Rat::from_f64(cnt)?;
         }
         if has_charge {
-            mat[n_rows - 1][j] = Rat::new(t.charge as i128, 1);
+            mat[n_rows - 1][j] = Rat::new(t.charge as i128, 1)?;
         }
     }
     for (k, t) in parsed.products.iter().enumerate() {
         let j = n_react + k;
         for (e, &cnt) in &t.elements {
             let r = elem_set[e];
-            mat[r][j] = Rat::from_f64(cnt).neg();
+            mat[r][j] = Rat::from_f64(cnt)?.neg();
         }
         if has_charge {
-            mat[n_rows - 1][j] = Rat::new(-(t.charge as i128), 1);
+            mat[n_rows - 1][j] = Rat::new(-(t.charge as i128), 1)?;
         }
     }
 
@@ -440,14 +480,14 @@ pub fn balance_reaction(
             mat.swap(pivot_row, r_swap);
             let pv = mat[pivot_row][col];
             for c in col..n_cols {
-                mat[pivot_row][c] = mat[pivot_row][c].div(pv);
+                mat[pivot_row][c] = mat[pivot_row][c].div(pv)?;
             }
             for r in 0..n_rows {
                 if r != pivot_row && !mat[r][col].is_zero() {
                     let factor = mat[r][col];
                     for c in col..n_cols {
-                        let sub = factor.mul(mat[pivot_row][c]);
-                        mat[r][c] = mat[r][c].sub(sub);
+                        let sub = factor.mul(mat[pivot_row][c])?;
+                        mat[r][c] = mat[r][c].sub(sub)?;
                     }
                 }
             }
@@ -479,8 +519,14 @@ pub fn balance_reaction(
     }
 
     // Clear denominators to smallest integers
-    let common_den = sol.iter().fold(1i128, |acc, r| lcm(acc, r.den));
-    let mut ints: Vec<i128> = sol.iter().map(|r| r.num * (common_den / r.den)).collect();
+    let mut common_den = 1i128;
+    for r in &sol {
+        common_den = lcm(common_den, r.den)?;
+    }
+    let mut ints: Vec<i128> = Vec::with_capacity(sol.len());
+    for r in &sol {
+        ints.push(r.num.checked_mul(common_den / r.den).ok_or_else(overflow_err)?);
+    }
     if ints[0] < 0 {
         for v in &mut ints {
             *v = -*v;
@@ -548,7 +594,8 @@ pub fn format_reaction(parsed: &ParsedReaction) -> String {
         if (t.coeff - 1.0).abs() < 1e-9 {
             t.formula.clone()
         } else if (t.coeff - t.coeff.round()).abs() < 1e-9 {
-            format!("{}{}", t.coeff.round() as i64, t.formula)
+            // `{:.0}` keeps integers beyond i64::MAX exact (no saturating cast).
+            format!("{:.0}{}", t.coeff.round(), t.formula)
         } else {
             format!("{:.4}{}", t.coeff, t.formula)
         }
@@ -578,5 +625,14 @@ mod tests {
         let (eq, parsed) = balance_reaction("Ni + CO(g) = Ni(CO)4(g)", 1.0).unwrap();
         assert_eq!(eq, "Ni + 4CO(g) = Ni(CO)4(g)");
         verify_balance(&parsed).unwrap();
+    }
+
+    #[test]
+    fn ionic_charge_outside_parentheses_is_rejected() {
+        let err = parse_input("Na+ + e- = Na").unwrap_err();
+        assert!(err.to_string().contains("Na(+a)"), "{err}");
+        assert!(parse_input("Na(+a) + e- = Na").is_ok());
+        assert!(parse_input("H2+O2=H2O").is_ok());
+        assert!(parse_input("2H2 + O2 = 2H2O").is_ok());
     }
 }

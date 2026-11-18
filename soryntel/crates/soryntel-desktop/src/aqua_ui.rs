@@ -2,6 +2,7 @@
 //! Matching Figs. 2–10 (`Water Phase` spreadsheet, Office Ribbon, `Main Pitzer Database`,
 //! `Active Pitzer Parameters`, `OwnDB` editor, `Density Calculator`, and `Ionic AC vs T` Plot).
 
+use crate::excel_grid::parse_decimal_input;
 use eframe::egui;
 use egui_plot::{Legend, Line, Plot, PlotPoints};
 use soryntel_application::use_cases::AquaUseCases;
@@ -116,6 +117,7 @@ pub struct AquaModuleState {
     clipboard_val: String,
     clipboard_row: Option<AquaSpeciesRowBuf>,
     dirty_since_calc: bool,
+    input_error: Option<String>,
     status_msg: String,
 
     // Find & Replace modal
@@ -173,7 +175,7 @@ impl AquaModuleState {
             ("ZnSO4".to_string(), "0.149".to_string()),
             ("H2SO4".to_string(), "0.048".to_string()),
         ];
-        let density_result = recompute_density(&density_rows, 25.0);
+        let density_result = recompute_density(&density_rows, 25.0).expect("valid built-in density inputs");
 
         let mut st = Self {
             case_file,
@@ -192,6 +194,7 @@ impl AquaModuleState {
             clipboard_val: String::new(),
             clipboard_row: None,
             dirty_since_calc: false,
+            input_error: None,
             status_msg: "Ready · Preset: Na–S–H2O (40 °C, Fig. 3/4)".to_string(),
 
             show_find: false,
@@ -225,21 +228,31 @@ impl AquaModuleState {
         st
     }
 
-    fn sync_case_from_rows(&mut self) {
-        self.case_file.species = self
-            .rows
-            .iter()
-            .filter(|r| !r.formula.trim().is_empty())
-            .map(|r| AquaSpeciesInput {
-                formula: r.formula.trim().to_string(),
-                temp: r.temp_buf.trim().parse::<f64>().unwrap_or(25.0),
-                amount_kmol: r.amount_buf.trim().parse::<f64>().unwrap_or(0.0),
-            })
-            .collect();
+    fn sync_case_from_rows(&mut self) -> bool {
+        let mut species = Vec::new();
+        for (index, row) in self.rows.iter().enumerate() {
+            let formula = row.formula.trim();
+            if formula.is_empty() {
+                continue;
+            }
+            let (Some(temp), Some(amount_kmol)) = (
+                parse_decimal_input(&row.temp_buf),
+                parse_decimal_input(&row.amount_buf),
+            ) else {
+                self.input_error = Some(format!("Fila {}: temperatura o cantidad inválida.", index + 7));
+                return false;
+            };
+            species.push(AquaSpeciesInput { formula: formula.into(), temp, amount_kmol });
+        }
+        self.case_file.species = species;
+        self.input_error = None;
+        true
     }
 
     fn recalculate(&mut self, db: &dyn SpeciesCatalogPort) {
-        self.sync_case_from_rows();
+        if !self.sync_case_from_rows() {
+            return;
+        }
         self.calc_result = AquaUseCases::aqua_calculate(
             db,
             &self.case_file,
@@ -288,16 +301,20 @@ impl AquaModuleState {
         if old == new_unit {
             return;
         }
+        let Some(phase_temp) = parse_decimal_input(&self.phase_temp_buf) else {
+            self.input_error = Some("Temperatura de fase inválida.".into());
+            return;
+        };
+        if !self.sync_case_from_rows() {
+            return;
+        }
         for r in &mut self.rows {
-            if let Ok(v) = r.temp_buf.trim().parse::<f64>() {
+            if let Some(v) = parse_decimal_input(&r.temp_buf) {
                 let tc = old.to_c(v);
                 r.temp_buf = format_temp_display(new_unit.from_c(tc));
             }
         }
-        if let Ok(v) = self.phase_temp_buf.trim().parse::<f64>() {
-            let tc = old.to_c(v);
-            self.phase_temp_buf = format_temp_display(new_unit.from_c(tc));
-        }
+        self.phase_temp_buf = format_temp_display(new_unit.from_c(old.to_c(phase_temp)));
         self.case_file.temp_unit = new_unit;
         self.recalculate(db);
     }
@@ -418,7 +435,9 @@ impl AquaModuleState {
     }
 
     fn save_case_quick(&mut self) {
-        self.sync_case_from_rows();
+        if !self.sync_case_from_rows() {
+            return;
+        }
         let p = std::env::temp_dir().join("soryntel_aqua_case.aqu8.json");
         if let Ok(json) = serde_json::to_string_pretty(&self.case_file) {
             if crate::storage::write_atomic(&p, json).is_ok() {
@@ -440,7 +459,7 @@ impl AquaModuleState {
 
     fn render_file_menu_items(&mut self, ui: &mut egui::Ui, db: &dyn SpeciesCatalogPort) -> bool {
         let mut close = false;
-        ui.label(egui::RichText::new("HSC Presets").strong().size(11.0));
+        ui.label(egui::RichText::new("Example cases").strong().size(11.0));
         if ui.button("Preset: Na–S–H2O (40 °C, Fig. 3/4)").clicked() {
             self.load_preset(AquaUseCases::preset_na_s_h2o_fig3(), "Na–S–H2O (Fig. 3/4)", db);
             close = true;
@@ -598,15 +617,16 @@ impl AquaModuleState {
         }
     }
 
-    pub fn ui(&mut self, ctx: &egui::Context, db: &dyn SpeciesCatalogPort) {
+    pub fn ui(&mut self, root_ui: &mut egui::Ui, db: &dyn SpeciesCatalogPort) {
+        let ctx = &root_ui.ctx().clone();
         if self.use_ribbon_toolbar {
-            self.render_ribbon(ctx, db);
+            self.render_ribbon(root_ui, db);
         } else {
-            self.render_classic_menu_and_aqua_tools(ctx, db);
+            self.render_classic_menu_and_aqua_tools(root_ui, db);
         }
-        self.render_formula_bar(ctx, db);
-        self.render_footer_and_tabs(ctx);
-        self.render_water_phase_sheet(ctx, db);
+        self.render_formula_bar(root_ui, db);
+        self.render_footer_and_tabs(root_ui);
+        self.render_water_phase_sheet(root_ui, db);
 
         if self.show_find {
             self.render_find_modal(ctx, db);
@@ -634,51 +654,52 @@ impl AquaModuleState {
         }
     }
 
-    fn render_classic_menu_and_aqua_tools(&mut self, ctx: &egui::Context, db: &dyn SpeciesCatalogPort) {
-        egui::TopBottomPanel::top("aqua_classic_menubar")
+    fn render_classic_menu_and_aqua_tools(&mut self, root_ui: &mut egui::Ui, db: &dyn SpeciesCatalogPort) {
+        let ctx = &root_ui.ctx().clone();
+        egui::Panel::top("aqua_classic_menubar")
             .frame(
-                egui::Frame::none()
+                egui::Frame::NONE
                     .fill(HSC_WIN_BG)
                     .stroke(egui::Stroke::new(0.8, egui::Color32::from_rgb(225, 225, 225)))
-                    .inner_margin(egui::Margin::symmetric(4.0, 1.0)),
+                    .inner_margin(egui::Margin::symmetric(4, 1)),
             )
-            .show(ctx, |ui| {
-                egui::menu::bar(ui, |ui| {
+            .show(root_ui, |ui| {
+                egui::MenuBar::new().ui(ui, |ui| {
                     ui.menu_button(egui::RichText::new(crate::i18n::text("common.001")).size(11.5).color(HSC_DARK_TEXT), |ui| {
                         if self.render_file_menu_items(ui, db) {
-                            ui.close_menu();
+                            ui.close_kind(egui::UiKind::Menu);
                         }
                     });
                     ui.menu_button(egui::RichText::new(crate::i18n::text("common.006")).size(11.5).color(HSC_DARK_TEXT), |ui| {
                         if ui.button(crate::i18n::text("common.075")).clicked() {
                             self.cut_selected_cell(db);
-                            ui.close_menu();
+                            ui.close_kind(egui::UiKind::Menu);
                         }
                         if ui.button(crate::i18n::text("common.029")).clicked() {
                             self.copy_selected_cell(ctx);
-                            ui.close_menu();
+                            ui.close_kind(egui::UiKind::Menu);
                         }
                         if ui.button(crate::i18n::text("common.076")).clicked() {
                             self.paste_selected_cell(db);
-                            ui.close_menu();
+                            ui.close_kind(egui::UiKind::Menu);
                         }
                         ui.separator();
                         if ui.button("Find / Replace...").clicked() {
                             self.show_find = !self.show_find;
-                            ui.close_menu();
+                            ui.close_kind(egui::UiKind::Menu);
                         }
                         ui.separator();
                         if ui.button("+ Add Species Row").clicked() {
                             self.add_species_row();
-                            ui.close_menu();
+                            ui.close_kind(egui::UiKind::Menu);
                         }
                         if ui.button("Delete Selected Row").clicked() {
                             self.delete_selected_row(db);
-                            ui.close_menu();
+                            ui.close_kind(egui::UiKind::Menu);
                         }
                         if ui.button(crate::i18n::text("common.093")).clicked() {
                             self.clear_sheet();
-                            ui.close_menu();
+                            ui.close_kind(egui::UiKind::Menu);
                         }
                     });
                     ui.menu_button(egui::RichText::new("Database").size(11.5).color(HSC_DARK_TEXT), |ui| {
@@ -687,69 +708,69 @@ impl AquaModuleState {
                             .changed()
                         {
                             self.recalculate(db);
-                            ui.close_menu();
+                            ui.close_kind(egui::UiKind::Menu);
                         }
                         ui.separator();
                         if ui.button("Main Pitzer Database...").clicked() {
                             self.show_main_db = true;
-                            ui.close_menu();
+                            ui.close_kind(egui::UiKind::Menu);
                         }
                         if ui.button("Parameter Sets (Active / Missing)...").clicked() {
                             self.show_param_sets = true;
-                            ui.close_menu();
+                            ui.close_kind(egui::UiKind::Menu);
                         }
                         if ui.button("Own Pitzer Database Editor...").clicked() {
                             self.show_own_db = true;
-                            ui.close_menu();
+                            ui.close_kind(egui::UiKind::Menu);
                         }
                     });
                     ui.menu_button(egui::RichText::new(crate::i18n::text("common.018")).size(11.5).color(HSC_DARK_TEXT), |ui| {
                         ui.menu_button("Units...", |ui| {
                             if self.render_units_menu_items(ui, db) {
-                                ui.close_menu();
+                                ui.close_kind(egui::UiKind::Menu);
                             }
                         });
                         if ui.button("Density Calculator...").clicked() {
                             self.show_density = true;
-                            ui.close_menu();
+                            ui.close_kind(egui::UiKind::Menu);
                         }
                         if ui.button("Plot Ionic AC vs T...").clicked() {
                             self.show_plot = true;
-                            ui.close_menu();
+                            ui.close_kind(egui::UiKind::Menu);
                         }
                         ui.separator();
                         if ui
-                            .checkbox(&mut self.use_ribbon_toolbar, "Show HSC 10 Ribbon Toolbar")
+                            .checkbox(&mut self.use_ribbon_toolbar, "Show Ribbon Toolbar")
                             .changed()
                         {
-                            ui.close_menu();
+                            ui.close_kind(egui::UiKind::Menu);
                         }
                     });
                     ui.menu_button(egui::RichText::new(crate::i18n::text("common.003")).size(11.5).color(HSC_DARK_TEXT), |ui| {
                         if ui.button("Aqua Module Help...").clicked() {
                             self.show_help = true;
-                            ui.close_menu();
+                            ui.close_kind(egui::UiKind::Menu);
                         }
                         if ui.button("About Soryntel Aqua...").clicked() {
                             self.show_about = true;
-                            ui.close_menu();
+                            ui.close_kind(egui::UiKind::Menu);
                         }
                     });
                 });
             });
 
-        egui::TopBottomPanel::top("aqua_classic_tools")
+        egui::Panel::top("aqua_classic_tools")
             .frame(
-                egui::Frame::none()
+                egui::Frame::NONE
                     .fill(HSC_WIN_BG)
                     .inner_margin(egui::Margin {
-                        left: 8.0,
-                        right: 8.0,
-                        top: 4.0,
-                        bottom: 5.0,
+                        left: 8,
+                        right: 8,
+                        top: 4,
+                        bottom: 5,
                     }),
             )
-            .show(ctx, |ui| {
+            .show(root_ui, |ui| {
                 draw_win_groupbox(ui, "Aqua tools", 72.0, |ui| {
                     ui.vertical(|ui| {
                         ui.spacing_mut().item_spacing.y = 11.0;
@@ -785,15 +806,16 @@ impl AquaModuleState {
             });
     }
 
-    fn render_ribbon(&mut self, ctx: &egui::Context, db: &dyn SpeciesCatalogPort) {
-        egui::TopBottomPanel::top("aqua_ribbon")
+    fn render_ribbon(&mut self, root_ui: &mut egui::Ui, db: &dyn SpeciesCatalogPort) {
+        let ctx = &root_ui.ctx().clone();
+        egui::Panel::top("aqua_ribbon")
             .frame(
-                egui::Frame::none()
+                egui::Frame::NONE
                     .fill(HSC_RIBBON_TOP)
                     .stroke(egui::Stroke::new(1.0, HSC_RIBBON_BORDER))
-                    .inner_margin(egui::Margin::symmetric(6.0, 4.0)),
+                    .inner_margin(egui::Margin::symmetric(6, 4)),
             )
-            .show(ctx, |ui| {
+            .show(root_ui, |ui| {
                 // Soft vertical gradient backdrop across ribbon
                 let r_rect = ui.max_rect().expand2(egui::vec2(6.0, 4.0));
                 let p = ui.painter();
@@ -810,23 +832,17 @@ impl AquaModuleState {
                     // Group 1: Main (File ▼)
                     ribbon_group(ui, "Main", |ui| {
                         let f_resp = large_ribbon_btn(ui, RibbonIcon::File, "File", Some("▼"), false)
-                            .on_hover_text("Load HSC presets, new sheet, save/load case, or open Plot");
+                            .on_hover_text("Load presets, new sheet, save/load case, or open Plot");
                         let f_pop_id = ui.make_persistent_id("aqua_file_popup");
-                        if f_resp.clicked() {
-                            ui.memory_mut(|mem| mem.toggle_popup(f_pop_id));
-                        }
-                        egui::popup_below_widget(
-                            ui,
-                            f_pop_id,
-                            &f_resp,
-                            egui::PopupCloseBehavior::CloseOnClickOutside,
-                            |ui| {
+                        egui::Popup::from_toggle_button_response(&f_resp)
+                            .id(f_pop_id)
+                            .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+                            .show(|ui| {
                                 ui.set_min_width(245.0);
                                 if self.render_file_menu_items(ui, db) {
-                                    ui.memory_mut(|mem| mem.close_popup());
+                                    ui.close();
                                 }
-                            },
-                        );
+                            });
                     });
 
                     // Group 2: Edit (2x2 Cut/Paste, Copy/Find)
@@ -883,15 +899,10 @@ impl AquaModuleState {
                             large_ribbon_btn(ui, RibbonIcon::Gears, "Aqua method", Some("▼"), false)
                                 .on_hover_text(format!("Active method: {method_lbl}"));
                         let m_pop_id = ui.make_persistent_id("aqua_method_popup");
-                        if m_resp.clicked() {
-                            ui.memory_mut(|mem| mem.toggle_popup(m_pop_id));
-                        }
-                        egui::popup_below_widget(
-                            ui,
-                            m_pop_id,
-                            &m_resp,
-                            egui::PopupCloseBehavior::CloseOnClickOutside,
-                            |ui| {
+                        egui::Popup::from_toggle_button_response(&m_resp)
+                            .id(m_pop_id)
+                            .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+                            .show(|ui| {
                                 ui.set_min_width(280.0);
                                 for (m, lbl, desc) in [
                                     (AquaMethod::Pitzer, "Pitzer", "Pure Pitzer model (1973–1991)"),
@@ -904,32 +915,25 @@ impl AquaModuleState {
                                     {
                                         self.case_file.method = m;
                                         self.recalculate(db);
-                                        ui.memory_mut(|mem| mem.close_popup());
+                                        ui.close();
                                     }
                                 }
-                            },
-                        );
+                            });
 
                         // Units dropdown
                         let u_resp =
                             large_ribbon_btn(ui, RibbonIcon::UnitsGrid, "Units", Some("▼"), false)
                                 .on_hover_text("Select temperature, energy & pressure units");
                         let u_pop_id = ui.make_persistent_id("aqua_units_popup");
-                        if u_resp.clicked() {
-                            ui.memory_mut(|mem| mem.toggle_popup(u_pop_id));
-                        }
-                        egui::popup_below_widget(
-                            ui,
-                            u_pop_id,
-                            &u_resp,
-                            egui::PopupCloseBehavior::CloseOnClickOutside,
-                            |ui| {
+                        egui::Popup::from_toggle_button_response(&u_resp)
+                            .id(u_pop_id)
+                            .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+                            .show(|ui| {
                                 ui.set_min_width(180.0);
                                 if self.render_units_menu_items(ui, db) {
-                                    ui.memory_mut(|mem| mem.close_popup());
+                                    ui.close();
                                 }
-                            },
-                        );
+                            });
 
                         // Use OwnDB toggle (Fig. 8)
                         if large_ribbon_btn(
@@ -1037,15 +1041,15 @@ impl AquaModuleState {
             });
     }
 
-    fn render_formula_bar(&mut self, ctx: &egui::Context, db: &dyn SpeciesCatalogPort) {
-        egui::TopBottomPanel::top("aqua_formula_bar")
+    fn render_formula_bar(&mut self, root_ui: &mut egui::Ui, db: &dyn SpeciesCatalogPort) {
+        egui::Panel::top("aqua_formula_bar")
             .frame(
-                egui::Frame::none()
+                egui::Frame::NONE
                     .fill(HSC_WIN_BG)
                     .stroke(egui::Stroke::new(1.0, egui::Color32::from_rgb(212, 212, 212)))
-                    .inner_margin(egui::Margin::symmetric(5.0, 3.0)),
+                    .inner_margin(egui::Margin::symmetric(5, 3)),
             )
-            .show(ctx, |ui| {
+            .show(root_ui, |ui| {
                 ui.horizontal(|ui| {
                     ui.spacing_mut().item_spacing.x = 5.0;
                     let coord_lbl = format!(
@@ -1064,6 +1068,7 @@ impl AquaModuleState {
                             nb_rect,
                             0.0,
                             egui::Stroke::new(1.0, egui::Color32::from_rgb(172, 173, 179)),
+                            egui::StrokeKind::Middle,
                         );
                         p.text(
                             nb_rect.left_center() + egui::vec2(6.0, 0.0),
@@ -1085,29 +1090,23 @@ impl AquaModuleState {
                         ));
                     }
                     let nb_pop_id = ui.make_persistent_id("aqua_name_box");
-                    if nb_resp.clicked() {
-                        ui.memory_mut(|mem| mem.toggle_popup(nb_pop_id));
-                    }
-                    egui::popup_below_widget(
-                        ui,
-                        nb_pop_id,
-                        &nb_resp,
-                        egui::PopupCloseBehavior::CloseOnClickOutside,
-                        |ui| {
+                    egui::Popup::from_toggle_button_response(&nb_resp)
+                            .id(nb_pop_id)
+                            .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+                            .show(|ui| {
                             ui.set_min_width(180.0);
                             if ui.selectable_label(false, "B4 · Phase Temp").clicked() {
                                 self.select_cell(4, 1);
-                                ui.memory_mut(|mem| mem.close_popup());
+                                ui.close();
                             }
                             for idx in 0..self.rows.len() {
                                 let label = format!("A{} · {}", idx + 7, self.rows[idx].formula);
                                 if ui.selectable_label(false, label).clicked() {
                                     self.select_cell(idx + 7, 0);
-                                    ui.memory_mut(|mem| mem.close_popup());
+                                    ui.close();
                                 }
                             }
-                        },
-                    );
+                        });
 
                     // Full-width crisp white Excel Formula Bar
                     let editable = (self.selected_cell.row == 4 && self.selected_cell.col == 1)
@@ -1122,6 +1121,7 @@ impl AquaModuleState {
                             fb_rect,
                             0.0,
                             egui::Stroke::new(1.0, egui::Color32::from_rgb(172, 173, 179)),
+                            egui::StrokeKind::Middle,
                         );
                     }
                     if editable {
@@ -1130,7 +1130,7 @@ impl AquaModuleState {
                         let resp = child.add(
                             egui::TextEdit::singleline(&mut self.formula_bar_buf)
                                 .desired_width((fb_w - 8.0).max(120.0))
-                                .frame(false)
+                                .frame(egui::Frame::NONE)
                                 .text_color(HSC_DARK_TEXT)
                                 .font(egui::FontId::proportional(11.5)),
                         );
@@ -1156,16 +1156,16 @@ impl AquaModuleState {
             });
     }
 
-    fn render_footer_and_tabs(&mut self, ctx: &egui::Context) {
-        egui::TopBottomPanel::bottom("aqua_footer")
+    fn render_footer_and_tabs(&mut self, root_ui: &mut egui::Ui) {
+        egui::Panel::bottom("aqua_footer")
             .frame(
-                egui::Frame::none()
+                egui::Frame::NONE
                     .fill(HSC_WIN_BG)
                     .stroke(egui::Stroke::new(1.0, egui::Color32::from_rgb(205, 205, 205)))
                     .inner_margin(egui::Margin::ZERO),
             )
-            .show(ctx, |ui| {
-                // Classic Excel sheet tab & horizontal scrollbar bar
+            .show(root_ui, |ui| {
+                // Active worksheet tab
                 let (tab_bar_rect, _) =
                     ui.allocate_exact_size(egui::vec2(ui.available_width(), 20.0), egui::Sense::hover());
                 if ui.is_rect_visible(tab_bar_rect) {
@@ -1180,17 +1180,8 @@ impl AquaModuleState {
                         egui::Stroke::new(1.0, egui::Color32::from_rgb(185, 185, 185)),
                     );
 
-                    // Left nav arrows: |<  <  >  >|
-                    p.text(
-                        egui::pos2(tab_bar_rect.min.x + 8.0, tab_bar_rect.center().y),
-                        egui::Align2::LEFT_CENTER,
-                        "|<  <  >  >|",
-                        egui::FontId::proportional(9.5),
-                        HSC_MUTED_TEXT,
-                    );
-
                     // Slanted white active worksheet tab: Water Phase
-                    let tab_x0 = tab_bar_rect.min.x + 68.0;
+                    let tab_x0 = tab_bar_rect.min.x + 8.0;
                     let tab_rect = egui::Rect::from_min_max(
                         egui::pos2(tab_x0, tab_bar_rect.min.y),
                         egui::pos2(tab_x0 + 104.0, tab_bar_rect.max.y - 1.0),
@@ -1213,22 +1204,6 @@ impl AquaModuleState {
                         egui::FontId::proportional(11.0),
                         HSC_DARK_TEXT,
                     );
-
-                    // Subtle visual horizontal scrollbar strip on the right (matching classic Excel/HSC)
-                    let sb_left = (tab_rect.max.x + 280.0).min(tab_bar_rect.max.x - 160.0).max(tab_rect.max.x + 30.0);
-                    let sb_rect = egui::Rect::from_min_max(
-                        egui::pos2(sb_left, tab_bar_rect.min.y + 2.0),
-                        egui::pos2(tab_bar_rect.max.x - 6.0, tab_bar_rect.max.y - 2.0),
-                    );
-                    if sb_rect.width() > 60.0 {
-                        p.rect_filled(sb_rect, 1.0, egui::Color32::from_rgb(238, 238, 238));
-                        let thumb = egui::Rect::from_min_size(
-                            egui::pos2(sb_rect.min.x + 14.0, sb_rect.min.y + 1.0),
-                            egui::vec2((sb_rect.width() * 0.28).clamp(36.0, 90.0), sb_rect.height() - 2.0),
-                        );
-                        p.rect_filled(thumb, 2.0, egui::Color32::from_rgb(212, 212, 212));
-                        p.rect_stroke(thumb, 2.0, egui::Stroke::new(1.0, egui::Color32::from_rgb(168, 168, 168)));
-                    }
                 }
 
                 // Bottom Outotec/Soryntel classic brand bar
@@ -1242,7 +1217,9 @@ impl AquaModuleState {
                             .color(HSC_BRAND_RED),
                     );
                     ui.add_space(14.0);
-                    if self.dirty_since_calc {
+                    if let Some(error) = &self.input_error {
+                        ui.colored_label(HSC_BRAND_RED, error);
+                    } else if self.dirty_since_calc {
                         ui.label(
                             egui::RichText::new("● Inputs modified — click Calculate")
                                 .size(11.0)
@@ -1262,13 +1239,19 @@ impl AquaModuleState {
                             .size(10.5)
                             .color(HSC_MUTED_TEXT),
                         );
-                        if let Some(w) = self.calc_result.warnings.first() {
+                        if let [first, rest @ ..] = self.calc_result.warnings.as_slice() {
                             ui.add_space(12.0);
+                            let label = if rest.is_empty() {
+                                format!("⚠ {first}")
+                            } else {
+                                format!("⚠ {first} (+{})", rest.len())
+                            };
                             ui.label(
-                                egui::RichText::new(format!("⚠ {w}"))
+                                egui::RichText::new(label)
                                     .size(10.5)
                                     .color(egui::Color32::from_rgb(180, 83, 9)),
-                            );
+                            )
+                            .on_hover_text(self.calc_result.warnings.join("\n"));
                         }
                     });
                 });
@@ -1276,7 +1259,7 @@ impl AquaModuleState {
             });
     }
 
-    fn render_water_phase_sheet(&mut self, ctx: &egui::Context, db: &dyn SpeciesCatalogPort) {
+    fn render_water_phase_sheet(&mut self, root_ui: &mut egui::Ui, db: &dyn SpeciesCatalogPort) {
         let total_cols = 24.max(13 + self.calc_result.element_columns.len() + 2);
         let widths = aqua_column_widths(total_cols);
 
@@ -1376,9 +1359,10 @@ impl AquaModuleState {
         ];
 
         egui::CentralPanel::default()
-            .frame(egui::Frame::none().fill(HSC_WIN_BG))
-            .show(ctx, |ui| {
-                egui::ScrollArea::both().auto_shrink([false, false]).show(ui, |ui| {
+            .frame(egui::Frame::NONE.fill(HSC_WIN_BG))
+            .show(root_ui, |ui| {
+                ui.spacing_mut().scroll.floating = false;
+                egui::ScrollArea::both().id_salt("aqua_worksheet").auto_shrink([false, false]).show(ui, |ui| {
                     ui.spacing_mut().item_spacing = egui::vec2(0.0, 0.0);
 
                     // Excel Column Letter Strip (A, B, C...)
@@ -1661,10 +1645,10 @@ impl AquaModuleState {
                                     draw_text_cell(ui, &row.entry.cation, 92.0, CELL_H, HSC_BEIGE_BG, fg, false, true, false);
                                     draw_text_cell(ui, &row.entry.anion, 92.0, CELL_H, HSC_BEIGE_BG, fg, false, true, false);
                                     if show_check {
-                                        egui::Frame::none()
+                                        egui::Frame::NONE
                                             .fill(HSC_BEIGE_BG)
                                             .stroke(egui::Stroke::new(1.0, EXCEL_GRID_BORDER))
-                                            .inner_margin(egui::Margin::symmetric(14.0, 2.0))
+                                            .inner_margin(egui::Margin::symmetric(14, 2))
                                             .show(ui, |ui| {
                                                 if ui.checkbox(&mut chk, "").changed() {
                                                     toggle_key = Some(row.key.clone());
@@ -1938,7 +1922,7 @@ impl AquaModuleState {
                                     changed = true;
                                 }
                             }
-                            ui.close_menu();
+                            ui.close_kind(egui::UiKind::Menu);
                         }
                         if ui.button(crate::i18n::text("common.034")).clicked() {
                             let p = self
@@ -1949,7 +1933,7 @@ impl AquaModuleState {
                                 let _ = crate::storage::write_atomic(&p, json);
                                 self.status_msg = format!("Saved OwnDB to {}", p.display());
                             }
-                            ui.close_menu();
+                            ui.close_kind(egui::UiKind::Menu);
                         }
                         if ui.button("Save As Timestamped...").clicked() {
                             let p = std::env::temp_dir().join("soryntel_own_pitzer_backup.json");
@@ -1958,13 +1942,13 @@ impl AquaModuleState {
                                 let _ = crate::storage::write_atomic(&p, json);
                                 self.status_msg = format!("Saved OwnDB As {}", p.display());
                             }
-                            ui.close_menu();
+                            ui.close_kind(egui::UiKind::Menu);
                         }
                         ui.separator();
-                        if ui.button("Reset to HSC Fig. 8 Sample").clicked() {
+                        if ui.button("Reset to Fig. 8 Sample").clicked() {
                             self.own_db = default_sample_own_db();
                             changed = true;
-                            ui.close_menu();
+                            ui.close_kind(egui::UiKind::Menu);
                         }
                     });
 
@@ -2052,7 +2036,7 @@ impl AquaModuleState {
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         ui.label(
                             egui::RichText::new(format!(
-                                "Sequential valid prefix: {valid_bins}/{} binaries (HSC Sec. 36.6)",
+                                "Sequential valid prefix: {valid_bins}/{} binaries (Sec. 36.6)",
                                 self.own_db.binaries.len()
                             ))
                             .size(10.5)
@@ -2101,10 +2085,10 @@ impl AquaModuleState {
                                     if c0 || c1 {
                                         changed = true;
                                     }
-                                    egui::Frame::none()
+                                    egui::Frame::NONE
                                         .fill(HSC_BEIGE_BG)
                                         .stroke(egui::Stroke::new(1.0, EXCEL_GRID_BORDER))
-                                        .inner_margin(egui::Margin::symmetric(18.0, 2.0))
+                                        .inner_margin(egui::Margin::symmetric(18, 2))
                                         .show(ui, |ui| {
                                             if ui.checkbox(&mut row.show_t_params, "").changed() {
                                                 changed = true;
@@ -2476,8 +2460,12 @@ impl AquaModuleState {
             });
         self.show_density = open;
         if recalc_density {
-            let t_c = self.density_temp_buf.trim().parse::<f64>().unwrap_or(25.0);
-            self.density_result = recompute_density(&self.density_rows, t_c);
+            match parse_decimal_input(&self.density_temp_buf)
+                .and_then(|temp| recompute_density(&self.density_rows, temp))
+            {
+                Some(result) => self.density_result = result,
+                None => self.status_msg = "Temperatura o fracción másica inválida.".into(),
+            }
         }
     }
 
@@ -2542,7 +2530,7 @@ impl AquaModuleState {
                     .height(340.0)
                     .show(ui, |plot_ui| {
                         for (name, pts) in ion_series {
-                            plot_ui.line(Line::new(PlotPoints::from(pts)).name(name));
+                            plot_ui.line(Line::new(name.to_string(), PlotPoints::from(pts)));
                         }
                     });
             });
@@ -2597,7 +2585,7 @@ impl AquaModuleState {
             .open(&mut open)
             .default_size([480.0, 300.0])
             .show(ctx, |ui| {
-                ui.label(egui::RichText::new("HSC Aqua — Aqueous Solutions").strong().size(14.0));
+                ui.label(egui::RichText::new("Aqua — Aqueous Solutions").strong().size(14.0));
                 ui.separator();
                 ui.label("1. Enter aqueous species formulas in column A (e.g. H2O, Na(+a), SO4(-2a)), temperature in column B, and kmol amounts in column C.");
                 ui.label("2. Click Calculate (blue play button) to evaluate Pitzer, Harvie–Møller–Weare, or Davies activity coefficients, osmotic coefficient, vapour pressure, pH, freezing/boiling points, and estimated H/Cp.");
@@ -2622,10 +2610,10 @@ impl AquaModuleState {
     }
 
     fn render_pitzer_doc_header(&self, ui: &mut egui::Ui, is_own: bool) {
-        egui::Frame::none()
+        egui::Frame::NONE
             .fill(egui::Color32::WHITE)
             .stroke(egui::Stroke::new(1.0, EXCEL_GRID_BORDER))
-            .inner_margin(egui::Margin::same(8.0))
+            .inner_margin(egui::Margin::same(8))
             .show(ui, |ui| {
                 let sheet_name = match if is_own { self.own_db_tab } else { self.main_db_tab } {
                     PitzerSheetTab::Binary => "Pitzer Binaries: Cation - Anion Interactions",
@@ -2725,16 +2713,16 @@ fn default_sample_own_db() -> OwnPitzerDb {
     }
 }
 
-fn recompute_density(rows: &[(String, String)], t_c: f64) -> DensityCalcResult {
+fn recompute_density(rows: &[(String, String)], t_c: f64) -> Option<DensityCalcResult> {
     let inputs: Vec<DensityInputRow> = rows
         .iter()
         .filter(|(c, _)| !c.trim().is_empty())
-        .map(|(c, w)| DensityInputRow {
+        .map(|(c, w)| Some(DensityInputRow {
             component: c.trim().to_string(),
-            mass_fraction: w.trim().parse::<f64>().unwrap_or(0.0),
-        })
-        .collect();
-    AquaUseCases::aqua_density(&inputs, t_c)
+            mass_fraction: parse_decimal_input(w)?,
+        }))
+        .collect::<Option<_>>()?;
+    Some(AquaUseCases::aqua_density(&inputs, t_c))
 }
 
 fn format_temp_display(v: f64) -> String {
@@ -2796,7 +2784,7 @@ fn draw_win_groupbox(ui: &mut egui::Ui, title: &str, height: f32, add_contents: 
 
     if ui.is_rect_visible(outer) {
         let p = ui.painter();
-        p.rect_stroke(box_rect, 2.5, egui::Stroke::new(1.0, HSC_GROUP_BORDER));
+        p.rect_stroke(box_rect, 2.5, egui::Stroke::new(1.0, HSC_GROUP_BORDER), egui::StrokeKind::Middle);
         let hi = egui::Color32::from_rgb(249, 249, 249);
         p.line_segment(
             [
@@ -2825,12 +2813,12 @@ fn draw_win_groupbox(ui: &mut egui::Ui, title: &str, height: f32, add_contents: 
         egui::pos2(box_rect.min.x + 12.0, box_rect.min.y + 11.0),
         egui::pos2(box_rect.max.x - 10.0, box_rect.max.y - 6.0),
     );
-    ui.allocate_new_ui(egui::UiBuilder::new().max_rect(inner), add_contents);
+    ui.scope_builder(egui::UiBuilder::new().max_rect(inner), add_contents);
 }
 
 fn draw_win_square_check(ui: &mut egui::Ui, label: &str, checked: bool) -> egui::Response {
     let font = egui::FontId::proportional(11.5);
-    let galley = ui.fonts(|f| f.layout_no_wrap(label.to_string(), font.clone(), HSC_DARK_TEXT));
+    let galley = ui.fonts_mut(|f| f.layout_no_wrap(label.to_string(), font.clone(), HSC_DARK_TEXT));
     let total_w = 13.0 + 5.0 + galley.size().x + 4.0;
     let (rect, resp) = ui.allocate_exact_size(egui::vec2(total_w, 18.0), egui::Sense::click());
     if ui.is_rect_visible(rect) {
@@ -2845,7 +2833,7 @@ fn draw_win_square_check(ui: &mut egui::Ui, label: &str, checked: bool) -> egui:
         } else {
             egui::Color32::from_rgb(112, 112, 112)
         };
-        p.rect_stroke(box_rect, 0.0, egui::Stroke::new(1.0, border_col));
+        p.rect_stroke(box_rect, 0.0, egui::Stroke::new(1.0, border_col), egui::StrokeKind::Middle);
         if checked {
             let stroke = egui::Stroke::new(1.6, egui::Color32::from_rgb(24, 26, 30));
             let c1 = egui::pos2(box_rect.min.x + 2.8, box_rect.center().y + 0.2);
@@ -2891,11 +2879,12 @@ fn draw_classic_bevel_button(ui: &mut egui::Ui, label: &str, w: f32, h: f32) -> 
         p.rect_filled(rect, 2.0, bot_fill);
         let top_half = egui::Rect::from_min_max(rect.min, egui::pos2(rect.max.x, rect.center().y));
         p.rect_filled(top_half, 2.0, top_fill);
-        p.rect_stroke(rect, 2.0, egui::Stroke::new(1.0, border_col));
+        p.rect_stroke(rect, 2.0, egui::Stroke::new(1.0, border_col), egui::StrokeKind::Middle);
         p.rect_stroke(
             rect.shrink(1.0),
             1.5,
             egui::Stroke::new(1.0, egui::Color32::from_rgba_unmultiplied(255, 255, 255, 190)),
+            egui::StrokeKind::Middle,
         );
         p.text(
             rect.center(),
@@ -2921,7 +2910,7 @@ fn draw_gutter_stack_cell(
     }
     let p = ui.painter();
     p.rect_filled(rect, 0.0, row_num_bg(selected));
-    p.rect_stroke(rect, 0.0, egui::Stroke::new(1.0, EXCEL_GRID_BORDER));
+    p.rect_stroke(rect, 0.0, egui::Stroke::new(1.0, EXCEL_GRID_BORDER), egui::StrokeKind::Middle);
     let sub_h = total_h / nums.len() as f32;
     for (i, n) in nums.iter().enumerate() {
         let y0 = rect.min.y + sub_h * i as f32;
@@ -2948,7 +2937,7 @@ fn draw_merged_hsc_header(ui: &mut egui::Ui, w: f32, total_h: f32, title: &str, 
     }
     let p = ui.painter();
     p.rect_filled(rect, 0.0, HSC_BANNER_BG);
-    p.rect_stroke(rect, 0.0, egui::Stroke::new(1.0, egui::Color32::from_rgb(138, 138, 138)));
+    p.rect_stroke(rect, 0.0, egui::Stroke::new(1.0, egui::Color32::from_rgb(138, 138, 138)), egui::StrokeKind::Middle);
 
     let lines: Vec<&str> = title.lines().collect();
     if lines.is_empty() && unit.is_empty() {
@@ -3118,7 +3107,7 @@ fn paint_cell_interior(
     } else {
         egui::Stroke::new(1.0, HSC_SHEET_GRID)
     };
-    p.rect_stroke(rect, 0.0, border);
+    p.rect_stroke(rect, 0.0, border, egui::StrokeKind::Middle);
     if selected {
         let h_rect = egui::Rect::from_min_size(rect.right_bottom() - egui::vec2(4.0, 4.0), egui::vec2(4.0, 4.0));
         p.rect_filled(h_rect, 0.0, HSC_DARK_TEXT);
@@ -3157,6 +3146,7 @@ fn draw_editable_cell_align(
         } else {
             egui::Stroke::new(1.0, HSC_SHEET_GRID)
         },
+        egui::StrokeKind::Middle,
     );
     if selected {
         let h_rect = egui::Rect::from_min_size(rect.right_bottom() - egui::vec2(4.0, 4.0), egui::vec2(4.0, 4.0));
@@ -3170,10 +3160,10 @@ fn draw_editable_cell_align(
     };
     let resp = child.add(
         egui::TextEdit::singleline(buf)
-            .id(egui::Id::new(id))
+            .id(egui::Id::unique(id))
             .desired_width(w - 4.0)
-            .frame(false)
-            .horizontal_align(align)
+            .frame(egui::Frame::NONE)
+            .align(egui::Align2([align, egui::Align::Center]))
             .text_color(HSC_DARK_TEXT)
             .font(egui::FontId::proportional(11.0)),
     );
@@ -3398,7 +3388,7 @@ fn numeric_buf_cell(
         draw_text_cell(ui, "", w, CELL_H, HSC_BEIGE_BG, HSC_MUTED_TEXT, false, true, false);
         return None;
     }
-    let buf_id = egui::Id::new(format!("{id}_editbuf"));
+    let buf_id = egui::Id::unique(format!("{id}_editbuf"));
     let mut s: String = ui
         .ctx()
         .data(|d| d.get_temp::<String>(buf_id))
@@ -3418,14 +3408,19 @@ fn opt_f64_cell(ui: &mut egui::Ui, id: &str, opt: &mut Option<f64>, w: f32, enab
     let Some((s, ch)) = numeric_buf_cell(ui, id, initial, w, enabled) else {
         return false;
     };
-    if ch {
-        *opt = if s.trim().is_empty() {
-            None
-        } else {
-            s.trim().parse::<f64>().ok()
-        };
+    if !ch {
+        return false;
     }
-    ch
+    if s.trim().is_empty() {
+        *opt = None;
+        return true;
+    }
+    if let Some(value) = parse_decimal_input(&s) {
+        *opt = Some(value);
+        return true;
+    }
+    ui.colored_label(egui::Color32::RED, "Número inválido");
+    false
 }
 
 fn f64_cell(ui: &mut egui::Ui, id: &str, val: &mut f64, w: f32, enabled: bool) -> bool {
@@ -3437,14 +3432,15 @@ fn f64_cell(ui: &mut egui::Ui, id: &str, val: &mut f64, w: f32, enabled: bool) -
     let Some((s, ch)) = numeric_buf_cell(ui, id, initial, w, enabled) else {
         return false;
     };
-    if ch {
-        if let Ok(v) = s.trim().parse::<f64>() {
-            *val = v;
-        } else if s.trim().is_empty() {
-            *val = 0.0;
-        }
+    if !ch {
+        return false;
     }
-    ch
+    if let Some(value) = parse_decimal_input(&s) {
+        *val = value;
+        return true;
+    }
+    ui.colored_label(egui::Color32::RED, "Número inválido");
+    false
 }
 
 fn ribbon_group(ui: &mut egui::Ui, title: &str, add_contents: impl FnOnce(&mut egui::Ui)) {
@@ -3478,10 +3474,10 @@ fn large_ribbon_btn(
         let p = ui.painter();
         if active {
             p.rect_filled(rect, 3.0, HSC_OWNDB_ACTIVE_BG);
-            p.rect_stroke(rect, 3.0, egui::Stroke::new(1.0, HSC_OWNDB_ACTIVE_BORDER));
+            p.rect_stroke(rect, 3.0, egui::Stroke::new(1.0, HSC_OWNDB_ACTIVE_BORDER), egui::StrokeKind::Middle);
         } else if resp.hovered() {
             p.rect_filled(rect, 3.0, egui::Color32::from_rgb(232, 240, 252));
-            p.rect_stroke(rect, 3.0, egui::Stroke::new(1.0, EXCEL_ACTIVE_BORDER));
+            p.rect_stroke(rect, 3.0, egui::Stroke::new(1.0, EXCEL_ACTIVE_BORDER), egui::StrokeKind::Middle);
         }
         let icon_center = egui::pos2(rect.center().x, rect.min.y + 15.0);
         paint_ribbon_icon(p, icon_center, icon, 11.0);
@@ -3513,7 +3509,7 @@ fn small_ribbon_btn(ui: &mut egui::Ui, icon: RibbonIcon, label: &str) -> egui::R
         let p = ui.painter();
         if resp.hovered() {
             p.rect_filled(rect, 2.5, egui::Color32::from_rgb(232, 240, 252));
-            p.rect_stroke(rect, 2.5, egui::Stroke::new(1.0, EXCEL_ACTIVE_BORDER));
+            p.rect_stroke(rect, 2.5, egui::Stroke::new(1.0, EXCEL_ACTIVE_BORDER), egui::StrokeKind::Middle);
         }
         paint_ribbon_icon(p, egui::pos2(rect.min.x + 11.0, rect.center().y), icon, 7.0);
         p.text(
@@ -3534,7 +3530,7 @@ fn paint_ribbon_icon(p: &egui::Painter, c: egui::Pos2, icon: RibbonIcon, r: f32)
     match icon {
         RibbonIcon::File => {
             p.rect_filled(egui::Rect::from_center_size(c, egui::vec2(1.4 * r, 1.8 * r)), 1.5, egui::Color32::WHITE);
-            p.rect_stroke(egui::Rect::from_center_size(c, egui::vec2(1.4 * r, 1.8 * r)), 1.5, egui::Stroke::new(1.2, dark));
+            p.rect_stroke(egui::Rect::from_center_size(c, egui::vec2(1.4 * r, 1.8 * r)), 1.5, egui::Stroke::new(1.2, dark), egui::StrokeKind::Middle);
         }
         RibbonIcon::Calculate => {
             let pts = vec![
@@ -3553,7 +3549,7 @@ fn paint_ribbon_icon(p: &egui::Painter, c: egui::Pos2, icon: RibbonIcon, r: f32)
         RibbonIcon::UnitsGrid => {
             let rect = egui::Rect::from_center_size(c, egui::vec2(1.6 * r, 1.4 * r));
             p.rect_filled(rect, 1.0, egui::Color32::WHITE);
-            p.rect_stroke(rect, 1.0, egui::Stroke::new(1.1, dark));
+            p.rect_stroke(rect, 1.0, egui::Stroke::new(1.1, dark), egui::StrokeKind::Middle);
             p.line_segment([rect.center_top(), rect.center_bottom()], egui::Stroke::new(0.9, blue));
             p.line_segment([rect.left_center(), rect.right_center()], egui::Stroke::new(0.9, blue));
         }
@@ -3562,7 +3558,7 @@ fn paint_ribbon_icon(p: &egui::Painter, c: egui::Pos2, icon: RibbonIcon, r: f32)
                 let d_rect = egui::Rect::from_center_size(c + egui::vec2(0.0, dy), egui::vec2(1.4 * r, 0.55 * r));
                 let fill = if icon == RibbonIcon::UseOwnDb { blue } else { gold };
                 p.rect_filled(d_rect, 2.5, fill);
-                p.rect_stroke(d_rect, 2.5, egui::Stroke::new(0.9, egui::Color32::from_rgb(130, 92, 16)));
+                p.rect_stroke(d_rect, 2.5, egui::Stroke::new(0.9, egui::Color32::from_rgb(130, 92, 16)), egui::StrokeKind::Middle);
             }
         }
         RibbonIcon::DensityFx => {
@@ -3576,7 +3572,7 @@ fn paint_ribbon_icon(p: &egui::Painter, c: egui::Pos2, icon: RibbonIcon, r: f32)
         }
         RibbonIcon::PlotCurve => {
             let rect = egui::Rect::from_center_size(c, egui::vec2(1.6 * r, 1.4 * r));
-            p.rect_stroke(rect, 1.0, egui::Stroke::new(1.1, dark));
+            p.rect_stroke(rect, 1.0, egui::Stroke::new(1.1, dark), egui::StrokeKind::Middle);
             let pts = vec![
                 rect.left_bottom() + egui::vec2(2.0, -3.0),
                 c + egui::vec2(-2.0, 1.0),
@@ -3602,11 +3598,37 @@ fn paint_ribbon_icon(p: &egui::Painter, c: egui::Pos2, icon: RibbonIcon, r: f32)
         RibbonIcon::Copy | RibbonIcon::Paste => {
             let rect = egui::Rect::from_center_size(c, egui::vec2(1.4 * r, 1.6 * r));
             p.rect_filled(rect, 1.0, if icon == RibbonIcon::Paste { gold } else { egui::Color32::WHITE });
-            p.rect_stroke(rect, 1.0, egui::Stroke::new(1.1, dark));
+            p.rect_stroke(rect, 1.0, egui::Stroke::new(1.1, dark), egui::StrokeKind::Middle);
         }
         RibbonIcon::Find => {
             p.circle_stroke(c - egui::vec2(0.2 * r, 0.1 * r), 0.65 * r, egui::Stroke::new(1.4, blue));
             p.line_segment([c + egui::vec2(0.2 * r, 0.3 * r), c + egui::vec2(0.9 * r, 0.9 * r)], egui::Stroke::new(1.6, dark));
         }
+    }
+}
+
+#[cfg(test)]
+mod area_d_regressions {
+    use super::*;
+    use soryntel_db::ThermoDatabase;
+
+    #[test]
+    fn aqua_preserves_decimal_comma_inputs() {
+        let db = ThermoDatabase::with_open_defaults();
+        let mut state = AquaModuleState::new(&db);
+        state.rows = vec![AquaSpeciesRowBuf {
+            formula: "H2O".into(),
+            temp_buf: "40,5".into(),
+            amount_buf: "1,5".into(),
+        }];
+        assert!(state.sync_case_from_rows());
+        let input = &state.case_file.species[0];
+        assert_eq!((input.temp, input.amount_kmol), (40.5, 1.5));
+        state.rows[0].temp_buf = "42".into();
+        state.rows[0].amount_buf = "1,5.0".into();
+        assert!(!state.sync_case_from_rows());
+        let input = &state.case_file.species[0];
+        assert_eq!((input.temp, input.amount_kmol), (40.5, 1.5));
+        assert!(state.input_error.as_deref().is_some_and(|error| error.contains("inválida")));
     }
 }

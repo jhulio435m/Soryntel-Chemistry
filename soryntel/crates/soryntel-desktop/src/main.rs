@@ -8,8 +8,11 @@ rust_i18n::i18n!("locales", fallback = "es");
 
 mod i18n;
 mod storage;
+#[cfg(test)]
+mod test_support;
 mod addins_bridge;
 mod aqua_ui;
+mod module_link;
 mod balance_ui;
 mod benson_ui;
 mod composition;
@@ -71,7 +74,7 @@ fn spawn_module_window(mode_arg: &str, custom_db: Option<&str>) -> Option<std::p
     let mut cmd = std::process::Command::new(exe);
     cmd.arg("--module").arg(mode_arg);
     if let Some(p) = custom_db {
-        cmd.arg("--hsc-db").arg(p);
+        cmd.arg("--database").arg(p);
     }
     cmd.spawn().ok()
 }
@@ -88,6 +91,56 @@ fn is_child_running(slot: &mut Option<std::process::Child>) -> bool {
     false
 }
 
+/// Envía (si procede) una pérdida de calor de Heat Loss a Balance y devuelve el mensaje para
+/// el usuario. Si el Balance abierto no tiene el área elegida, no se envía nada.
+fn heat_loss_send_outcome(
+    send: impl FnOnce() -> Result<(), String>,
+    open_balance_areas: Option<usize>,
+    target_area: usize,
+) -> (String, bool) {
+    if let Some(n) = open_balance_areas {
+        if target_area >= n {
+            return (
+                format!(
+                    "El Balance abierto tiene {n} área(s); el Area {} no existe. Elija otra área.",
+                    target_area + 1
+                ),
+                false,
+            );
+        }
+    }
+    if let Err(e) = send() {
+        return (format!("No se pudo enviar la pérdida de calor a Balance: {e}"), false);
+    }
+    match open_balance_areas {
+        Some(_) => (
+            format!("Enviado al Balance abierto (Area {}); esperando confirmación…", target_area + 1),
+            true,
+        ),
+        None => (
+            format!(
+                "No había ningún Balance abierto: se abre uno con el libro por defecto y la pérdida se importará en su Area {}.",
+                target_area + 1
+            ),
+            true,
+        ),
+    }
+}
+
+/// Lanza un módulo en su ranura solo si no hay ya un proceso vivo en ella: así nunca se
+/// pierde el `Child` de una ventana abierta (que «Cerrar todo» no podría cerrar).
+/// Devuelve `true` si se lanzó un proceso nuevo.
+fn launch_into_slot(
+    slot: &mut Option<std::process::Child>,
+    spawn: impl FnOnce() -> Option<std::process::Child>,
+) -> bool {
+    if is_child_running(slot) {
+        return false;
+    }
+    *slot = spawn();
+    slot.is_some()
+}
+
 fn kill_child(slot: &mut Option<std::process::Child>) {
     if let Some(mut child) = slot.take() {
         let _ = child.kill();
@@ -95,74 +148,115 @@ fn kill_child(slot: &mut Option<std::process::Child>) {
     }
 }
 
-fn main() -> eframe::Result<()> {
-    rust_i18n::set_locale("es");
+/// Módulos aceptados por `--module` (y sus alias).
+const MODULE_ARGS: &[(&str, WindowMode)] = &[
+    ("launcher", WindowMode::Launcher),
+    ("reaction", WindowMode::Reaction),
+    ("balance", WindowMode::Balance),
+    ("heatloss", WindowMode::HeatLoss),
+    ("equilibrium", WindowMode::Equilibrium),
+    ("exergy", WindowMode::Exergy),
+    ("estimate", WindowMode::Estimate),
+    ("ehph", WindowMode::EhPh),
+    ("diagrams", WindowMode::Diagrams),
+    ("phase_stability", WindowMode::PhaseStability),
+    ("species_converter", WindowMode::SpeciesConverter),
+    ("benson", WindowMode::Benson),
+    ("elements", WindowMode::Elements),
+    ("water", WindowMode::Water),
+    ("units", WindowMode::Units),
+    ("excel_addins", WindowMode::ExcelAddIns),
+    ("addins", WindowMode::ExcelAddIns),
+    ("geo", WindowMode::ExcelAddIns),
+    ("aqua", WindowMode::Aqua),
+    ("sim", WindowMode::Sim),
+    ("flowsheet", WindowMode::Sim),
+    ("lca", WindowMode::Lca),
+    ("sim_lca", WindowMode::Lca),
+    ("mass_balance", WindowMode::MassBalance),
+    ("mas", WindowMode::MassBalance),
+    ("species", WindowMode::Species),
+    ("databases", WindowMode::Species),
+    ("browser", WindowMode::Species),
+];
 
-    // Load external user-supplied HSC database in read-only mode if provided via --hsc-db or default path
-    let args: Vec<String> = std::env::args().collect();
-    let mut custom_db = None;
-    let mut window_mode = WindowMode::Launcher;
-    let mut bridge_port: Option<u16> = None;
-    let mut eval_cli: Option<Vec<String>> = None;
-    let mut i = 1;
+struct CliOptions {
+    custom_db: Option<String>,
+    window_mode: WindowMode,
+    bridge_port: Option<u16>,
+    eval_cli: Option<Vec<String>>,
+}
+
+/// Interpreta los argumentos (sin el nombre del programa). Un `--module` desconocido o un
+/// `--hsc-db`/`--module` sin valor es un error, en lugar de abrir el launcher en silencio.
+fn parse_cli_args(args: &[String]) -> Result<CliOptions, String> {
+    let mut options = CliOptions {
+        custom_db: None,
+        window_mode: WindowMode::Launcher,
+        bridge_port: None,
+        eval_cli: None,
+    };
+    let mut i = 0;
     while i < args.len() {
         let a = args[i].as_str();
-        if a == "--hsc-db" && i + 1 < args.len() {
-            custom_db = Some(args[i + 1].clone());
+        if matches!(a, "--database" | "--hsc-db") {
+            let value = args.get(i + 1).filter(|v| !v.starts_with("--"));
+            let Some(value) = value else {
+                return Err("--database necesita la ruta del catálogo externo".into());
+            };
+            options.custom_db = Some(value.clone());
             i += 2;
-        } else if let Some(val) = a.strip_prefix("--hsc-db=") {
-            custom_db = Some(val.to_string());
+        } else if let Some(val) = a.strip_prefix("--database=").or_else(|| a.strip_prefix("--hsc-db=")) {
+            if val.is_empty() {
+                return Err("--database necesita la ruta del catálogo externo".into());
+            }
+            options.custom_db = Some(val.to_string());
             i += 1;
         } else if a == "--addin-bridge" {
-            let p = args
-                .get(i + 1)
-                .and_then(|s| s.parse::<u16>().ok())
-                .unwrap_or(8765);
-            bridge_port = Some(p);
-            if args
-                .get(i + 1)
-                .and_then(|s| s.parse::<u16>().ok())
-                .is_some()
-            {
-                i += 2;
-            } else {
-                i += 1;
-            }
+            let port = args.get(i + 1).and_then(|s| s.parse::<u16>().ok());
+            options.bridge_port = Some(port.unwrap_or(8765));
+            i += if port.is_some() { 2 } else { 1 };
         } else if let Some(val) = a.strip_prefix("--addin-bridge=") {
-            bridge_port = Some(val.parse::<u16>().unwrap_or(8765));
+            options.bridge_port = Some(val.parse::<u16>().unwrap_or(8765));
             i += 1;
         } else if a == "--addin-eval" && i + 1 < args.len() {
-            eval_cli = Some(args[i + 1..].to_vec());
+            options.eval_cli = Some(args[i + 1..].to_vec());
             break;
-        } else if a == "--module" && i + 1 < args.len() {
-            window_mode = match args[i + 1].as_str() {
-                "reaction" => WindowMode::Reaction,
-                "balance" => WindowMode::Balance,
-                "heatloss" => WindowMode::HeatLoss,
-                "equilibrium" => WindowMode::Equilibrium,
-                "exergy" => WindowMode::Exergy,
-                "estimate" => WindowMode::Estimate,
-                "ehph" => WindowMode::EhPh,
-                "diagrams" => WindowMode::Diagrams,
-                "phase_stability" => WindowMode::PhaseStability,
-                "species_converter" => WindowMode::SpeciesConverter,
-                "benson" => WindowMode::Benson,
-                "elements" => WindowMode::Elements,
-                "water" => WindowMode::Water,
-                "units" => WindowMode::Units,
-                "excel_addins" | "addins" => WindowMode::ExcelAddIns,
-                "aqua" => WindowMode::Aqua,
-                "sim" | "flowsheet" => WindowMode::Sim,
-                "lca" | "sim_lca" => WindowMode::Lca,
-                "mass_balance" | "mas" => WindowMode::MassBalance,
-                "species" | "databases" | "browser" => WindowMode::Species,
-                _ => WindowMode::Launcher,
+        } else if a == "--module" || a.starts_with("--module=") {
+            let (value, step) = match a.strip_prefix("--module=") {
+                Some(v) => (Some(v), 1),
+                None => (args.get(i + 1).map(String::as_str), 2),
             };
-            i += 2;
+            let Some(value) = value.filter(|v| !v.is_empty()) else {
+                return Err("--module necesita el nombre de un módulo".into());
+            };
+            options.window_mode = MODULE_ARGS
+                .iter()
+                .find(|(name, _)| *name == value)
+                .map(|(_, mode)| *mode)
+                .ok_or_else(|| {
+                    let valid: Vec<&str> = MODULE_ARGS.iter().map(|(name, _)| *name).collect();
+                    format!("módulo desconocido «{value}». Valores válidos: {}", valid.join(", "))
+                })?;
+            i += step;
         } else {
             i += 1;
         }
     }
+    Ok(options)
+}
+
+fn main() -> eframe::Result<()> {
+    rust_i18n::set_locale("es");
+
+    let args: Vec<String> = std::env::args().collect();
+    let CliOptions { custom_db, window_mode, bridge_port, eval_cli } = match parse_cli_args(&args[1..]) {
+        Ok(options) => options,
+        Err(message) => {
+            eprintln!("soryntel-desktop: {message}");
+            std::process::exit(2);
+        }
+    };
     let services = AppServices::load(custom_db.as_deref());
 
     if let Some(port) = bridge_port {
@@ -302,7 +396,7 @@ fn main() -> eframe::Result<()> {
         ),
         WindowMode::Aqua => ("Aqua — Soryntel Chemistry", [1320.0, 780.0], [720.0, 480.0]),
         WindowMode::Sim => (
-            "HSC Sim — Soryntel Chemistry",
+            "Sim — Soryntel Chemistry",
             [1380.0, 820.0],
             [820.0, 520.0],
         ),
@@ -324,6 +418,7 @@ fn main() -> eframe::Result<()> {
     };
 
     let options = eframe::NativeOptions {
+        renderer: eframe::Renderer::Glow,
         viewport: egui::ViewportBuilder::default()
             .with_inner_size(size)
             .with_min_inner_size(min_size)
@@ -331,17 +426,14 @@ fn main() -> eframe::Result<()> {
         ..Default::default()
     };
 
-    let custom_db_clone = custom_db.clone();
+    // Load the selected module before creating a window that must answer compositor pings.
+    let app = SoryntelDesktopApp::new(services, window_mode, custom_db);
     eframe::run_native(
         title,
         options,
         Box::new(move |cc| {
             configure_soryntel_theme(&cc.egui_ctx);
-            Ok(Box::new(SoryntelDesktopApp::new(
-                services,
-                window_mode,
-                custom_db_clone,
-            )))
+            Ok(Box::new(app))
         }),
     )
 }
@@ -363,18 +455,19 @@ fn configure_soryntel_theme(ctx: &egui::Context) {
     visuals.widgets.hovered.bg_stroke =
         egui::Stroke::new(1.0, egui::Color32::from_rgb(59, 130, 246));
     visuals.widgets.active.bg_fill = egui::Color32::from_rgb(219, 234, 254);
-    visuals.widgets.noninteractive.rounding = egui::Rounding::same(4.0);
-    visuals.widgets.inactive.rounding = egui::Rounding::same(4.0);
-    visuals.widgets.hovered.rounding = egui::Rounding::same(4.0);
-    visuals.widgets.active.rounding = egui::Rounding::same(4.0);
-    visuals.window_rounding = egui::Rounding::same(6.0);
-    ctx.set_visuals(visuals);
+    visuals.widgets.noninteractive.corner_radius = egui::CornerRadius::same(4);
+    visuals.widgets.inactive.corner_radius = egui::CornerRadius::same(4);
+    visuals.widgets.hovered.corner_radius = egui::CornerRadius::same(4);
+    visuals.widgets.active.corner_radius = egui::CornerRadius::same(4);
+    visuals.window_corner_radius = egui::CornerRadius::same(6);
+    ctx.set_theme(egui::ThemePreference::Light);
+    ctx.set_visuals_of(egui::Theme::Light, visuals);
 
-    let mut style = (*ctx.style()).clone();
-    style.spacing.item_spacing = egui::vec2(7.0, 5.0);
-    style.spacing.button_padding = egui::vec2(9.0, 4.5);
-    style.spacing.window_margin = egui::Margin::same(10.0);
-    ctx.set_style(style);
+    ctx.style_mut_of(egui::Theme::Light, |style| {
+        style.spacing.item_spacing = egui::vec2(7.0, 5.0);
+        style.spacing.button_padding = egui::vec2(9.0, 4.5);
+        style.spacing.window_margin = egui::Margin::same(10);
+    });
 }
 
 #[derive(Clone, Copy)]
@@ -429,6 +522,30 @@ impl ModuleRunningFlags {
     }
 }
 
+enum ModuleState {
+    Launcher,
+    Reaction(reaction_ui::ReactionModuleState),
+    Balance(balance_ui::BalanceModuleState),
+    HeatLoss(heat_loss_ui::HeatLossModuleState),
+    Equilibrium(equilibrium_ui::EquilibriumUiState),
+    Exergy(exergy_ui::ExergyModuleState),
+    Estimate(estimate_ui::EstimateModuleState),
+    EhPh(ehph_ui::EhPhModuleState),
+    Diagrams(diagrams_ui::DiagramsModuleState),
+    PhaseStability(phase_stability_ui::PhaseStabilityModuleState),
+    SpeciesConverter(species_converter_ui::SpeciesConverterModuleState),
+    Benson(benson_ui::BensonModuleState),
+    Elements(elements_ui::ElementsModuleState),
+    Water(water_ui::WaterModuleState),
+    Units(units_ui::UnitsModuleState),
+    ExcelAddIns(excel_addins_ui::ExcelAddInsModuleState),
+    Aqua(aqua_ui::AquaModuleState),
+    Sim(sim_ui::SimModuleState),
+    Lca(soryntel_application::models::simulation::SimProject, lca_ui::LcaWindowState),
+    MassBalance(soryntel_application::models::simulation::SimProject, mass_balance_ui::MassBalanceWindowState),
+    Species(species_ui::SpeciesModuleState),
+}
+
 struct SoryntelDesktopApp {
     services: AppServices,
     window_mode: WindowMode,
@@ -453,60 +570,55 @@ struct SoryntelDesktopApp {
     child_lca: Option<std::process::Child>,
     child_mass_balance: Option<std::process::Child>,
     child_browser: Option<std::process::Child>,
-    reaction_state: reaction_ui::ReactionModuleState,
-    aqua_state: aqua_ui::AquaModuleState,
-    balance_state: balance_ui::BalanceModuleState,
-    heat_loss_state: heat_loss_ui::HeatLossModuleState,
-    equilibrium_state: equilibrium_ui::EquilibriumUiState,
-    exergy_state: exergy_ui::ExergyModuleState,
-    estimate_state: estimate_ui::EstimateModuleState,
-    ehph_state: ehph_ui::EhPhModuleState,
-    diagrams_state: diagrams_ui::DiagramsModuleState,
-    phase_stability_state: phase_stability_ui::PhaseStabilityModuleState,
-    species_converter_state: species_converter_ui::SpeciesConverterModuleState,
-    benson_state: benson_ui::BensonModuleState,
-    elements_state: elements_ui::ElementsModuleState,
-    water_state: water_ui::WaterModuleState,
-    units_state: units_ui::UnitsModuleState,
-    excel_addins_state: excel_addins_ui::ExcelAddInsModuleState,
-    sim_state: sim_ui::SimModuleState,
-    lca_standalone_project: soryntel_application::models::simulation::SimProject,
-    lca_state: lca_ui::LcaWindowState,
-    mb_standalone_project: soryntel_application::models::simulation::SimProject,
-    mb_state: mass_balance_ui::MassBalanceWindowState,
-    species_state: species_ui::SpeciesModuleState,
+    module_state: ModuleState,
     launcher_ui_state: launcher_ui::LauncherUiState,
+    /// Áreas publicadas para Heat Loss y momento de la última señal de vida.
+    published_balance: Option<(usize, std::time::Instant)>,
+    db_warnings_dismissed: bool,
+    last_formula_poll: Option<std::time::Instant>,
 }
 
 impl SoryntelDesktopApp {
     fn new(services: AppServices, window_mode: WindowMode, custom_db_arg: Option<String>) -> Self {
-        // Un único guard de lectura para construir los estados; se suelta antes de mover
-        // `services` a `Self`. `&dyn SpeciesWorkspacePort` se convierte por upcasting en el
-        // puerto que pida cada módulo.
         let guard = services.catalog();
         let db = &*guard;
-        let reaction_state = reaction_ui::ReactionModuleState::new(db);
-        let aqua_state = aqua_ui::AquaModuleState::new(db);
-        let balance_state = balance_ui::BalanceModuleState::new(db);
-        let heat_loss_state = heat_loss_ui::HeatLossModuleState::new();
-        let equilibrium_state = equilibrium_ui::EquilibriumUiState::default();
-        let exergy_state = exergy_ui::ExergyModuleState::new(db);
-        let estimate_state = estimate_ui::EstimateModuleState::new(db);
-        let ehph_state = ehph_ui::EhPhModuleState::new(db);
-        let diagrams_state = diagrams_ui::DiagramsModuleState::new(db);
-        let phase_stability_state = phase_stability_ui::PhaseStabilityModuleState::new(db);
-        let species_converter_state =
-            species_converter_ui::SpeciesConverterModuleState::new(db);
-        let benson_state = benson_ui::BensonModuleState::new(db);
-        let elements_state = elements_ui::ElementsModuleState::default();
-        let water_state = water_ui::WaterModuleState::new(db);
-        let units_state = units_ui::UnitsModuleState::default();
-        let excel_addins_state = excel_addins_ui::ExcelAddInsModuleState::default();
-        let sim_state = sim_ui::SimModuleState::default();
-        let (lca_standalone_project, lca_state) = lca_ui::LcaWindowState::with_preset_classic_zn();
-        let (mb_standalone_project, mb_state) =
-            mass_balance_ui::MassBalanceWindowState::with_preset_rougher();
-        let species_state = species_ui::SpeciesModuleState::new(db);
+        let module_state = match window_mode {
+            WindowMode::Launcher => ModuleState::Launcher,
+            WindowMode::Reaction => ModuleState::Reaction(reaction_ui::ReactionModuleState::new(db)),
+            WindowMode::Balance => ModuleState::Balance(balance_ui::BalanceModuleState::new(db)),
+            WindowMode::HeatLoss => ModuleState::HeatLoss(heat_loss_ui::HeatLossModuleState::new()),
+            WindowMode::Equilibrium => {
+                ModuleState::Equilibrium(equilibrium_ui::EquilibriumUiState::default())
+            }
+            WindowMode::Exergy => ModuleState::Exergy(exergy_ui::ExergyModuleState::new(db)),
+            WindowMode::Estimate => ModuleState::Estimate(estimate_ui::EstimateModuleState::new(db)),
+            WindowMode::EhPh => ModuleState::EhPh(ehph_ui::EhPhModuleState::new(db)),
+            WindowMode::Diagrams => ModuleState::Diagrams(diagrams_ui::DiagramsModuleState::new(db)),
+            WindowMode::PhaseStability => {
+                ModuleState::PhaseStability(phase_stability_ui::PhaseStabilityModuleState::new(db))
+            }
+            WindowMode::SpeciesConverter => {
+                ModuleState::SpeciesConverter(species_converter_ui::SpeciesConverterModuleState::new(db))
+            }
+            WindowMode::Benson => ModuleState::Benson(benson_ui::BensonModuleState::new(db)),
+            WindowMode::Elements => ModuleState::Elements(elements_ui::ElementsModuleState::default()),
+            WindowMode::Water => ModuleState::Water(water_ui::WaterModuleState::new(db)),
+            WindowMode::Units => ModuleState::Units(units_ui::UnitsModuleState::default()),
+            WindowMode::ExcelAddIns => {
+                ModuleState::ExcelAddIns(excel_addins_ui::ExcelAddInsModuleState::default())
+            }
+            WindowMode::Aqua => ModuleState::Aqua(aqua_ui::AquaModuleState::new(db)),
+            WindowMode::Sim => ModuleState::Sim(sim_ui::SimModuleState::default()),
+            WindowMode::Lca => {
+                let (project, state) = lca_ui::LcaWindowState::with_preset_classic_zn();
+                ModuleState::Lca(project, state)
+            }
+            WindowMode::MassBalance => {
+                let (project, state) = mass_balance_ui::MassBalanceWindowState::with_preset_rougher();
+                ModuleState::MassBalance(project, state)
+            }
+            WindowMode::Species => ModuleState::Species(species_ui::SpeciesModuleState::new(db)),
+        };
         drop(guard);
         Self {
             services,
@@ -532,49 +644,42 @@ impl SoryntelDesktopApp {
             child_lca: None,
             child_mass_balance: None,
             child_browser: None,
-            reaction_state,
-            aqua_state,
-            balance_state,
-            heat_loss_state,
-            equilibrium_state,
-            exergy_state,
-            estimate_state,
-            ehph_state,
-            diagrams_state,
-            phase_stability_state,
-            species_converter_state,
-            benson_state,
-            elements_state,
-            water_state,
-            units_state,
-            excel_addins_state,
-            sim_state,
-            lca_standalone_project,
-            lca_state,
-            mb_standalone_project,
-            mb_state,
-            species_state,
+            module_state,
             launcher_ui_state: launcher_ui::LauncherUiState::default(),
+            published_balance: None,
+            db_warnings_dismissed: false,
+            last_formula_poll: None,
         }
     }
 }
 
 impl eframe::App for SoryntelDesktopApp {
-    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        match self.window_mode {
-            WindowMode::Reaction => {
-                let import_path = crate::ui_common::temp_file_path("soryntel_import_formula.txt");
-                if let Ok(imported) = std::fs::read_to_string(&import_path) {
-                    let f = imported.trim().to_string();
-                    if !f.is_empty() {
-                        self.reaction_state.formula_input = f;
-                        self.reaction_state.run_calculate(&*self.services.catalog());
+    fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
+        if self.window_mode == WindowMode::Balance {
+            module_link::ModuleLink::in_temp_dir().clear_presence(std::process::id());
+        }
+    }
+
+    fn ui(&mut self, root_ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        let ctx = &root_ui.ctx().clone();
+        self.show_database_warnings(root_ui);
+        match &mut self.module_state {
+            ModuleState::Reaction(state) => {
+                // Fórmulas enviadas desde Species: sondeo cada 500 ms, no en cada frame.
+                ctx.request_repaint_after(std::time::Duration::from_millis(500));
+                let due = self
+                    .last_formula_poll
+                    .is_none_or(|t| t.elapsed() >= std::time::Duration::from_millis(500));
+                if due {
+                    self.last_formula_poll = Some(std::time::Instant::now());
+                    if let Some(formula) = module_link::ModuleLink::in_temp_dir().take_formula() {
+                        state.formula_input = formula;
+                        state.run_calculate(&*self.services.catalog());
                     }
-                    let _ = std::fs::remove_file(&import_path);
                 }
-                self.reaction_state.ui(ctx, &*self.services.catalog());
-                if self.reaction_state.request_open_browser {
-                    self.reaction_state.request_open_browser = false;
+                state.ui(root_ui, &*self.services.catalog());
+                if state.request_open_browser {
+                    state.request_open_browser = false;
                     if !is_child_running(&mut self.child_browser) {
                         self.child_browser =
                             spawn_module_window("species", self.custom_db_arg.as_deref());
@@ -582,140 +687,188 @@ impl eframe::App for SoryntelDesktopApp {
                 }
                 return;
             }
-            WindowMode::Balance => {
-                let export_path = crate::ui_common::temp_file_path("soryntel_heat_loss_export.txt");
-                if let Ok(content) = std::fs::read_to_string(&export_path) {
-                    let parts: Vec<&str> = content.split_whitespace().collect();
-                    if parts.len() == 2 {
-                        if let (Ok(area), Ok(q_w)) =
-                            (parts[0].parse::<usize>(), parts[1].parse::<f64>())
-                        {
-                            self.services.with_catalog(|catalog| {
-                                self.balance_state.set_area_heat_loss_w(area, q_w, catalog)
-                            });
+            ModuleState::Balance(state) => {
+                // Sondeo periódico del envío de Heat Loss aunque no haya eventos de entrada.
+                ctx.request_repaint_after(std::time::Duration::from_millis(500));
+                let link = module_link::ModuleLink::in_temp_dir();
+                if let Some(received) = link.take_heat_loss() {
+                    match received {
+                        Ok((area, q_w)) => self.services.with_catalog(|catalog| {
+                            state.set_area_heat_loss_w(area, q_w, catalog)
+                        }),
+                        Err(e) => {
+                            state.status_msg = e;
+                            state.status_ok = false;
                         }
                     }
-                    let _ = std::fs::remove_file(&export_path);
+                    let _ = link.write_ack(state.status_ok, &state.status_msg);
                 }
                 self.services
-                    .with_catalog(|catalog| self.balance_state.ui(ctx, catalog));
+                    .with_catalog(|catalog| state.ui(root_ui, catalog));
+                let areas = state.wb.areas.len();
+                let refresh = self.published_balance.is_none_or(|(previous, published)| {
+                    previous != areas || published.elapsed() >= std::time::Duration::from_secs(1)
+                });
+                if refresh && link.publish_presence(areas).is_ok() {
+                    self.published_balance = Some((areas, std::time::Instant::now()));
+                }
                 return;
             }
-            WindowMode::HeatLoss => {
-                let area_count = self.balance_state.wb.areas.len();
-                self.heat_loss_state.ui(ctx, area_count);
-                if let Some(q_w) = self.heat_loss_state.pending_export_w.take() {
-                    let target_area = self.heat_loss_state.export_target_area;
-                    let _ = crate::storage::write_atomic(
-                        crate::ui_common::temp_file_path("soryntel_heat_loss_export.txt"),
-                        format!("{target_area} {q_w}"),
+            ModuleState::HeatLoss(state) => {
+                ctx.request_repaint_after(std::time::Duration::from_millis(500));
+                let link = module_link::ModuleLink::in_temp_dir();
+                // Áreas del Balance abierto (otro proceso); 0 si no hay ninguno.
+                let open_balance_areas = link.balance_area_count();
+                state.ui(root_ui, open_balance_areas.unwrap_or(0));
+                if let Some(q_w) = state.pending_export_w.take() {
+                    let target_area = state.export_target_area;
+                    let (msg, ok) = heat_loss_send_outcome(
+                        || link.send_heat_loss(target_area, q_w).map_err(|e| e.to_string()),
+                        open_balance_areas,
+                        target_area,
                     );
-                    if !is_child_running(&mut self.child_balance) {
+                    if ok && open_balance_areas.is_none() && !is_child_running(&mut self.child_balance) {
                         self.child_balance =
                             spawn_module_window("balance", self.custom_db_arg.as_deref());
                     }
+                    state.status_msg = msg;
+                    state.status_ok = ok;
+                }
+                if let Some((ok, msg)) = link.take_ack() {
+                    state.status_msg = format!("Balance: {msg}");
+                    state.status_ok = ok;
                 }
                 return;
             }
-            WindowMode::Equilibrium => {
-                self.equilibrium_state.ui(ctx, &*self.services.catalog());
+            ModuleState::Equilibrium(state) => {
+                state.ui(root_ui, &*self.services.catalog());
                 return;
             }
-            WindowMode::Exergy => {
-                self.exergy_state.ui(ctx, &*self.services.catalog());
+            ModuleState::Exergy(state) => {
+                state.ui(root_ui, &*self.services.catalog());
                 return;
             }
-            WindowMode::Estimate => {
+            ModuleState::Estimate(state) => {
                 // Guard de escritura temporal: se suelta al terminar la sentencia.
-                self.estimate_state.ui(ctx, &mut *self.services.catalog_mut());
+                state.ui(root_ui, &mut *self.services.catalog_mut());
                 return;
             }
-            WindowMode::EhPh => {
-                self.ehph_state.ui(ctx, &*self.services.catalog());
+            ModuleState::EhPh(state) => {
+                state.ui(root_ui, &*self.services.catalog());
                 return;
             }
-            WindowMode::Diagrams => {
-                self.diagrams_state.ui(ctx, &*self.services.catalog());
+            ModuleState::Diagrams(state) => {
+                state.ui(root_ui, &*self.services.catalog());
                 return;
             }
-            WindowMode::PhaseStability => {
-                self.phase_stability_state
-                    .ui(ctx, &*self.services.catalog());
+            ModuleState::PhaseStability(state) => {
+                state
+                    .ui(root_ui, &*self.services.catalog());
                 return;
             }
-            WindowMode::SpeciesConverter => {
+            ModuleState::SpeciesConverter(state) => {
                 self.services
-                    .with_catalog(|catalog| self.species_converter_state.ui(ctx, catalog));
+                    .with_catalog(|catalog| state.ui(root_ui, catalog));
                 return;
             }
-            WindowMode::Benson => {
-                self.benson_state.ui(ctx, &mut *self.services.catalog_mut());
+            ModuleState::Benson(state) => {
+                state.ui(root_ui, &mut *self.services.catalog_mut());
                 return;
             }
-            WindowMode::Elements => {
+            ModuleState::Elements(state) => {
                 self.services
-                    .with_catalog(|catalog| self.elements_state.ui(ctx, catalog));
+                    .with_catalog(|catalog| state.ui(root_ui, catalog));
                 return;
             }
-            WindowMode::Water => {
-                self.water_state.ui(ctx, &*self.services.catalog());
+            ModuleState::Water(state) => {
+                state.ui(root_ui, &*self.services.catalog());
                 return;
             }
-            WindowMode::Units => {
-                self.units_state.ui(ctx);
+            ModuleState::Units(state) => {
+                state.ui(root_ui);
                 return;
             }
-            WindowMode::ExcelAddIns => {
-                self.excel_addins_state.ui(ctx, self.services.shared_catalog());
+            ModuleState::ExcelAddIns(state) => {
+                state.ui(root_ui, self.services.shared_catalog());
                 return;
             }
-            WindowMode::Aqua => {
-                self.aqua_state.ui(ctx, &*self.services.catalog());
+            ModuleState::Aqua(state) => {
+                state.ui(root_ui, &*self.services.catalog());
                 return;
             }
-            WindowMode::Sim => {
-                self.sim_state.ui(ctx);
+            ModuleState::Sim(state) => {
+                state.ui(root_ui);
                 return;
             }
-            WindowMode::Lca => {
-                lca_ui::render_standalone_lca_module(
-                    ctx,
-                    &mut self.lca_standalone_project,
-                    &mut self.lca_state,
+            ModuleState::Lca(project, state) => {
+                lca_ui::render_standalone_lca_module(root_ui,
+                    project,
+                    state,
                 );
                 return;
             }
-            WindowMode::MassBalance => {
-                mass_balance_ui::render_standalone_mb_module(
-                    ctx,
-                    &mut self.mb_standalone_project,
-                    &mut self.mb_state,
+            ModuleState::MassBalance(project, state) => {
+                mass_balance_ui::render_standalone_mb_module(root_ui,
+                    project,
+                    state,
                 );
                 return;
             }
-            WindowMode::Species => {
+            ModuleState::Species(state) => {
                 // El guard de escritura se suelta al terminar esta sentencia, antes de
                 // tomar el de lectura para recalcular la reacción.
-                let selected = self.species_state.ui(ctx, &mut *self.services.catalog_mut());
+                let selected = state.ui(root_ui, &mut *self.services.catalog_mut());
                 if let Some(f) = selected {
-                    let _ = crate::storage::write_atomic(
-                        crate::ui_common::temp_file_path("soryntel_import_formula.txt"),
-                        &f,
-                    );
-                    self.reaction_state.formula_input = f;
-                    self.reaction_state.run_calculate(&*self.services.catalog());
+                    match module_link::ModuleLink::in_temp_dir().send_formula(&f) {
+                        Ok(()) => {
+                            state.status_msg = format!(
+                                "«{f}» enviada a Reaction: se cargará si hay una ventana de Reaction abierta en los próximos {} s.",
+                                module_link::FORMULA_MAX_AGE_SECS
+                            );
+                            state.status_is_err = false;
+                        }
+                        Err(e) => {
+                            state.status_msg = format!("No se pudo enviar «{f}» a Reaction: {e}");
+                            state.status_is_err = true;
+                        }
+                    }
                 }
                 return;
             }
-            WindowMode::Launcher => {}
+            ModuleState::Launcher => {}
         }
 
-        self.show_launcher_ui(ctx);
+        self.show_launcher_ui(root_ui);
     }
 }
 
 impl SoryntelDesktopApp {
-    fn show_launcher_ui(&mut self, ctx: &egui::Context) {
+    /// Banner con los avisos de carga de SoryntelDB/MainDB/OwnDB (en Windows release no hay consola).
+    fn show_database_warnings(&mut self, root_ui: &mut egui::Ui) {
+        if self.db_warnings_dismissed || self.services.load_warnings().is_empty() {
+            return;
+        }
+        egui::Panel::top("db_load_warnings")
+            .frame(
+                egui::Frame::NONE
+                    .fill(egui::Color32::from_rgb(254, 243, 199))
+                    .inner_margin(egui::Margin::symmetric(10, 6)),
+            )
+            .show(root_ui, |ui| {
+                ui.horizontal_wrapped(|ui| {
+                    ui.label(egui::RichText::new("⚠ Bases de datos").strong().color(egui::Color32::from_rgb(146, 64, 14)));
+                    for warning in self.services.load_warnings() {
+                        ui.label(egui::RichText::new(warning).color(egui::Color32::from_rgb(120, 53, 15)));
+                    }
+                    if ui.small_button("Cerrar aviso").clicked() {
+                        self.db_warnings_dismissed = true;
+                    }
+                });
+            });
+    }
+
+    fn show_launcher_ui(&mut self, root_ui: &mut egui::Ui) {
+        let ctx = &root_ui.ctx().clone();
         // Poll child processes periodically while launcher is open
         ctx.request_repaint_after(std::time::Duration::from_millis(400));
         let running_reaction = is_child_running(&mut self.child_reaction);
@@ -765,13 +918,12 @@ impl SoryntelDesktopApp {
         .filter(|&b| b)
         .count();
 
-        launcher_ui::render_hsc10_header(
-            ctx,
+        launcher_ui::render_hsc10_header(root_ui,
             &mut self.launcher_ui_state,
             self.services.with_catalog(|catalog| CatalogUseCases::species_count(catalog)),
         );
         let footer_cmd =
-            launcher_ui::render_hsc10_footer(ctx, &mut self.launcher_ui_state, open_count);
+            launcher_ui::render_hsc10_footer(root_ui, &mut self.launcher_ui_state, open_count);
         match footer_cmd {
             launcher_ui::LauncherCommand::KillAll => self.kill_all_children(),
             launcher_ui::LauncherCommand::OpenModule(m) => self.launch_module_by_key(m),
@@ -810,8 +962,7 @@ impl SoryntelDesktopApp {
                 TileSpec { code: "?", label: crate::i18n::text("nav.050"), action: Act::Help, category: Cat::None, running: false },
                 TileSpec { code: "SUB", label: crate::i18n::text("window.020"), action: Act::SubMenu, category: Cat::None, running: false },
             ];
-            match launcher_ui::render_hsc10_grid_canvas(
-                ctx,
+            match launcher_ui::render_hsc10_grid_canvas(root_ui,
                 &mut self.launcher_ui_state,
                 &tiles,
                 self.services.with_catalog(|catalog| CatalogUseCases::species_count(catalog)),
@@ -846,10 +997,10 @@ impl SoryntelDesktopApp {
             mass_balance: running_mass_balance,
             browser: running_browser,
         };
-        self.show_cards_view(ctx, status_flags);
+        self.show_cards_view(root_ui, status_flags);
     }
 
-    fn show_cards_view(&mut self, ctx: &egui::Context, flags: ModuleRunningFlags) {
+    fn show_cards_view(&mut self, root_ui: &mut egui::Ui, flags: ModuleRunningFlags) {
         use launcher_ui::ShowcaseCategory as Cat;
 
         struct ModuleCardSpec {
@@ -918,7 +1069,7 @@ impl SoryntelDesktopApp {
                 num: "06",
                 code: "Est",
                 title: crate::i18n::text("window.021"),
-                desc: "Estimación de H, S, Cp, ΔG (Neumann-Kopp, Latimer, Benson), paridad vs Maindb6 y ajuste Kelley.",
+                desc: "Estimación de H, S, Cp, ΔG (Neumann-Kopp, Latimer, Benson), paridad vs catálogo principal y ajuste Kelley.",
                 accent: egui::Color32::from_rgb(14, 116, 144),
                 mode_arg: "estimate",
                 category: Cat::ResearchDev,
@@ -1008,7 +1159,7 @@ impl SoryntelDesktopApp {
                 num: "15",
                 code: "Dat",
                 title: crate::i18n::text("window.023"),
-                desc: "83 funciones HSC6/HSC10 + Mineralogía, StreamEQ matricial, exportador .xlsx/.ods/ONLYOFFICE y puente HTTP.",
+                desc: "83 funciones + Mineralogía, StreamEQ matricial, exportador .xlsx/.ods/ONLYOFFICE y puente HTTP.",
                 accent: egui::Color32::from_rgb(33, 115, 70),
                 mode_arg: "excel_addins",
                 category: Cat::Services,
@@ -1018,7 +1169,7 @@ impl SoryntelDesktopApp {
                 num: "16",
                 code: "DB",
                 title: crate::i18n::text("window.024"),
-                desc: "Búsqueda estequiométrica y orgánica (OwnDB > Maindb6), Editor OwnDB, Fit Cp, Convert Cp y G(T) -> H,S,Cp.",
+                desc: "Búsqueda estequiométrica y orgánica (OwnDB > catálogo principal), Editor OwnDB, Fit Cp, Convert Cp y G(T) -> H,S,Cp.",
                 accent: egui::Color32::from_rgb(51, 65, 85),
                 mode_arg: "species",
                 category: Cat::ResearchDev,
@@ -1067,7 +1218,7 @@ impl SoryntelDesktopApp {
             ModuleCardSpec {
                 num: "GEO",
                 code: "Geo",
-                title: "Mineral Database (HSC Geo)",
+                title: "Mineral Database (Mineralogía)",
                 desc: "Catálogo de 3,812 minerales y funciones MineralCode/Name/Formula/Density integradas con Excel Add-Ins y Mas.",
                 accent: egui::Color32::from_rgb(101, 163, 13),
                 mode_arg: "excel_addins",
@@ -1082,11 +1233,11 @@ impl SoryntelDesktopApp {
 
         egui::CentralPanel::default()
             .frame(
-                egui::Frame::none()
+                egui::Frame::NONE
                     .fill(egui::Color32::from_rgb(244, 246, 249))
-                    .inner_margin(egui::Margin::symmetric(16.0, 12.0)),
+                    .inner_margin(egui::Margin::symmetric(16, 12)),
             )
-            .show(ctx, |ui| {
+            .show(root_ui, |ui| {
                 // Header + Filters Bar
                 ui.horizontal_wrapped(|ui| {
                     ui.label(
@@ -1095,10 +1246,10 @@ impl SoryntelDesktopApp {
                             .size(14.5)
                             .color(egui::Color32::from_rgb(15, 23, 42)),
                     );
-                    egui::Frame::none()
+                    egui::Frame::NONE
                         .fill(egui::Color32::from_rgb(219, 234, 254))
-                        .rounding(10.0)
-                        .inner_margin(egui::Margin::symmetric(8.0, 2.0))
+                        .corner_radius(10)
+                        .inner_margin(egui::Margin::symmetric(8, 2))
                         .show(ui, |ui| {
                             ui.label(
                                 egui::RichText::new("20 módulos + Geo")
@@ -1109,7 +1260,7 @@ impl SoryntelDesktopApp {
                         });
                     ui.label(
                         egui::RichText::new(
-                            "Cada módulo se abre en una ventana independiente (paridad HSC 10 Grid)",
+                            "Cada módulo se abre en una ventana independiente.",
                         )
                         .size(11.5)
                         .color(egui::Color32::from_rgb(100, 116, 139)),
@@ -1226,14 +1377,14 @@ impl SoryntelDesktopApp {
                                         } else {
                                             egui::Color32::from_rgb(214, 219, 226)
                                         };
-                                        egui::Frame::none()
+                                        egui::Frame::NONE
                                             .fill(egui::Color32::WHITE)
                                             .stroke(egui::Stroke::new(
                                                 if is_open { 1.6 } else { 1.0 },
                                                 border_color,
                                             ))
-                                            .rounding(8.0)
-                                            .inner_margin(egui::Margin::same(11.0))
+                                            .corner_radius(8)
+                                            .inner_margin(egui::Margin::same(11))
                                             .show(ui, |ui| {
                                                 ui.set_min_height(132.0);
                                                 ui.horizontal(|ui| {
@@ -1242,11 +1393,11 @@ impl SoryntelDesktopApp {
                                                     } else {
                                                         format!("MÓDULO {}", card.num)
                                                     };
-                                                    egui::Frame::none()
+                                                    egui::Frame::NONE
                                                         .fill(card.accent)
-                                                        .rounding(5.0)
+                                                        .corner_radius(5)
                                                         .inner_margin(egui::Margin::symmetric(
-                                                            7.0, 2.5,
+                                                            7, 3,
                                                         ))
                                                         .show(ui, |ui| {
                                                             ui.label(
@@ -1256,11 +1407,11 @@ impl SoryntelDesktopApp {
                                                                     .color(egui::Color32::WHITE),
                                                             );
                                                         });
-                                                    egui::Frame::none()
+                                                    egui::Frame::NONE
                                                         .fill(egui::Color32::from_rgb(241, 245, 249))
-                                                        .rounding(4.0)
+                                                        .corner_radius(4)
                                                         .inner_margin(egui::Margin::symmetric(
-                                                            6.0, 2.0,
+                                                            6, 2,
                                                         ))
                                                         .show(ui, |ui| {
                                                             ui.label(
@@ -1273,13 +1424,13 @@ impl SoryntelDesktopApp {
                                                             );
                                                         });
                                                     if card.is_new {
-                                                        egui::Frame::none()
+                                                        egui::Frame::NONE
                                                             .fill(egui::Color32::from_rgb(
                                                                 254, 243, 199,
                                                             ))
-                                                            .rounding(10.0)
+                                                            .corner_radius(10)
                                                             .inner_margin(egui::Margin::symmetric(
-                                                                6.0, 2.0,
+                                                                6, 2,
                                                             ))
                                                             .show(ui, |ui| {
                                                                 ui.label(
@@ -1300,14 +1451,14 @@ impl SoryntelDesktopApp {
                                                         ),
                                                         |ui| {
                                                             if is_open {
-                                                                egui::Frame::none()
+                                                                egui::Frame::NONE
                                                                     .fill(egui::Color32::from_rgb(
                                                                         220, 252, 231,
                                                                     ))
-                                                                    .rounding(10.0)
+                                                                    .corner_radius(10)
                                                                     .inner_margin(
                                                                         egui::Margin::symmetric(
-                                                                            7.0, 2.0,
+                                                                            7, 2,
                                                                         ),
                                                                     )
                                                                     .show(ui, |ui| {
@@ -1338,7 +1489,7 @@ impl SoryntelDesktopApp {
                                                 ui.add_space(3.0);
                                                 let desc_txt = if card.mode_arg == "species" {
                                                     format!(
-                                                        "{species_count} especies (OwnDB > Maindb6): Búsqueda estequiométrica/orgánica, Editor OwnDB, Fit/Convert Cp y G(T)."
+                                                        "{species_count} especies (OwnDB > catálogo principal): Búsqueda estequiométrica/orgánica, Editor OwnDB, Fit/Convert Cp y G(T)."
                                                     )
                                                 } else {
                                                     card.desc.to_string()
@@ -1366,7 +1517,7 @@ impl SoryntelDesktopApp {
                                                                     .color(egui::Color32::WHITE),
                                                             )
                                                             .fill(card.accent)
-                                                            .rounding(5.0),
+                                                            .corner_radius(5),
                                                         )
                                                         .clicked()
                                                     {
@@ -1387,7 +1538,7 @@ impl SoryntelDesktopApp {
                                                                 .fill(egui::Color32::from_rgb(
                                                                     241, 245, 249,
                                                                 ))
-                                                                .rounding(5.0),
+                                                                .corner_radius(5),
                                                             )
                                                             .clicked()
                                                     {
@@ -1417,14 +1568,14 @@ impl SoryntelDesktopApp {
                                 .color(egui::Color32::from_rgb(71, 85, 105)),
                         );
                         ui.add_space(5.0);
-                        egui::Frame::none()
+                        egui::Frame::NONE
                             .fill(egui::Color32::WHITE)
                             .stroke(egui::Stroke::new(
                                 1.0,
                                 egui::Color32::from_rgb(214, 219, 226),
                             ))
-                            .rounding(8.0)
-                            .inner_margin(egui::Margin::symmetric(12.0, 9.0))
+                            .corner_radius(8)
+                            .inner_margin(egui::Margin::symmetric(12, 9))
                             .show(ui, |ui| {
                                 ui.horizontal_wrapped(|ui| {
                                     ui.vertical(|ui| {
@@ -1438,7 +1589,7 @@ impl SoryntelDesktopApp {
                                         );
                                         ui.label(
                                             egui::RichText::new(format!(
-                                                "{species_count} especies activas (OwnDB > Maindb6) · 3,812 minerales HSC Geo · 83 funciones Excel.",
+                                                "{species_count} especies activas (OwnDB > catálogo principal) · 3,812 minerales Mineralogía · 83 funciones Excel.",
                                             ))
                                             .size(11.2)
                                             .color(egui::Color32::from_rgb(100, 116, 139)),
@@ -1461,7 +1612,7 @@ impl SoryntelDesktopApp {
                                                             .color(egui::Color32::WHITE),
                                                     )
                                                     .fill(egui::Color32::from_rgb(51, 65, 85))
-                                                    .rounding(5.0),
+                                                    .corner_radius(5),
                                                 )
                                                 .clicked()
                                             {
@@ -1475,13 +1626,15 @@ impl SoryntelDesktopApp {
                     });
             });
 
-        if let Some((mode_arg, should_kill)) = pending_action {
+        if let Some(("balance", true)) = pending_action {
+            self.close_balance();
+        } else if let Some((mode_arg, should_kill)) = pending_action {
             let custom = self.custom_db_arg.clone();
             if let Some(slot) = self.module_slot_mut(mode_arg) {
                 if should_kill {
                     kill_child(slot);
                 } else {
-                    *slot = spawn_module_window(mode_arg, custom.as_deref());
+                    launch_into_slot(slot, || spawn_module_window(mode_arg, custom.as_deref()));
                 }
             }
         }
@@ -1516,14 +1669,22 @@ impl SoryntelDesktopApp {
     fn launch_module_by_key(&mut self, mode_arg: &str) {
         let custom = self.custom_db_arg.clone();
         if let Some(slot) = self.module_slot_mut(mode_arg) {
-            *slot = spawn_module_window(mode_arg, custom.as_deref());
+            launch_into_slot(slot, || spawn_module_window(mode_arg, custom.as_deref()));
+        }
+    }
+
+    fn close_balance(&mut self) {
+        let process_id = self.child_balance.as_ref().map(std::process::Child::id);
+        kill_child(&mut self.child_balance);
+        if let Some(process_id) = process_id {
+            module_link::ModuleLink::in_temp_dir().clear_presence(process_id);
         }
     }
 
     fn kill_all_children(&mut self) {
+        self.close_balance();
         for slot in [
             &mut self.child_reaction,
-            &mut self.child_balance,
             &mut self.child_heat_loss,
             &mut self.child_equilibrium,
             &mut self.child_exergy,
@@ -1552,6 +1713,61 @@ impl SoryntelDesktopApp {
 mod tests {
     use super::*;
 
+    #[cfg(unix)]
+    #[test]
+    fn launching_a_running_module_keeps_the_tracked_child() {
+        let spawn = || std::process::Command::new("sleep").arg("30").spawn().ok();
+        let mut slot = None;
+        assert!(launch_into_slot(&mut slot, spawn));
+        let first = slot.as_ref().unwrap().id();
+        let mut spawned_again = false;
+        assert!(!launch_into_slot(&mut slot, || {
+            spawned_again = true;
+            spawn()
+        }));
+        assert!(!spawned_again, "no se lanza un segundo proceso del mismo módulo");
+        assert_eq!(slot.as_ref().unwrap().id(), first);
+        kill_child(&mut slot);
+        assert!(slot.is_none());
+        // Tras cerrarse, el módulo puede volver a abrirse.
+        assert!(launch_into_slot(&mut slot, spawn));
+        kill_child(&mut slot);
+    }
+
+    #[test]
+    fn cli_rejects_unknown_module_and_missing_values() {
+        let args = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        let ok = parse_cli_args(&args(&["--module", "geo", "--hsc-db", "/db ñ/Maindb6.HSC"])).unwrap();
+        assert!(ok.window_mode == WindowMode::ExcelAddIns);
+        assert_eq!(ok.custom_db.as_deref(), Some("/db ñ/Maindb6.HSC"));
+        assert!(parse_cli_args(&args(&["--module=balance"])).unwrap().window_mode == WindowMode::Balance);
+        let err = parse_cli_args(&args(&["--module", "equilibirum"])).err().unwrap();
+        assert!(err.contains("equilibirum") && err.contains("equilibrium"), "{err}");
+        assert!(parse_cli_args(&args(&["--module"])).is_err());
+        assert!(parse_cli_args(&args(&["--hsc-db"])).is_err());
+        assert!(parse_cli_args(&args(&["--hsc-db", "--module", "reaction"])).is_err());
+        assert!(parse_cli_args(&args(&[])).unwrap().window_mode == WindowMode::Launcher);
+        // Cada módulo que el launcher puede abrir se acepta en --module.
+        for m in ["reaction", "balance", "heatloss", "equilibrium", "exergy", "estimate", "ehph", "diagrams",
+                  "phase_stability", "species_converter", "benson", "elements", "water", "units",
+                  "excel_addins", "aqua", "sim", "lca", "mass_balance", "species"] {
+            assert!(parse_cli_args(&args(&["--module", m])).is_ok(), "{m}");
+        }
+    }
+
+    #[test]
+    fn heat_loss_send_checks_target_area_before_sending() {
+        let mut sent = false;
+        let (msg, ok) = heat_loss_send_outcome(|| { sent = true; Ok(()) }, Some(1), 2);
+        assert!(!ok && !sent && msg.contains("Area 3"), "{msg}");
+        let (_, ok) = heat_loss_send_outcome(|| Ok(()), Some(3), 2);
+        assert!(ok);
+        let (msg, ok) = heat_loss_send_outcome(|| Err("disco lleno".into()), None, 0);
+        assert!(!ok && msg.contains("disco lleno"));
+        let (msg, ok) = heat_loss_send_outcome(|| Ok(()), None, 0);
+        assert!(ok && msg.contains("No había ningún Balance"));
+    }
+
     fn collect_rendered_texts(
         app: &mut SoryntelDesktopApp,
         size: [f32; 2],
@@ -1572,6 +1788,8 @@ mod tests {
             let mut input = raw_input.clone();
             if pass >= 1 && pass <= scroll_passes {
                 input.events.push(egui::Event::MouseWheel {
+                    phase: egui::TouchPhase::Move,
+                    source: egui::MouseWheelSource::Unknown,
                     unit: egui::MouseWheelUnit::Point,
                     delta: egui::vec2(0.0, -300.0),
                     modifiers: egui::Modifiers::NONE,
@@ -1580,8 +1798,8 @@ mod tests {
                     .events
                     .push(egui::Event::PointerMoved(egui::pos2(500.0, 300.0)));
             }
-            let full_output = ctx.run(input, |ctx| {
-                app.show_launcher_ui(ctx);
+            let full_output = crate::ui_common::run_test_frame(&ctx, input, |root_ui| {
+                app.show_launcher_ui(root_ui);
             });
             if pass == total - 1 {
                 fn visit(shape: &egui::epaint::Shape, out: &mut Vec<String>) {

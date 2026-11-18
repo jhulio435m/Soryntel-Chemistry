@@ -8,6 +8,7 @@ use soryntel_application::models::species_converter::{
     ConversionMethod, ConverterInputEntry, ConverterOutputSpec, SpeciesConverterRequest,
     SpeciesConverterResult, SpeciesTypeFilter,
 };
+use crate::ui_common::{parse_user_number, NumberFields};
 use crate::excel_grid::{
     header_cell, row_num_cell, section_cell, text_cell, EXCEL_ALT_ROW_BG, EXCEL_GRID_BORDER,
     EXCEL_READONLY_BG,
@@ -173,6 +174,8 @@ pub struct SpeciesConverterModuleState {
     show_charts: bool,
     show_element_balance: bool,
     status_msg: Option<String>,
+    /// Archivo del libro abierto o guardado por última vez.
+    workbook_path: Option<std::path::PathBuf>,
 }
 
 impl SpeciesConverterModuleState {
@@ -193,19 +196,23 @@ impl SpeciesConverterModuleState {
             show_charts: true,
             show_element_balance: false,
             status_msg: None,
+            workbook_path: None,
         };
         s.solve_active(catalog);
         s
     }
 
-    fn build_request(&self, sheet: &ConverterSheet) -> SpeciesConverterRequest {
+    /// Construye la petición del solver. Falla si algún campo numérico no es válido: nunca
+    /// se sustituye un texto erróneo por un valor por defecto.
+    fn build_request(&self, sheet: &ConverterSheet) -> Result<SpeciesConverterRequest, String> {
+        let fields = NumberFields::default();
         let inputs = sheet
             .inputs
             .iter()
             .filter(|r| !r.formula.trim().is_empty())
             .map(|r| ConverterInputEntry {
                 formula: r.formula.trim().to_string(),
-                wt_pct: r.wt_pct_str.trim().parse::<f64>().unwrap_or(0.0),
+                wt_pct: fields.or(&r.wt_pct_str, 0.0),
             })
             .collect();
 
@@ -218,25 +225,26 @@ impl SpeciesConverterModuleState {
                 target_wt_pct: if r.target_str.trim().is_empty() {
                     None
                 } else {
-                    r.target_str.trim().parse::<f64>().ok()
+                    Some(fields.req(&r.target_str))
                 },
-                weight_coeff: r.weight_str.trim().parse::<f64>().unwrap_or(1.0),
+                weight_coeff: fields.or(&r.weight_str, 1.0),
             })
             .collect();
 
-        SpeciesConverterRequest {
+        let req = SpeciesConverterRequest {
             inputs,
             outputs,
             method: self.method,
             exact_o: self.exact_o,
             exact_h: self.exact_h,
             set_norm_limit: self.set_norm_limit,
-            norm_limit: self.norm_limit_str.trim().parse::<f64>().unwrap_or(0.0001),
-            small_meas_limit: self.small_meas_limit_str.trim().parse::<f64>().unwrap_or(0.5),
-            element_balance_limit_pct: self.element_limit_str.trim().parse::<f64>().unwrap_or(99.0),
+            norm_limit: fields.or(&self.norm_limit_str, 0.0001),
+            small_meas_limit: fields.or(&self.small_meas_limit_str, 0.5),
+            element_balance_limit_pct: fields.or(&self.element_limit_str, 99.0),
             stability_type: self.stability_type,
-            stability_weighting_coef: self.stability_coef_str.trim().parse::<f64>().unwrap_or(80.0),
-        }
+            stability_weighting_coef: fields.or(&self.stability_coef_str, 80.0),
+        };
+        fields.check().map(|_| req)
     }
 
     fn initialize_active(&mut self) {
@@ -247,7 +255,13 @@ impl SpeciesConverterModuleState {
         if sheet.is_summary {
             return;
         }
-        let req = self.build_request(sheet);
+        let req = match self.build_request(sheet) {
+            Ok(req) => req,
+            Err(e) => {
+                self.status_msg = Some(e);
+                return;
+            }
+        };
         match MiscUseCases::initialize_species_converter(&req.inputs) {
             Ok((calc_elems, in_tot)) => {
                 let sheet = &mut self.sheets[self.active_sheet];
@@ -275,7 +289,13 @@ impl SpeciesConverterModuleState {
         if sheet.is_summary {
             return;
         }
-        let req = self.build_request(sheet);
+        let req = match self.build_request(sheet) {
+            Ok(req) => req,
+            Err(e) => {
+                self.status_msg = Some(e);
+                return;
+            }
+        };
         match MiscUseCases::convert_species(catalog, &req) {
             Ok(res) => {
                 self.sheets[self.active_sheet].result = Some(res);
@@ -292,7 +312,13 @@ impl SpeciesConverterModuleState {
         if sheet.is_summary {
             return;
         }
-        let req = self.build_request(sheet);
+        let req = match self.build_request(sheet) {
+            Ok(req) => req,
+            Err(e) => {
+                self.status_msg = Some(e);
+                return;
+            }
+        };
         let mut outs = req.outputs.clone();
         if let Err(e) = MiscUseCases::fix_species_balance(&req.inputs, &mut outs) {
             self.status_msg = Some(e.to_string());
@@ -310,28 +336,58 @@ impl SpeciesConverterModuleState {
         self.solve_active(catalog);
     }
 
+    /// Guarda el libro donde elija el usuario (diálogo nativo, con confirmación al sobrescribir).
     fn save_workbook(&mut self) {
-        let path = "/home/nando/.gemini/antigravity/scratch/species_converter_workbook.json";
-        if let Some(parent) = std::path::Path::new(path).parent() {
-            let _ = std::fs::create_dir_all(parent);
+        let suggested = self
+            .workbook_path
+            .as_ref()
+            .and_then(|p| p.file_name())
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "species_converter.json".into());
+        if let Some(path) = crate::storage::choose_file(
+            true,
+            "Guardar libro de Species Converter",
+            "json",
+            &suggested,
+            self.workbook_path.as_deref(),
+        ) {
+            self.save_workbook_to(&path);
         }
+    }
+
+    fn open_workbook(&mut self) {
+        if let Some(path) = crate::storage::choose_file(
+            false,
+            "Abrir libro de Species Converter",
+            "json",
+            "",
+            self.workbook_path.as_deref(),
+        ) {
+            self.open_workbook_from(&path);
+        }
+    }
+
+    fn save_workbook_to(&mut self, path: &std::path::Path) {
         match serde_json::to_string_pretty(&self.sheets) {
             Ok(json) => match crate::storage::write_atomic(path, json) {
-                Ok(_) => self.status_msg = Some(format!("Saved workbook to {path}")),
+                Ok(_) => {
+                    self.workbook_path = Some(path.to_path_buf());
+                    self.status_msg = Some(format!("Saved workbook to {}", path.display()));
+                }
                 Err(e) => self.status_msg = Some(format!("Save error: {e}")),
             },
             Err(e) => self.status_msg = Some(format!("Serialize error: {e}")),
         }
     }
 
-    fn open_workbook(&mut self) {
-        let path = "/home/nando/.gemini/antigravity/scratch/species_converter_workbook.json";
+    fn open_workbook_from(&mut self, path: &std::path::Path) {
         match std::fs::read_to_string(path) {
             Ok(json) => match serde_json::from_str::<Vec<ConverterSheet>>(&json) {
                 Ok(loaded) if !loaded.is_empty() => {
                     self.sheets = loaded;
                     self.active_sheet = 0;
-                    self.status_msg = Some(format!("Loaded workbook from {path}"));
+                    self.workbook_path = Some(path.to_path_buf());
+                    self.status_msg = Some(format!("Loaded workbook from {}", path.display()));
                 }
                 Ok(_) => self.status_msg = Some("Workbook file is empty.".into()),
                 Err(e) => self.status_msg = Some(format!("Parse error: {e}")),
@@ -340,26 +396,27 @@ impl SpeciesConverterModuleState {
         }
     }
 
-    pub fn ui(&mut self, ctx: &egui::Context, catalog: &dyn SpeciesCatalogPort) {
+    pub fn ui(&mut self, root_ui: &mut egui::Ui, catalog: &dyn SpeciesCatalogPort) {
+        let ctx = &root_ui.ctx().clone();
         // Top Ribbon Bar (Home / Tools)
-        egui::TopBottomPanel::top("sc_ribbon")
+        egui::Panel::top("sc_ribbon")
             .frame(
-                egui::Frame::none()
+                egui::Frame::NONE
                     .fill(egui::Color32::from_rgb(241, 244, 249))
                     .stroke(egui::Stroke::new(1.0, EXCEL_GRID_BORDER))
-                    .inner_margin(egui::Margin::symmetric(8.0, 4.0)),
+                    .inner_margin(egui::Margin::symmetric(8, 4)),
             )
-            .show(ctx, |ui| {
+            .show(root_ui, |ui| {
                 self.render_ribbon(ui, catalog);
             });
 
         // Right Charts Panel (dockable & resizable)
         if self.show_charts {
-            egui::SidePanel::right("sc_charts_panel")
+            egui::Panel::right("sc_charts_panel")
                 .resizable(true)
-                .default_width(270.0)
-                .min_width(190.0)
-                .show(ctx, |ui| {
+                .default_size(270.0)
+                .min_size(190.0)
+                .show(root_ui, |ui| {
                     egui::ScrollArea::both()
                         .auto_shrink([false, false])
                         .show(ui, |ui| {
@@ -369,7 +426,7 @@ impl SpeciesConverterModuleState {
         }
 
         // Main Central Spreadsheet + Sheet Tabs
-        egui::CentralPanel::default().show(ctx, |ui| {
+        egui::CentralPanel::default().show(root_ui, |ui| {
             self.render_central_sheet(ui, catalog);
         });
 
@@ -695,7 +752,7 @@ impl SpeciesConverterModuleState {
                 sheet
                     .inputs
                     .iter()
-                    .map(|r| r.wt_pct_str.trim().parse::<f64>().unwrap_or(0.0))
+                    .map(|r| parse_user_number(&r.wt_pct_str).unwrap_or(0.0))
                     .sum()
             });
         let calc_in_total = result_clone
@@ -725,7 +782,7 @@ impl SpeciesConverterModuleState {
         let mut remove_in: Option<usize> = None;
         let mut remove_out: Option<usize> = None;
 
-        egui::Frame::none()
+        egui::Frame::NONE
             .fill(egui::Color32::WHITE)
             .stroke(egui::Stroke::new(1.0, EXCEL_GRID_BORDER))
             .show(ui, |ui| {
@@ -922,7 +979,7 @@ impl SpeciesConverterModuleState {
             .inputs
             .iter()
             .filter_map(|r| {
-                let v = r.wt_pct_str.trim().parse::<f64>().unwrap_or(0.0);
+                let v = parse_user_number(&r.wt_pct_str).unwrap_or(0.0);
                 if !r.formula.trim().is_empty() && v > 0.0 {
                     Some((r.formula.trim().to_string(), v))
                 } else {
@@ -933,7 +990,7 @@ impl SpeciesConverterModuleState {
         draw_pie_chart(ui, "Input analysis", &in_slices);
         ui.add_space(10.0);
 
-        let small_lim = self.small_meas_limit_str.trim().parse::<f64>().unwrap_or(0.5);
+        let small_lim = parse_user_number(&self.small_meas_limit_str).unwrap_or(0.5);
         let mut out_slices: Vec<(String, f64)> = Vec::new();
         let mut others = 0.0;
         if let Some(res) = &sheet.result {
@@ -967,7 +1024,7 @@ impl SpeciesConverterModuleState {
             return;
         };
 
-        let thresh = self.element_limit_str.trim().parse::<f64>().unwrap_or(99.0);
+        let thresh = parse_user_number(&self.element_limit_str).unwrap_or(99.0);
         egui::ScrollArea::both().show(ui, |ui| {
             egui::Grid::new("sc_elem_balance_grid")
                 .spacing([0.0, 0.0])
@@ -1064,5 +1121,47 @@ fn draw_pie_chart(ui: &mut egui::Ui, title: &str, slices: &[(String, f64)]) {
             egui::Color32::BLACK,
         );
         start_angle = end_angle;
+    }
+}
+
+#[cfg(test)]
+mod bug_repro_area_c {
+    //! Reproducciones de hallazgos del área C (soryntel/docs/bugs/area-c.md). Fallan hoy.
+    use super::*;
+    use soryntel_db::ThermoDatabase;
+
+    #[test]
+    fn comma_decimal_weight_percent_is_not_sent_as_zero() {
+        let db = ThermoDatabase::with_open_defaults();
+        let mut st = SpeciesConverterModuleState::new(&db);
+        let idx = st.sheets.iter().position(|s| !s.is_summary).expect("hoja de entrada");
+        st.sheets[idx].inputs[0].wt_pct_str = "12,5".into();
+        let req = st.build_request(&st.sheets[idx]).unwrap();
+        let sent = req.inputs[0].wt_pct;
+        assert!((sent - 12.5).abs() < 1e-9, "el usuario escribió 12,5 % y se envía {sent} %");
+        // Un texto no numérico se rechaza en lugar de enviarse como 0 %.
+        st.sheets[idx].inputs[0].wt_pct_str = "doce".into();
+        assert!(st.build_request(&st.sheets[idx]).is_err());
+        st.sheets[idx].outputs[0].weight_str = "x".into();
+        st.sheets[idx].inputs[0].wt_pct_str = "12,5".into();
+        assert!(st.build_request(&st.sheets[idx]).is_err());
+    }
+
+    #[test]
+    fn workbook_save_and_open_use_the_chosen_path() {
+        let db = ThermoDatabase::with_open_defaults();
+        let mut st = SpeciesConverterModuleState::new(&db);
+        let dir = std::env::temp_dir().join(format!("soryntel-c14-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("libro con espacios ñ.json");
+        st.save_workbook_to(&path);
+        assert!(path.is_file(), "{:?}", st.status_msg);
+        let n = st.sheets.len();
+        st.sheets.truncate(1);
+        st.open_workbook_from(&path);
+        assert_eq!(st.sheets.len(), n);
+        assert_eq!(st.workbook_path.as_deref(), Some(path.as_path()));
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(!include_str!("species_converter_ui.rs").contains(concat!("/home/", "nando")));
     }
 }

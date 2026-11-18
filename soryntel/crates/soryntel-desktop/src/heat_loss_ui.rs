@@ -181,7 +181,7 @@ impl HeatLossModuleState {
             material_db: HeatLossUseCases::default_material_database(),
             status_msg: "Listo (Hotwatertank.htr8 cargado).".into(),
             status_ok: true,
-            file_path_input: "Hotwatertank.htr8".into(),
+            file_path_input: String::new(),
             show_cond_picker: false,
             cond_search: String::new(),
             cond_selected_idx: 0,
@@ -298,6 +298,8 @@ impl HeatLossModuleState {
             Err(e) => {
                 self.status_msg = format!("Error: {e}");
                 self.status_ok = false;
+                // Sin resultados obsoletos: no se muestran ni se exportan los del estado anterior.
+                self.result = None;
             }
         }
     }
@@ -322,25 +324,77 @@ impl HeatLossModuleState {
     }
 
     pub fn load_htr8(&mut self, path: &str) {
-        match std::fs::read_to_string(path) {
-            Ok(raw) => match HeatLossUseCases::deserialize_htr8_workbook(&raw) {
-                Ok(wb) => {
-                    self.wb = wb;
-                    self.selected_col = 0;
-                    self.recalculate();
+        // Carga atómica: se valida y se resuelve el libro antes de sustituir el estado. Si
+        // algo falla, el libro y los resultados anteriores quedan intactos.
+        let loaded = std::fs::read_to_string(path)
+            .map_err(|e| format!("Error leyendo {path}: {e}"))
+            .and_then(|raw| HeatLossUseCases::deserialize_htr8_workbook(&raw))
+            .and_then(|mut wb| {
+                validate_heat_loss_workbook(&mut wb)?;
+                let res = HeatLossUseCases::solve_heat_loss_workbook(&wb)
+                    .map_err(|e| format!("El libro {path} no se puede calcular: {e}"))?;
+                Ok((wb, res))
+            });
+        match loaded {
+            Ok((wb, res)) => {
+                self.wb = wb;
+                self.result = Some(res);
+                self.reset_derived_state();
+                self.recalculate();
+                if self.status_ok {
                     self.status_msg = format!("📂 Cargado {path}");
-                    self.status_ok = true;
                 }
-                Err(e) => {
-                    self.status_msg = e;
-                    self.status_ok = false;
-                }
-            },
+            }
             Err(e) => {
-                self.status_msg = format!("Error leyendo {path}: {e}");
+                self.status_msg = e;
                 self.status_ok = false;
             }
         }
+    }
+
+    fn current_file(&self) -> Option<std::path::PathBuf> {
+        Some(std::path::PathBuf::from(&self.file_path_input)).filter(|p| p.is_absolute())
+    }
+
+    fn choose_and_open(&mut self) {
+        if let Some(path) = crate::storage::choose_file(false, "Abrir libro (.htr8)", "htr8", "", self.current_file().as_deref()) {
+            let p = path.to_string_lossy().into_owned();
+            self.load_htr8(&p);
+            if self.status_ok {
+                self.file_path_input = p;
+            }
+        }
+    }
+
+    /// Guardar como: siempre pasa por el diálogo nativo, que confirma la sobrescritura.
+    fn choose_and_save(&mut self) {
+        let suggested = crate::storage::suggested_file_name(&self.wb.title, "htr8");
+        if let Some(path) = crate::storage::choose_file(true, "Guardar libro (.htr8)", "htr8", &suggested, self.current_file().as_deref()) {
+            let p = path.to_string_lossy().into_owned();
+            self.save_htr8(&p);
+            if self.status_ok {
+                self.file_path_input = p;
+            }
+        }
+    }
+
+    fn choose_and_export(&mut self) {
+        let suggested = crate::storage::suggested_file_name(&self.wb.title, "xlsx");
+        if let Some(path) = crate::storage::choose_file(true, "Exportar a Excel", "xlsx", &suggested, self.current_file().as_deref()) {
+            self.export_xlsx(&path.to_string_lossy());
+        }
+    }
+
+    /// Reinicia el estado que depende del libro abierto (selección, diagramas y exportación).
+    fn reset_derived_state(&mut self) {
+        self.selected_col = 0;
+        self.profile_series.clear();
+        self.profile_total_w = 0.0;
+        self.sweep_points.clear();
+        self.opt_points.clear();
+        self.opt_best = None;
+        self.pending_export_w = None;
+        self.export_target_area = 0;
     }
 
     pub fn export_xlsx(&mut self, path: &str) {
@@ -359,79 +413,78 @@ impl HeatLossModuleState {
     }
 
     fn load_preset(&mut self, wb: HeatLossWorkbook) {
-        self.file_path_input = wb.title.clone();
+        // Un ejemplo no tiene archivo: Guardar pedirá destino (con el título como nombre).
+        self.file_path_input.clear();
         self.wb = wb;
-        self.selected_col = 0;
+        self.reset_derived_state();
         self.recalculate();
     }
 
-    pub fn ui(&mut self, ctx: &egui::Context, balance_area_count: usize) {
+    pub fn ui(&mut self, root_ui: &mut egui::Ui, balance_area_count: usize) {
+        let ctx = &root_ui.ctx().clone();
         let yellow_bg = egui::Color32::from_rgb(254, 249, 195);
         let red_fix = egui::Color32::from_rgb(185, 28, 28);
 
         // Top HSC Menu Bar + Quick Icon Toolbar (Figs. 1, 2, 4)
-        egui::TopBottomPanel::top("hl_menu_bar").show(ctx, |ui| {
-            egui::menu::bar(ui, |ui| {
+        egui::Panel::top("hl_menu_bar").show(root_ui, |ui| {
+            ui.horizontal_wrapped(|ui| {
                 ui.menu_button(crate::i18n::text("common.020"), |ui| {
                     if ui.button(crate::i18n::text("review.140")).clicked() {
-                        let p = self.file_path_input.clone();
-                        self.load_htr8(&p);
-                        ui.close_menu();
+                        self.choose_and_open();
+                        ui.close_kind(egui::UiKind::Menu);
                     }
                     if ui.button(crate::i18n::text("review.141")).clicked() {
-                        let p = self.file_path_input.clone();
-                        self.save_htr8(&p);
-                        ui.close_menu();
+                        self.choose_and_save();
+                        ui.close_kind(egui::UiKind::Menu);
                     }
                     if ui.button(crate::i18n::text("review.142")).clicked() {
-                        let p = format!("{}.xlsx", self.file_path_input.trim_end_matches(".htr8"));
-                        self.export_xlsx(&p);
-                        ui.close_menu();
+                        self.choose_and_export();
+                        ui.close_kind(egui::UiKind::Menu);
                     }
                     ui.separator();
-                    ui.label(egui::RichText::new("HSC Examples (Ch. 12.2.1)").strong().small());
+                    ui.label(egui::RichText::new("Examples (Ch. 12.2.1)").strong().small());
                     if ui.button("🔥 Smelting1.htr8 (Fig. 1 — 1200/1400/1600°C)").clicked() {
                         self.load_preset(HeatLossUseCases::preset(HeatLossPreset::Smelting1));
-                        ui.close_menu();
+                        ui.close_kind(egui::UiKind::Menu);
                     }
                     if ui.button("🔥 Radiator.htr8 (Fig. 2 — 40/50/60°C)").clicked() {
                         self.load_preset(HeatLossUseCases::preset(HeatLossPreset::Radiator));
-                        ui.close_menu();
+                        ui.close_kind(egui::UiKind::Menu);
                     }
                     if ui.button("💧 Hotwatertank.htr8 (Fig. 4 — 1.378 kW)").clicked() {
                         self.load_preset(HeatLossUseCases::preset(HeatLossPreset::HotWaterTank));
-                        ui.close_menu();
+                        ui.close_kind(egui::UiKind::Menu);
                     }
                     if ui.button("📦 SimpleCase.htr8 (735 W)").clicked() {
                         self.load_preset(HeatLossUseCases::preset(HeatLossPreset::SimpleCase));
-                        ui.close_menu();
+                        ui.close_kind(egui::UiKind::Menu);
                     }
                     if ui.button("🏭 OilFurnace.htr8 (Internal Gas Radiation)").clicked() {
                         self.load_preset(HeatLossUseCases::preset(HeatLossPreset::OilFurnace));
-                        ui.close_menu();
+                        ui.close_kind(egui::UiKind::Menu);
                     }
                 });
                 ui.menu_button(crate::i18n::text("common.021"), |ui| {
                     if ui.button(crate::i18n::text("review.143")).clicked() {
                         self.recalculate();
-                        ui.close_menu();
+                        ui.close_kind(egui::UiKind::Menu);
                     }
                     ui.separator();
                     if ui.button("📦 Conduction Database (HeatCond.XLS)...").clicked() {
                         self.show_cond_picker = true;
-                        ui.close_menu();
+                        ui.close_kind(egui::UiKind::Menu);
                     }
                     if ui.button("💨 Convection Database (HeatConv.XLS)...").clicked() {
                         self.show_conv_calc = true;
-                        ui.close_menu();
+                        ui.close_kind(egui::UiKind::Menu);
                     }
                     if ui.button("☀ Radiation Database (HeatRadi.XLS)...").clicked() {
                         self.show_rad_picker = true;
-                        ui.close_menu();
+                        ui.close_kind(egui::UiKind::Menu);
                     }
                     if ui.button("🗄 Material Database (Ch. 90)...").clicked() {
                         self.show_material_db = true;
-                        ui.close_menu();
+                        ui.close_kind(egui::UiKind::Menu);
                     }
                 });
                 ui.menu_button(crate::i18n::text("common.039"), |ui| {
@@ -442,32 +495,32 @@ impl HeatLossModuleState {
                         )
                         .changed()
                     {
-                        ui.close_menu();
+                        ui.close_kind(egui::UiKind::Menu);
                     }
                     ui.separator();
                     if ui.button("📦 Conduction Database (Fig. 5)...").clicked() {
                         self.show_cond_picker = true;
-                        ui.close_menu();
+                        ui.close_kind(egui::UiKind::Menu);
                     }
                     if ui.button("💨 Convection Calculator (Figs. 6-7)...").clicked() {
                         self.show_conv_calc = true;
-                        ui.close_menu();
+                        ui.close_kind(egui::UiKind::Menu);
                     }
                     if ui.button("☀ Surface Radiation (Fig. 8)...").clicked() {
                         self.show_rad_picker = true;
-                        ui.close_menu();
+                        ui.close_kind(egui::UiKind::Menu);
                     }
                     if ui.button("💨 Gas Mixture Radiation (Fig. 9)...").clicked() {
                         self.show_gas_rad = true;
-                        ui.close_menu();
+                        ui.close_kind(egui::UiKind::Menu);
                     }
                     if ui.button("✨ Particle Suspension Radiation (Fig. 10)...").clicked() {
                         self.show_particle_rad = true;
-                        ui.close_menu();
+                        ui.close_kind(egui::UiKind::Menu);
                     }
                     if ui.button("🗄 Material Database (Ch. 90, Figs. 1-3)...").clicked() {
                         self.show_material_db = true;
-                        ui.close_menu();
+                        ui.close_kind(egui::UiKind::Menu);
                     }
                 });
                 ui.menu_button(crate::i18n::text("common.040"), |ui| {
@@ -479,12 +532,12 @@ impl HeatLossModuleState {
                             ..Default::default()
                         });
                         self.recalculate();
-                        ui.close_menu();
+                        ui.close_kind(egui::UiKind::Menu);
                     }
                     if ui.button(crate::i18n::text("review.145")).clicked() {
                         self.wb.sheets[s_idx].columns.push(HeatLossColumn::default());
                         self.recalculate();
-                        ui.close_menu();
+                        ui.close_kind(egui::UiKind::Menu);
                     }
                     if ui.button(crate::i18n::text("review.146")).clicked() {
                         self.wb.sheets[s_idx].columns.push(HeatLossColumn {
@@ -498,7 +551,7 @@ impl HeatLossModuleState {
                             ..Default::default()
                         });
                         self.recalculate();
-                        ui.close_menu();
+                        ui.close_kind(egui::UiKind::Menu);
                     }
                     if ui.button(crate::i18n::text("review.147")).clicked() {
                         self.wb.sheets[s_idx].columns.push(HeatLossColumn {
@@ -508,7 +561,7 @@ impl HeatLossModuleState {
                             ..Default::default()
                         });
                         self.recalculate();
-                        ui.close_menu();
+                        ui.close_kind(egui::UiKind::Menu);
                     }
                     ui.separator();
                     if ui.button("📑 Own / Calculation Sheet").clicked() {
@@ -518,7 +571,7 @@ impl HeatLossModuleState {
                         self.wb.sheets.push(new_sheet);
                         self.wb.active_sheet = self.wb.sheets.len() - 1;
                         self.recalculate();
-                        ui.close_menu();
+                        ui.close_kind(egui::UiKind::Menu);
                     }
                 });
                 ui.menu_button(crate::i18n::text("common.041"), |ui| {
@@ -531,13 +584,13 @@ impl HeatLossModuleState {
                         self.selected_col =
                             self.selected_col.min(self.wb.sheets[s_idx].columns.len() - 1);
                         self.recalculate();
-                        ui.close_menu();
+                        ui.close_kind(egui::UiKind::Menu);
                     }
                     if ui.button(crate::i18n::text("common.051")).clicked() && self.wb.sheets.len() > 1 {
                         self.wb.sheets.remove(s_idx);
                         self.wb.active_sheet = s_idx.min(self.wb.sheets.len() - 1);
                         self.recalculate();
-                        ui.close_menu();
+                        ui.close_kind(egui::UiKind::Menu);
                     }
                 });
                 ui.menu_button(crate::i18n::text("review.149"), |ui| {
@@ -570,12 +623,12 @@ impl HeatLossModuleState {
                     if ui.button(crate::i18n::text("review.152")).clicked() {
                         self.wb.sheets[s_idx].mode = CalculationMode::HeatFlow;
                         self.recalculate();
-                        ui.close_menu();
+                        ui.close_kind(egui::UiKind::Menu);
                     }
                     if ui.button(crate::i18n::text("review.153")).clicked() {
                         self.wb.sheets[s_idx].mode = CalculationMode::TemperatureProfile;
                         self.recalculate();
-                        ui.close_menu();
+                        ui.close_kind(egui::UiKind::Menu);
                     }
                 });
                 if ui.button(crate::i18n::text("common.044")).clicked() {
@@ -590,67 +643,67 @@ impl HeatLossModuleState {
                     self.show_material_db = true;
                 }
                 ui.menu_button(crate::i18n::text("common.022"), |ui| {
-                    ui.label("HSC Heat Loss & Material Database (Ch. 12 & Ch. 90)");
+                    ui.label("Heat Loss & Material Database");
                 });
-
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if ui.button("📤 Send Heat Loss -> Module 2").clicked() {
-                        if let Some(res) = &self.result {
-                            self.pending_export_w = Some(res.total_heat_flow_w);
-                        }
+            });
+            ui.separator();
+            ui.horizontal_wrapped(|ui| {
+                if let Some(result) = &self.result {
+                    if ui.button("Enviar a Balance").clicked() {
+                        self.pending_export_w = Some(result.total_heat_flow_w);
                     }
-                    if balance_area_count > 0 {
-                        egui::ComboBox::from_id_salt("hl_export_area")
-                            .width(80.0)
-                            .selected_text(format!("Area {}", self.export_target_area + 1))
-                            .show_ui(ui, |ui| {
-                                for idx in 0..balance_area_count {
-                                    ui.selectable_value(
-                                        &mut self.export_target_area,
-                                        idx,
-                                        format!("Area {}", idx + 1),
-                                    );
-                                }
-                            });
-                    }
-                    ui.separator();
-                    if ui.small_button("🏭 OilFurnace").clicked() {
-                        self.load_preset(HeatLossUseCases::preset(HeatLossPreset::OilFurnace));
-                    }
-                    if ui.small_button("📦 SimpleCase").clicked() {
-                        self.load_preset(HeatLossUseCases::preset(HeatLossPreset::SimpleCase));
-                    }
-                    if ui.small_button("💧 Hotwatertank").clicked() {
-                        self.load_preset(HeatLossUseCases::preset(HeatLossPreset::HotWaterTank));
-                    }
-                    if ui.small_button("🔥 Radiator").clicked() {
-                        self.load_preset(HeatLossUseCases::preset(HeatLossPreset::Radiator));
-                    }
-                    if ui.small_button("🔥 Smelting1").clicked() {
-                        self.load_preset(HeatLossUseCases::preset(HeatLossPreset::Smelting1));
-                    }
-                });
+                } else {
+                    ui.add_enabled(false, egui::Button::new("Enviar a Balance"))
+                        .on_disabled_hover_text("Calcula la pérdida de calor para poder enviarla.");
+                }
+                if balance_area_count > 0 {
+                    egui::ComboBox::from_id_salt("hl_export_area")
+                        .width(80.0)
+                        .selected_text(format!("Area {}", self.export_target_area + 1))
+                        .show_ui(ui, |ui| {
+                            for idx in 0..balance_area_count {
+                                ui.selectable_value(
+                                    &mut self.export_target_area,
+                                    idx,
+                                    format!("Area {}", idx + 1),
+                                );
+                            }
+                        });
+                }
+                ui.separator();
+                if ui.small_button("🏭 OilFurnace").clicked() {
+                    self.load_preset(HeatLossUseCases::preset(HeatLossPreset::OilFurnace));
+                }
+                if ui.small_button("📦 SimpleCase").clicked() {
+                    self.load_preset(HeatLossUseCases::preset(HeatLossPreset::SimpleCase));
+                }
+                if ui.small_button("💧 Hotwatertank").clicked() {
+                    self.load_preset(HeatLossUseCases::preset(HeatLossPreset::HotWaterTank));
+                }
+                if ui.small_button("🔥 Radiator").clicked() {
+                    self.load_preset(HeatLossUseCases::preset(HeatLossPreset::Radiator));
+                }
+                if ui.small_button("🔥 Smelting1").clicked() {
+                    self.load_preset(HeatLossUseCases::preset(HeatLossPreset::Smelting1));
+                }
             });
 
             ui.separator();
             // Quick Icon Action Bar + Context-Sensitive "Get Data for Column" Frame (Ch. 12.1 step 4, Fig. 4 item 5)
             ui.horizontal_wrapped(|ui| {
-                ui.add(
-                    egui::TextEdit::singleline(&mut self.file_path_input)
-                        .desired_width(145.0)
-                        .hint_text("File.htr8"),
-                );
+                let shown = std::path::Path::new(&self.file_path_input)
+                    .file_name()
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| format!("{} (sin guardar)", self.wb.title));
+                ui.label(egui::RichText::new(shown).small()).on_hover_text(&self.file_path_input);
                 if ui.button(crate::i18n::text("common.009")).on_hover_text("Abrir archivo .htr8").clicked() {
-                    let p = self.file_path_input.clone();
-                    self.load_htr8(&p);
+                    self.choose_and_open();
                 }
                 if ui.button(crate::i18n::text("common.014")).on_hover_text("Guardar archivo .htr8").clicked() {
-                    let p = self.file_path_input.clone();
-                    self.save_htr8(&p);
+                    self.choose_and_save();
                 }
                 if ui.button("📊 .xlsx").on_hover_text("Exportar a Excel").clicked() {
-                    let p = format!("{}.xlsx", self.file_path_input.trim_end_matches(".htr8"));
-                    self.export_xlsx(&p);
+                    self.choose_and_export();
                 }
                 ui.separator();
 
@@ -747,14 +800,26 @@ impl HeatLossModuleState {
             });
         });
 
+        egui::Panel::bottom("hl_status").show(root_ui, |ui| {
+            let color = if self.status_ok {
+                egui::Color32::DARK_GREEN
+            } else {
+                red_fix
+            };
+            ui.colored_label(color, &self.status_msg);
+        });
+
         // Bottom 3-block panel (matching Figs. 1, 2, 4)
-        egui::TopBottomPanel::bottom("hl_bottom_panel")
+        let summary_height = (ctx.content_rect().height() * 0.24).clamp(100.0, 170.0);
+        egui::Panel::bottom("hl_bottom_panel")
             .resizable(true)
-            .default_height(170.0)
-            .min_height(95.0)
-            .max_height(420.0)
-            .show(ctx, |ui| {
-                egui::ScrollArea::both().show(ui, |ui| {
+            .default_size(summary_height)
+            .min_size(75.0)
+            .max_size((ctx.content_rect().height() * 0.33).clamp(110.0, 420.0))
+            .show(root_ui, |ui| {
+                ui.spacing_mut().scroll.floating = false;
+                egui::ScrollArea::both().id_salt("hl_summary_scroll").show(ui, |ui| {
+                    ui.set_min_width(760.0);
                     ui.add_space(4.0);
                     ui.columns(3, |cols| {
                         // Block 1: Total Heat Flow & Shape and Dimensions (Figs. 1, 2, 4)
@@ -767,13 +832,13 @@ impl HeatLossModuleState {
                             let q_disp = total_w * self.wb.heat_flow_unit.from_watts_factor();
                             ui.horizontal(|ui| {
                                 ui.strong("TOTAL HEAT FLOW:");
-                                egui::Frame::none()
+                                egui::Frame::NONE
                                     .fill(yellow_bg)
                                     .stroke(egui::Stroke::new(
                                         1.0,
                                         egui::Color32::from_rgb(180, 180, 180),
                                     ))
-                                    .inner_margin(egui::Margin::symmetric(8.0, 2.0))
+                                    .inner_margin(egui::Margin::symmetric(8, 2))
                                     .show(ui, |ui| {
                                         ui.strong(format!("{q_disp:.3}"));
                                     });
@@ -1015,27 +1080,27 @@ impl HeatLossModuleState {
                             // Visual [RED] HOT => COLD [BLUE] indicator (Figs. 1, 2, 4)
                             ui.vertical_centered(|ui| {
                                 ui.horizontal(|ui| {
-                                    egui::Frame::none()
+                                    egui::Frame::NONE
                                         .fill(egui::Color32::from_rgb(220, 38, 38))
-                                        .inner_margin(egui::Margin::symmetric(8.0, 2.0))
+                                        .inner_margin(egui::Margin::symmetric(8, 2))
                                         .show(ui, |ui| {
                                             ui.label(egui::RichText::new("  ").small());
                                         });
-                                    egui::Frame::none()
+                                    egui::Frame::NONE
                                         .fill(egui::Color32::WHITE)
                                         .stroke(egui::Stroke::new(
                                             1.0,
                                             egui::Color32::from_rgb(200, 200, 200),
                                         ))
-                                        .inner_margin(egui::Margin::symmetric(10.0, 2.0))
+                                        .inner_margin(egui::Margin::symmetric(10, 2))
                                         .show(ui, |ui| {
                                             ui.label(
                                                 egui::RichText::new(crate::i18n::text("review.159")).strong().small(),
                                             );
                                         });
-                                    egui::Frame::none()
+                                    egui::Frame::NONE
                                         .fill(egui::Color32::from_rgb(37, 99, 235))
-                                        .inner_margin(egui::Margin::symmetric(8.0, 2.0))
+                                        .inner_margin(egui::Margin::symmetric(8, 2))
                                         .show(ui, |ui| {
                                             ui.label(egui::RichText::new("  ").small());
                                         });
@@ -1108,20 +1173,13 @@ impl HeatLossModuleState {
                                     self.show_diagram = true;
                                 }
                             });
-                            ui.separator();
-                            let status_color = if self.status_ok {
-                                egui::Color32::DARK_GREEN
-                            } else {
-                                red_fix
-                            };
-                            ui.colored_label(status_color, &self.status_msg);
                         });
                     });
                 });
             });
 
         // Central Spreadsheet Grid + Excel Bottom Sheet Tabs (Figs. 1, 2, 4)
-        egui::CentralPanel::default().show(ctx, |ui| {
+        egui::CentralPanel::default().show(root_ui, |ui| {
             let s_idx = self.wb.active_sheet.min(self.wb.sheets.len() - 1);
             let t_unit = self.wb.temp_unit;
             let q_unit = self.wb.heat_flow_unit;
@@ -1137,10 +1195,10 @@ impl HeatLossModuleState {
 
             if let Some(sr) = &sheet_res {
                 if !sr.warnings.is_empty() {
-                    egui::Frame::none()
+                    egui::Frame::NONE
                         .fill(egui::Color32::from_rgb(254, 243, 199))
                         .stroke(egui::Stroke::new(1.0, egui::Color32::from_rgb(217, 119, 6)))
-                        .inner_margin(egui::Margin::symmetric(8.0, 4.0))
+                        .inner_margin(egui::Margin::symmetric(8, 4))
                         .show(ui, |ui| {
                             for w in &sr.warnings {
                                 ui.colored_label(
@@ -1158,8 +1216,9 @@ impl HeatLossModuleState {
             let unit_w = 78.0;
             let col_w = 132.0;
 
-            let tab_bar_h = 28.0;
-            let grid_h = (ui.available_height() - tab_bar_h - 6.0).max(160.0);
+            ui.spacing_mut().scroll.floating = false;
+            let tab_bar_h = 36.0;
+            let grid_h = (ui.available_height() - tab_bar_h - 6.0).max(0.0);
 
             egui::ScrollArea::both()
                 .id_salt("hl_main_sheet_scroll")
@@ -2134,7 +2193,7 @@ impl HeatLossModuleState {
                                 let qf = sheet_res
                                     .as_ref()
                                     .and_then(|sr| sr.columns.get(i))
-                                    .map(|c| c.heat_flux_w_m2 * q_unit.from_watts_factor())
+                                    .map(|c| c.heat_flux_w_m2 * q_unit.flux_from_w_m2_factor())
                                     .unwrap_or(0.0);
                                 text_cell(
                                     ui,
@@ -2713,55 +2772,59 @@ impl HeatLossModuleState {
 
             ui.separator();
             // Excel-style Bottom Sheet Tabs (Figs. 1, 2, 4)
-            egui::Frame::none()
+            egui::Frame::NONE
                 .fill(egui::Color32::from_rgb(232, 236, 242))
-                .inner_margin(egui::Margin::symmetric(4.0, 2.0))
+                .inner_margin(egui::Margin::symmetric(4, 2))
                 .show(ui, |ui| {
-                    ui.horizontal(|ui| {
-                        for idx in 0..self.wb.sheets.len() {
-                            let active = idx == self.wb.active_sheet;
-                            let fill = if active {
-                                egui::Color32::WHITE
-                            } else {
-                                egui::Color32::from_rgb(220, 226, 235)
-                            };
-                            let text_col = if active {
-                                egui::Color32::from_rgb(15, 23, 42)
-                            } else {
-                                egui::Color32::from_rgb(71, 85, 105)
-                            };
-                            let stroke = if active {
-                                egui::Stroke::new(1.2, egui::Color32::from_rgb(29, 78, 216))
-                            } else {
-                                egui::Stroke::new(1.0, egui::Color32::from_rgb(190, 198, 210))
-                            };
-                            if ui
-                                .add(
-                                    egui::Button::new(
-                                        egui::RichText::new(&self.wb.sheets[idx].name)
-                                            .size(11.5)
-                                            .strong()
-                                            .color(text_col),
-                                    )
-                                    .fill(fill)
-                                    .stroke(stroke)
-                                    .rounding(3.0),
-                                )
-                                .clicked()
-                            {
-                                self.wb.active_sheet = idx;
-                                self.recalculate();
-                            }
-                        }
-                        if ui.small_button(crate::i18n::text("review.160")).clicked() {
-                            let n = self.wb.sheets.len() + 1;
-                            let mut new_sheet = self.wb.sheets[0].clone();
-                            new_sheet.name = format!("Sheet {n}");
-                            self.wb.sheets.push(new_sheet);
-                            self.wb.active_sheet = self.wb.sheets.len() - 1;
-                            self.recalculate();
-                        }
-                    });
+                    egui::ScrollArea::horizontal()
+                        .id_salt("hl_sheet_tabs")
+                        .show(ui, |ui| {
+                            ui.horizontal(|ui| {
+                                for idx in 0..self.wb.sheets.len() {
+                                    let active = idx == self.wb.active_sheet;
+                                    let fill = if active {
+                                        egui::Color32::WHITE
+                                    } else {
+                                        egui::Color32::from_rgb(220, 226, 235)
+                                    };
+                                    let text_col = if active {
+                                        egui::Color32::from_rgb(15, 23, 42)
+                                    } else {
+                                        egui::Color32::from_rgb(71, 85, 105)
+                                    };
+                                    let stroke = if active {
+                                        egui::Stroke::new(1.2, egui::Color32::from_rgb(29, 78, 216))
+                                    } else {
+                                        egui::Stroke::new(1.0, egui::Color32::from_rgb(190, 198, 210))
+                                    };
+                                    if ui
+                                        .add(
+                                            egui::Button::new(
+                                                egui::RichText::new(&self.wb.sheets[idx].name)
+                                                    .size(11.5)
+                                                    .strong()
+                                                    .color(text_col),
+                                            )
+                                            .fill(fill)
+                                            .stroke(stroke)
+                                            .corner_radius(3),
+                                        )
+                                        .clicked()
+                                    {
+                                        self.wb.active_sheet = idx;
+                                        self.recalculate();
+                                    }
+                                }
+                                if ui.small_button(crate::i18n::text("review.160")).clicked() {
+                                    let n = self.wb.sheets.len() + 1;
+                                    let mut new_sheet = self.wb.sheets[0].clone();
+                                    new_sheet.name = format!("Sheet {n}");
+                                    self.wb.sheets.push(new_sheet);
+                                    self.wb.active_sheet = self.wb.sheets.len() - 1;
+                                    self.recalculate();
+                                }
+                            });
+                        });
                 });
 
             if changed {
@@ -2814,7 +2877,7 @@ impl HeatLossModuleState {
         // 1. Conduction Database Window (Fig. 5 — HeatCond.XLS)
         if self.show_cond_picker {
             let mut open = true;
-            egui::Window::new("📦 Conduction C:\\HSC8\\Databases\\HeatCond.XLS (Fig. 5)")
+            egui::Window::new("📦 Conduction (Fig. 5)")
                 .open(&mut open)
                 .default_size([720.0, 440.0])
                 .resizable(true)
@@ -3286,7 +3349,7 @@ impl HeatLossModuleState {
         // 3. Surface Radiation Database Window (Fig. 8 — HeatRadi.XLS)
         if self.show_rad_picker {
             let mut open = true;
-            egui::Window::new("☀ Surface Radiation C:\\HSC8\\Databases\\HeatRadi.XLS (Fig. 8)")
+            egui::Window::new("☀ Surface Radiation (Fig. 8)")
                 .open(&mut open)
                 .default_size([620.0, 400.0])
                 .resizable(true)
@@ -3561,18 +3624,18 @@ impl HeatLossModuleState {
                                     .spacing([10.0, 8.0])
                                     .show(ui, |ui| {
                                         ui.strong("Gas Emissivity at Gas Temperature");
-                                        egui::Frame::none()
+                                        egui::Frame::NONE
                                             .fill(yellow_bg)
-                                            .inner_margin(egui::Margin::symmetric(8.0, 2.0))
+                                            .inner_margin(egui::Margin::symmetric(8, 2))
                                             .show(ui, |ui| {
                                                 ui.monospace(format!("{:.4}", res.gas_emissivity));
                                             });
                                         ui.end_row();
 
                                         ui.strong("Gas Absorptivity at Surface Temperature");
-                                        egui::Frame::none()
+                                        egui::Frame::NONE
                                             .fill(yellow_bg)
-                                            .inner_margin(egui::Margin::symmetric(8.0, 2.0))
+                                            .inner_margin(egui::Margin::symmetric(8, 2))
                                             .show(ui, |ui| {
                                                 ui.monospace(format!(
                                                     "{:.4}",
@@ -3807,9 +3870,9 @@ impl HeatLossModuleState {
                                 ui.separator();
                                 ui.horizontal(|ui| {
                                     ui.strong("Particle cloud Emissivity:");
-                                    egui::Frame::none()
+                                    egui::Frame::NONE
                                         .fill(yellow_bg)
-                                        .inner_margin(egui::Margin::symmetric(8.0, 2.0))
+                                        .inner_margin(egui::Margin::symmetric(8, 2))
                                         .show(ui, |ui| {
                                             ui.monospace(format!("{:.4}", pr.cloud_emissivity));
                                         });
@@ -3952,7 +4015,7 @@ impl HeatLossModuleState {
                                                 egui::DragValue::new(&mut row.max_val).speed(0.5),
                                             );
                                             ui.label(&row.target_name);
-                                            egui::Frame::none()
+                                            egui::Frame::NONE
                                                 .fill(yellow_bg)
                                                 .show(ui, |ui| {
                                                     ui.add(
@@ -4075,7 +4138,7 @@ impl HeatLossModuleState {
         // 7. HSC Diagrams Window (Figs. 3, 12, 13, 14)
         if self.show_diagram {
             let mut open = true;
-            egui::Window::new("📈 HSC Diagrams — Heat Loss (Figs. 3, 12-14)")
+            egui::Window::new("📈 Diagrams — Heat Loss (Figs. 3, 12-14)")
                 .open(&mut open)
                 .default_size([760.0, 500.0])
                 .min_size([380.0, 240.0])
@@ -4191,7 +4254,7 @@ impl HeatLossModuleState {
                                             .iter()
                                             .map(|&(x, t_k)| [x * 1000.0, t_k - 273.15])
                                             .collect();
-                                        plot_ui.line(Line::new(pts).name(&ser.sheet_name).width(2.2));
+                                        plot_ui.line(Line::new(&ser.sheet_name, pts).width(2.2));
                                     }
                                 });
                         }
@@ -4230,7 +4293,7 @@ impl HeatLossModuleState {
                                         .iter()
                                         .map(|p| [p.x - 273.15, p.total_heat_flow_w / 1000.0])
                                         .collect();
-                                    plot_ui.line(Line::new(pts).name("Heat flow").width(2.2));
+                                    plot_ui.line(Line::new("Heat flow", pts).width(2.2));
                                 });
                         }
                         DiagramKind::OptimumInsulation => {
@@ -4272,9 +4335,9 @@ impl HeatLossModuleState {
                                         .iter()
                                         .map(|p| [p.thickness_m * 100.0, p.annual_insulation_cost])
                                         .collect();
-                                    plot_ui.line(Line::new(tot).name("Total Cost").width(2.2));
-                                    plot_ui.line(Line::new(ene).name("Energy Loss Cost"));
-                                    plot_ui.line(Line::new(ins).name("Insulation Cost"));
+                                    plot_ui.line(Line::new("Total Cost", tot).width(2.2));
+                                    plot_ui.line(Line::new("Energy Loss Cost", ene));
+                                    plot_ui.line(Line::new("Insulation Cost", ins));
                                 });
                         }
                     }
@@ -4330,7 +4393,7 @@ impl HeatLossModuleState {
                         Geometry::Wall { width_m, length_m } => {
                             let r = egui::Rect::from_center_size(c, egui::vec2(180.0, 90.0));
                             p.rect_filled(r, 0.0, fill);
-                            p.rect_stroke(r, 0.0, stroke);
+                            p.rect_stroke(r, 0.0, stroke, egui::StrokeKind::Middle);
                             ui.label(format!(
                                 "Wall: Width = {width_m:.2} m, Length = {length_m:.2} m, Area = {:.3} m²",
                                 width_m * length_m
@@ -4347,9 +4410,9 @@ impl HeatLossModuleState {
                             );
                             let back = front.translate(egui::vec2(28.0, -24.0));
                             p.rect_filled(back, 0.0, fill);
-                            p.rect_stroke(back, 0.0, stroke);
+                            p.rect_stroke(back, 0.0, stroke, egui::StrokeKind::Middle);
                             p.rect_filled(front, 0.0, fill);
-                            p.rect_stroke(front, 0.0, stroke);
+                            p.rect_stroke(front, 0.0, stroke, egui::StrokeKind::Middle);
                             ui.label(format!(
                                 "Cube: {width_m:.2} × {length_m:.2} × {height_m:.2} m"
                             ));
@@ -4360,7 +4423,7 @@ impl HeatLossModuleState {
                         } => {
                             let r = egui::Rect::from_center_size(c, egui::vec2(100.0, 110.0));
                             p.rect_filled(r, 12.0, fill);
-                            p.rect_stroke(r, 12.0, stroke);
+                            p.rect_stroke(r, 12.0, stroke, egui::StrokeKind::Middle);
                             ui.label(format!(
                                 "Cylinder: Height = {height_m:.2} m, Diameter = {diameter_m:.2} m"
                             ));
@@ -4384,7 +4447,7 @@ impl HeatLossModuleState {
             return;
         }
         let mut open = true;
-        egui::Window::new("🗄 HSC Material Database (Ch. 90, Figs. 1–3)")
+        egui::Window::new("🗄 Material Database (Ch. 90, Figs. 1–3)")
             .open(&mut open)
             .default_size([980.0, 560.0])
             .resizable(true)
@@ -4912,7 +4975,7 @@ impl HeatLossModuleState {
                                     .show(ui, |plot_ui| {
                                         let pts: PlotPoints =
                                             pts_vec.into_iter().map(|(t, cp)| [t, cp]).collect();
-                                        plot_ui.line(Line::new(pts).name("Cp(T)").width(2.0));
+                                        plot_ui.line(Line::new("Cp(T)", pts).width(2.0));
                                     });
                             }
                         }
@@ -4930,6 +4993,21 @@ impl HeatLossModuleState {
             self.show_material_db = false;
         }
     }
+}
+
+/// Comprueba que un libro abierto se puede mostrar: al menos una hoja, cada hoja con al
+/// menos una columna y la hoja activa dentro de rango (se ajusta si no lo está).
+pub(crate) fn validate_heat_loss_workbook(wb: &mut HeatLossWorkbook) -> Result<(), String> {
+    if wb.sheets.is_empty() {
+        return Err("El libro .htr8 no contiene hojas.".into());
+    }
+    if let Some(idx) = wb.sheets.iter().position(|s| s.columns.is_empty()) {
+        return Err(format!("La hoja {} del libro .htr8 no tiene columnas.", idx + 1));
+    }
+    if wb.active_sheet >= wb.sheets.len() {
+        wb.active_sheet = 0;
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -4958,8 +5036,8 @@ mod tests {
             egui::Pos2::ZERO,
             egui::vec2(1400.0, 900.0),
         ));
-        let _ = ctx.run(raw_input, |ctx| {
-            state.ui(ctx, 2);
+        let _ = crate::ui_common::run_test_frame(&ctx, raw_input, |root_ui| {
+            state.ui(root_ui, 2);
         });
 
         // Test .htr8 save/load roundtrip
@@ -4969,5 +5047,63 @@ mod tests {
         state.load_htr8(tmp_htr8);
         assert!(state.status_ok);
         let _ = std::fs::remove_file(tmp_htr8);
+    }
+
+    #[test]
+    fn presets_do_not_point_saves_at_relative_paths() {
+        let mut state = HeatLossModuleState::new();
+        assert!(state.file_path_input.is_empty());
+        state.load_preset(HeatLossUseCases::preset(HeatLossPreset::Smelting1));
+        assert!(state.file_path_input.is_empty(), "ruta: {}", state.file_path_input);
+        assert!(state.current_file().is_none());
+        assert!(crate::storage::suggested_file_name(&state.wb.title, "htr8").ends_with(".htr8"));
+    }
+
+    fn render(state: &mut HeatLossModuleState) {
+        let ctx = egui::Context::default();
+        let mut raw_input = egui::RawInput::default();
+        raw_input.screen_rect = Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1400.0, 900.0)));
+        let _ = crate::ui_common::run_test_frame(&ctx, raw_input, |root_ui| state.ui(root_ui, 2));
+    }
+
+    #[test]
+    fn htr8_without_sheets_does_not_panic_the_ui() {
+        let mut state = HeatLossModuleState::new();
+        let mut wb = state.wb.clone();
+        wb.sheets.clear();
+        wb.active_sheet = 0;
+        let path = std::env::temp_dir().join(format!("soryntel-c01-{}.htr8", std::process::id()));
+        std::fs::write(&path, HeatLossUseCases::serialize_htr8_workbook(&wb).unwrap()).unwrap();
+        state.load_htr8(path.to_str().unwrap());
+        let _ = std::fs::remove_file(&path);
+        let loaded = state.status_ok;
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| render(&mut state)));
+        assert!(
+            outcome.is_ok() || !loaded,
+            "el archivo se aceptó (\"{}\") y el frame siguiente entró en pánico",
+            state.status_msg
+        );
+    }
+
+    #[test]
+    fn failed_recalculation_after_open_is_reported_and_clears_old_results() {
+        let mut state = HeatLossModuleState::new();
+        assert!(state.result.is_some());
+        let mut wb = state.wb.clone();
+        // Hoja sin columnas: el solver la rechaza.
+        for sheet in &mut wb.sheets {
+            sheet.columns.clear();
+        }
+        assert!(HeatLossUseCases::solve_heat_loss_workbook(&wb).is_err(), "preparación: el solver debería fallar");
+        let path = std::env::temp_dir().join(format!("soryntel-c08-{}.htr8", std::process::id()));
+        std::fs::write(&path, HeatLossUseCases::serialize_htr8_workbook(&wb).unwrap()).unwrap();
+        state.load_htr8(path.to_str().unwrap());
+        let _ = std::fs::remove_file(&path);
+        assert!(
+            !state.status_ok || state.result.is_none(),
+            "estado «{}» y resultado anterior conservado: {}",
+            state.status_msg,
+            state.result.is_some()
+        );
     }
 }

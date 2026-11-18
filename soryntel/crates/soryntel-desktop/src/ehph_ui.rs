@@ -1,3 +1,4 @@
+use crate::excel_grid::parse_decimal_input;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use eframe::egui;
@@ -180,19 +181,19 @@ impl CombinerDataset {
     }
 
     fn sync_from_buffers(&mut self) {
-        if let Ok(t) = self.temp_str.trim().parse::<f64>() {
+        if let Some(t) = parse_decimal_input(&self.temp_str) {
             self.temp_c = t;
         }
         for el in &mut self.elements {
             if let Some(s) = self.mol_bufs.get(&el.symbol) {
-                if let Ok(v) = s.trim().parse::<f64>() {
+                if let Some(v) = parse_decimal_input(&s) {
                     if v > 0.0 {
                         el.molality = v;
                     }
                 }
             }
             if let Some(s) = self.pres_bufs.get(&el.symbol) {
-                if let Ok(v) = s.trim().parse::<f64>() {
+                if let Some(v) = parse_decimal_input(&s) {
                     if v > 0.0 {
                         el.pressure_bar = v;
                     }
@@ -258,8 +259,7 @@ pub struct EhPhModuleState {
     default_label_font_size: f32,
     default_label_bold: bool,
     show_font_dialog: bool,
-    show_file_modal: bool,
-    file_modal_is_save: bool,
+    /// Archivo `.eph8` actual (vacío hasta abrir o guardar uno).
     file_path_buf: String,
     show_help_modal: bool,
     // Combiner state
@@ -333,9 +333,7 @@ impl EhPhModuleState {
             default_label_font_size: 12.5,
             default_label_bold: false,
             show_font_dialog: false,
-            show_file_modal: false,
-            file_modal_is_save: true,
-            file_path_buf: "/home/nando/.gemini/antigravity/scratch/diagram.eph8".to_string(),
+            file_path_buf: String::new(),
             show_help_modal: false,
             combiner_datasets: vec![25.0, 50.0, 75.0]
                 .into_iter()
@@ -442,6 +440,23 @@ impl EhPhModuleState {
         }
     }
 
+    fn invalid_numeric_input(&self) -> Option<&'static str> {
+        [
+            ("Temperature", self.temp_str.as_str(), false),
+            ("Minimum pH", self.min_ph_str.as_str(), false),
+            ("Maximum pH", self.max_ph_str.as_str(), false),
+            ("Minimum Eh", self.min_eh_str.as_str(), false),
+            ("Maximum Eh", self.max_eh_str.as_str(), false),
+            ("Ionic strength", self.ionic_strength_str.as_str(), false),
+            ("Correction factor", self.correction_factor_str.as_str(), false),
+            ("Dielectric constant", self.dielectric_str.as_str(), true),
+            ("Water Gibbs energy", self.delta_g_h2o_str.as_str(), true),
+        ]
+        .into_iter()
+        .find(|(_, text, optional)| !(*optional && text.trim().is_empty()) && parse_decimal_input(text).is_none())
+        .map(|(name, _, _)| name)
+    }
+
     fn build_request(&self) -> EhPhRequest {
         let selected_species: Vec<ChemicalSpecies> = self
             .candidate_species
@@ -454,16 +469,16 @@ impl EhPhModuleState {
             main_element: self.main_element.clone(),
             species: selected_species,
             t_k: self.t_k(),
-            min_ph: self.min_ph_str.trim().parse().unwrap_or(0.0),
-            max_ph: self.max_ph_str.trim().parse().unwrap_or(14.0),
-            min_eh_v: self.min_eh_str.trim().parse().unwrap_or(-2.0),
-            max_eh_v: self.max_eh_str.trim().parse().unwrap_or(2.0),
+            min_ph: parse_decimal_input(&self.min_ph_str).unwrap_or(0.0),
+            max_ph: parse_decimal_input(&self.max_ph_str).unwrap_or(14.0),
+            min_eh_v: parse_decimal_input(&self.min_eh_str).unwrap_or(-2.0),
+            max_eh_v: parse_decimal_input(&self.max_eh_str).unwrap_or(2.0),
             potential_scale: self.potential_scale,
             criss_cobble: self.criss_cobble,
             use_davies: self.use_davies,
-            ionic_strength: self.ionic_strength_str.trim().parse().unwrap_or(0.0),
-            correction_factor: self.correction_factor_str.trim().parse().unwrap_or(1.0),
-            dielectric_constant: self.dielectric_str.trim().parse().ok(),
+            ionic_strength: parse_decimal_input(&self.ionic_strength_str).unwrap_or(0.0),
+            correction_factor: parse_decimal_input(&self.correction_factor_str).unwrap_or(1.0),
+            dielectric_constant: parse_decimal_input(&self.dielectric_str),
             delta_g_h2o_kcal: self.delta_g_h2o_str.trim().parse().ok(),
             delta_g_overrides_kcal: self.delta_g_overrides_kcal.clone(),
             show_predominance_ions: self.show_predominance_ions,
@@ -503,19 +518,23 @@ impl EhPhModuleState {
     fn draw_current(&mut self, db: &dyn SpeciesCatalogPort) {
         for el in &mut self.selected_elements {
             if let Some(m_buf) = self.elem_mol_bufs.get(&el.symbol) {
-                if let Ok(v) = m_buf.trim().parse::<f64>() {
+                if let Some(v) = parse_decimal_input(&m_buf) {
                     if v > 0.0 {
                         el.molality = v;
                     }
                 }
             }
             if let Some(p_buf) = self.elem_pres_bufs.get(&el.symbol) {
-                if let Ok(v) = p_buf.trim().parse::<f64>() {
+                if let Some(v) = parse_decimal_input(&p_buf) {
                     if v > 0.0 {
                         el.pressure_bar = v;
                     }
                 }
             }
+        }
+        if let Some(field) = self.invalid_numeric_input() {
+            self.status_error = Some(format!("Invalid number: {field}"));
+            return;
         }
         let req = self.build_request();
         match MiscUseCases::calculate_ehph(db, &req) {
@@ -564,6 +583,10 @@ impl EhPhModuleState {
     }
 
     fn draw_combiner(&mut self, db: &dyn SpeciesCatalogPort) {
+        if let Some(field) = self.invalid_numeric_input() {
+            self.status_error = Some(format!("Invalid number: {field}"));
+            return;
+        }
         let cur_syms: BTreeSet<&str> = self
             .selected_elements
             .iter()
@@ -574,12 +597,12 @@ impl EhPhModuleState {
         }
         let mut results: Vec<Result<EhPhResult, String>> =
             Vec::with_capacity(self.combiner_datasets.len());
-        let min_ph = self.min_ph_str.trim().parse().unwrap_or(0.0);
-        let max_ph = self.max_ph_str.trim().parse().unwrap_or(14.0);
-        let min_eh_v = self.min_eh_str.trim().parse().unwrap_or(-2.0);
-        let max_eh_v = self.max_eh_str.trim().parse().unwrap_or(2.0);
-        let ionic_strength = self.ionic_strength_str.trim().parse().unwrap_or(0.0);
-        let correction_factor = self.correction_factor_str.trim().parse().unwrap_or(1.0);
+        let min_ph = parse_decimal_input(&self.min_ph_str).unwrap_or(0.0);
+        let max_ph = parse_decimal_input(&self.max_ph_str).unwrap_or(14.0);
+        let min_eh_v = parse_decimal_input(&self.min_eh_str).unwrap_or(-2.0);
+        let max_eh_v = parse_decimal_input(&self.max_eh_str).unwrap_or(2.0);
+        let ionic_strength = parse_decimal_input(&self.ionic_strength_str).unwrap_or(0.0);
+        let correction_factor = parse_decimal_input(&self.correction_factor_str).unwrap_or(1.0);
 
         for ds in &self.combiner_datasets {
             let mut species = self.query_species_for_elements(db, &ds.elements);
@@ -733,6 +756,59 @@ impl EhPhModuleState {
         self.draw_current(db);
     }
 
+    fn current_file(&self) -> Option<std::path::PathBuf> {
+        let path = self.file_path_buf.trim();
+        (!path.is_empty()).then(|| std::path::PathBuf::from(path))
+    }
+
+    /// Abre o guarda un `.eph8` con el diálogo nativo; la ruta elegida pasa a ser la actual
+    /// si la operación termina sin error.
+    fn choose_eph8(&mut self, db: &dyn SpeciesCatalogPort, save: bool) {
+        let title = if save { "Save Eh-pH Diagram (.eph8)" } else { "Open Eh-pH Diagram (.eph8)" };
+        let current = self.current_file();
+        let suggested = current
+            .as_deref()
+            .and_then(|p| p.file_stem())
+            .map(|stem| crate::storage::suggested_file_name(&stem.to_string_lossy(), "eph8"))
+            .unwrap_or_else(|| "diagram.eph8".to_string());
+        let Some(path) = crate::storage::choose_file(save, title, "eph8", &suggested, current.as_deref()) else {
+            return;
+        };
+        let path = path.to_string_lossy().into_owned();
+        if save {
+            self.save_eph8(&path);
+        } else {
+            self.open_eph8(db, &path);
+        }
+        if self.status_error.is_none() {
+            self.file_path_buf = path;
+        }
+    }
+
+    /// Pide la ruta de exportación con el diálogo nativo (carpeta del diagrama actual o de
+    /// documentos). Sin página activa muestra el error y no abre el diálogo.
+    fn choose_export_path(&mut self, title: &str, extension: &str, suggested: &str) -> Option<String> {
+        if self.active_chart_page().is_none() {
+            self.status_error = Some("No chart page to export.".to_string());
+            return None;
+        }
+        let current = self.current_file();
+        crate::storage::choose_file(true, title, extension, suggested, current.as_deref())
+            .map(|path| path.to_string_lossy().into_owned())
+    }
+
+    fn export_active_svg_dialog(&mut self) {
+        if let Some(path) = self.choose_export_path("Export Active Chart SVG", "svg", "ehph_chart.svg") {
+            self.export_active_svg(&path);
+        }
+    }
+
+    fn export_active_csv_dialog(&mut self) {
+        if let Some(path) = self.choose_export_path("Export Active Table CSV", "csv", "ehph_table.csv") {
+            self.export_active_csv(&path);
+        }
+    }
+
     fn save_eph8(&mut self, path: &str) {
         let sf = self.build_save_file();
         match serde_json::to_string_pretty(&sf) {
@@ -869,68 +945,67 @@ impl EhPhModuleState {
         }
     }
 
-    pub fn ui(&mut self, ctx: &egui::Context, db: &dyn SpeciesCatalogPort) {
+    pub fn ui(&mut self, root_ui: &mut egui::Ui, db: &dyn SpeciesCatalogPort) {
+        let ctx = &root_ui.ctx().clone();
         let mut light_vis = egui::Visuals::light();
         light_vis.panel_fill = egui::Color32::from_rgb(245, 246, 248);
         light_vis.window_fill = egui::Color32::WHITE;
         ctx.set_visuals(light_vis);
 
         // Top menu / ribbon bar
-        egui::TopBottomPanel::top("ehph_top_bar")
+        egui::Panel::top("ehph_top_bar")
             .frame(
-                egui::Frame::none()
+                egui::Frame::NONE
                     .fill(egui::Color32::from_rgb(238, 241, 246))
-                    .inner_margin(egui::Margin::symmetric(8.0, 5.0))
+                    .inner_margin(egui::Margin::symmetric(8, 5))
                     .stroke(egui::Stroke::new(1.0, EXCEL_GRID_BORDER)),
             )
-            .show(ctx, |ui| {
+            .show(root_ui, |ui| {
                 ui.horizontal_wrapped(|ui| {
                     ui.menu_button(crate::i18n::text("common.001"), |ui| {
                         if ui.button("New / Default (Cu-S-H2O)").clicked() {
                             self.load_preset(db, vec![("Cu", 1.0, 1.0), ("S", 1.0, 1.0)], "Cu", 25.0, false);
-                            ui.close_menu();
+                            ui.close_kind(egui::UiKind::Menu);
                         }
                         if ui.button("Open (.eph8)...").clicked() {
-                            self.file_modal_is_save = false;
-                            self.show_file_modal = true;
-                            ui.close_menu();
+                            ui.close_kind(egui::UiKind::Menu);
+                            self.choose_eph8(db, false);
                         }
                         if ui.button("Save (.eph8)...").clicked() {
-                            self.file_modal_is_save = true;
-                            self.show_file_modal = true;
-                            ui.close_menu();
+                            ui.close_kind(egui::UiKind::Menu);
+                            self.choose_eph8(db, true);
                         }
                         ui.separator();
                         if ui.button("Example: CUS25.eph8 (Cu-S-H2O, 25 °C)").clicked() {
                             self.load_preset(db, vec![("Cu", 1.0, 1.0), ("S", 1.0, 1.0)], "Cu", 25.0, false);
-                            ui.close_menu();
+                            ui.close_kind(egui::UiKind::Menu);
                         }
                         if ui.button("Example: Cu-S-H2O + Ions Overlay (25 °C)").clicked() {
                             self.load_preset(db, vec![("Cu", 1.0, 1.0), ("S", 1.0, 1.0)], "Cu", 25.0, true);
-                            ui.close_menu();
+                            ui.close_kind(egui::UiKind::Menu);
                         }
                         if ui.button("Example: Fe-H2O (m=1e-6, 25 °C)").clicked() {
                             self.load_preset(db, vec![("Fe", 1e-6, 1.0)], "Fe", 25.0, false);
-                            ui.close_menu();
+                            ui.close_kind(egui::UiKind::Menu);
                         }
                         ui.separator();
                         if ui.button("Export Active Chart SVG...").clicked() {
-                            self.export_active_svg("/home/nando/.gemini/antigravity/scratch/ehph_chart.svg");
-                            ui.close_menu();
+                            ui.close_kind(egui::UiKind::Menu);
+                            self.export_active_svg_dialog();
                         }
                         if ui.button("Export Active Table CSV...").clicked() {
-                            self.export_active_csv("/home/nando/.gemini/antigravity/scratch/ehph_table.csv");
-                            ui.close_menu();
+                            ui.close_kind(egui::UiKind::Menu);
+                            self.export_active_csv_dialog();
                         }
                     });
                     ui.menu_button(crate::i18n::text("common.019"), |ui| {
                         if ui.button("H2O Stability Lines...").clicked() {
                             self.show_h2o_format = true;
-                            ui.close_menu();
+                            ui.close_kind(egui::UiKind::Menu);
                         }
                         if ui.button("Labels Font & Bold...").clicked() {
                             self.show_font_dialog = true;
-                            ui.close_menu();
+                            ui.close_kind(egui::UiKind::Menu);
                         }
                         if ui.button("Reset Label Positions & Text").clicked() {
                             let idx = match self.active_tab {
@@ -940,13 +1015,13 @@ impl EhPhModuleState {
                             if let Some(p) = self.pages.get_mut(idx) {
                                 p.label_overrides.clear();
                             }
-                            ui.close_menu();
+                            ui.close_kind(egui::UiKind::Menu);
                         }
                     });
                     ui.menu_button(crate::i18n::text("common.003"), |ui| {
                         if ui.button("Eh-pH Diagrams Guide (Ch. 17)").clicked() {
                             self.show_help_modal = true;
-                            ui.close_menu();
+                            ui.close_kind(egui::UiKind::Menu);
                         }
                     });
                     ui.separator();
@@ -1016,29 +1091,29 @@ impl EhPhModuleState {
             });
 
         match self.view_mode {
-            EpHViewMode::Diagram => self.ui_diagram_view(ctx, db),
-            EpHViewMode::Combiner => self.ui_combiner_view(ctx, db),
+            EpHViewMode::Diagram => self.ui_diagram_view(root_ui, db),
+            EpHViewMode::Combiner => self.ui_combiner_view(root_ui, db),
         }
 
         if self.show_print_dialog {
             self.ui_print_dialog(ctx);
         }
-        self.ui_extra_modals(ctx, db);
+        self.ui_extra_modals(ctx);
     }
 
-    fn ui_diagram_view(&mut self, ctx: &egui::Context, db: &dyn SpeciesCatalogPort) {
-        egui::SidePanel::left("ehph_left_params")
+    fn ui_diagram_view(&mut self, root_ui: &mut egui::Ui, db: &dyn SpeciesCatalogPort) {
+        egui::Panel::left("ehph_left_params")
             .resizable(true)
-            .default_width(325.0)
-            .min_width(180.0)
-            .max_width(600.0)
+            .default_size(325.0)
+            .min_size(180.0)
+            .max_size(600.0)
             .frame(
-                egui::Frame::none()
+                egui::Frame::NONE
                     .fill(egui::Color32::from_rgb(240, 242, 245))
-                    .inner_margin(egui::Margin::same(8.0))
+                    .inner_margin(egui::Margin::same(8))
                     .stroke(egui::Stroke::new(1.0, EXCEL_GRID_BORDER)),
             )
-            .show(ctx, |ui| {
+            .show(root_ui, |ui| {
                 egui::ScrollArea::both().show(ui, |ui| {
                     ui.strong("Diagram Parameters");
                     ui.add_space(4.0);
@@ -1047,10 +1122,10 @@ impl EhPhModuleState {
                     let mut elems_changed = false;
                     ui.columns(2, |cols| {
                         cols[0].label(egui::RichText::new("Select Elements").size(11.5).strong());
-                        egui::Frame::none()
+                        egui::Frame::NONE
                             .fill(egui::Color32::WHITE)
                             .stroke(egui::Stroke::new(1.0, EXCEL_GRID_BORDER))
-                            .inner_margin(egui::Margin::same(3.0))
+                            .inner_margin(egui::Margin::same(3))
                             .show(&mut cols[0], |ui| {
                                 egui::ScrollArea::vertical()
                                     .id_salt("ehph_elem_grid")
@@ -1112,10 +1187,10 @@ impl EhPhModuleState {
                             });
 
                         cols[1].label(egui::RichText::new(crate::i18n::text("common.083")).size(11.5).strong());
-                        egui::Frame::none()
+                        egui::Frame::NONE
                             .fill(egui::Color32::WHITE)
                             .stroke(egui::Stroke::new(1.0, EXCEL_GRID_BORDER))
-                            .inner_margin(egui::Margin::same(3.0))
+                            .inner_margin(egui::Margin::same(3))
                             .show(&mut cols[1], |ui| {
                                 egui::ScrollArea::vertical()
                                     .id_salt("ehph_species_list")
@@ -1153,10 +1228,10 @@ impl EhPhModuleState {
                     let mut mode_changed = false;
                     ui.columns(2, |cols| {
                         cols[0].label(egui::RichText::new("Search Mode").size(11.5).strong());
-                        egui::Frame::none()
+                        egui::Frame::NONE
                             .fill(egui::Color32::WHITE)
                             .stroke(egui::Stroke::new(1.0, EXCEL_GRID_BORDER))
-                            .inner_margin(egui::Margin::same(4.0))
+                            .inner_margin(egui::Margin::same(4))
                             .show(&mut cols[0], |ui| {
                                 mode_changed |= ui.checkbox(&mut self.mode_gases, "Gases").changed();
                                 mode_changed |=
@@ -1218,10 +1293,10 @@ impl EhPhModuleState {
                         self.show_params_axes = !self.show_params_axes;
                     }
                     if self.show_params_axes {
-                        egui::Frame::none()
+                        egui::Frame::NONE
                             .fill(egui::Color32::from_rgb(235, 237, 240))
                             .stroke(egui::Stroke::new(1.0, EXCEL_GRID_BORDER))
-                            .inner_margin(egui::Margin::same(6.0))
+                            .inner_margin(egui::Margin::same(6))
                             .show(ui, |ui| {
                                 egui::Grid::new("ehph_params_grid")
                                     .num_columns(3)
@@ -1386,7 +1461,7 @@ impl EhPhModuleState {
                             egui::TextEdit::singleline(&mut self.temp_str),
                         );
                         if resp.changed() {
-                            if let Ok(v) = self.temp_str.trim().parse::<f64>() {
+                            if let Some(v) = parse_decimal_input(&self.temp_str) {
                                 self.temp_value = v;
                                 self.update_temp_derived(db);
                             }
@@ -1405,7 +1480,7 @@ impl EhPhModuleState {
 
                     ui.add_space(4.0);
                     // Element Molality & Pressure table (Fig. 1)
-                    egui::Frame::none()
+                    egui::Frame::NONE
                         .fill(egui::Color32::WHITE)
                         .stroke(egui::Stroke::new(1.0, EXCEL_GRID_BORDER))
                         .show(ui, |ui| {
@@ -1433,7 +1508,7 @@ impl EhPhModuleState {
                                     widget_cell(ui, 112.0, egui::Color32::WHITE, false, |ui| {
                                         let r = ui.text_edit_singleline(m_buf);
                                         if r.changed() || r.lost_focus() {
-                                            if let Ok(v) = m_buf.trim().parse::<f64>() {
+                                            if let Some(v) = parse_decimal_input(&m_buf) {
                                                 if v > 0.0 {
                                                     el.molality = v;
                                                 }
@@ -1447,7 +1522,7 @@ impl EhPhModuleState {
                                     widget_cell(ui, 104.0, egui::Color32::WHITE, false, |ui| {
                                         let r = ui.text_edit_singleline(p_buf);
                                         if r.changed() || r.lost_focus() {
-                                            if let Ok(v) = p_buf.trim().parse::<f64>() {
+                                            if let Some(v) = parse_decimal_input(&p_buf) {
                                                 if v > 0.0 {
                                                     el.pressure_bar = v;
                                                 }
@@ -1516,11 +1591,11 @@ impl EhPhModuleState {
         // Right Central Panel: Tabs (Chart 1..N, Table)
         egui::CentralPanel::default()
             .frame(
-                egui::Frame::none()
+                egui::Frame::NONE
                     .fill(egui::Color32::WHITE)
-                    .inner_margin(egui::Margin::same(6.0)),
+                    .inner_margin(egui::Margin::same(6)),
             )
-            .show(ctx, |ui| {
+            .show(root_ui, |ui| {
                 let page_names: Vec<String> = self.pages.iter().map(|p| p.name.clone()).collect();
                 let name_refs: Vec<&str> = page_names.iter().map(|s| s.as_str()).collect();
                 let active_chart = match self.active_tab {
@@ -1900,7 +1975,7 @@ impl EhPhModuleState {
 
         // Bottom Element / Molality / Pressure legend table (Fig. 3 & Fig. 4)
         ui.vertical_centered(|ui| {
-            egui::Frame::none()
+            egui::Frame::NONE
                 .fill(egui::Color32::WHITE)
                 .stroke(egui::Stroke::new(1.0, EXCEL_GRID_BORDER))
                 .show(ui, |ui| {
@@ -1932,7 +2007,7 @@ impl EhPhModuleState {
             ui.separator();
             if ui.button("Recalculate Diagram with Table ΔG").clicked() {
                 for (formula, buf) in &self.table_dg_bufs {
-                    if let Ok(v) = buf.trim().parse::<f64>() {
+                    if let Some(v) = parse_decimal_input(&buf) {
                         if let Some(orig) = page
                             .result
                             .table_rows
@@ -1953,7 +2028,7 @@ impl EhPhModuleState {
                 self.draw_current(db);
             }
             if ui.button(crate::i18n::text("common.031")).clicked() {
-                self.export_active_csv("/home/nando/.gemini/antigravity/scratch/ehph_table.csv");
+                self.export_active_csv_dialog();
             }
         });
         ui.add_space(4.0);
@@ -2057,7 +2132,7 @@ impl EhPhModuleState {
                     widget_cell(ui, 95.0, dg_bg, false, |ui| {
                         let r = ui.text_edit_singleline(dg_buf);
                         if r.changed() || r.lost_focus() {
-                            if let Ok(v) = dg_buf.trim().parse::<f64>() {
+                            if let Some(v) = parse_decimal_input(&dg_buf) {
                                 if (v - orig_dg).abs() > 1e-3 {
                                     self.delta_g_overrides_kcal
                                         .insert(sp_row.formula.clone(), v);
@@ -2104,30 +2179,30 @@ impl EhPhModuleState {
         });
     }
 
-    fn ui_combiner_view(&mut self, ctx: &egui::Context, db: &dyn SpeciesCatalogPort) {
+    fn ui_combiner_view(&mut self, root_ui: &mut egui::Ui, db: &dyn SpeciesCatalogPort) {
         let cur_elements = self.selected_elements.clone();
         let cur_main = self.main_element.clone();
         let mut redraw_comb = false;
 
-        egui::SidePanel::left("ehph_combiner_left")
+        egui::Panel::left("ehph_combiner_left")
             .resizable(true)
-            .default_width(295.0)
-            .min_width(180.0)
-            .max_width(520.0)
+            .default_size(295.0)
+            .min_size(180.0)
+            .max_size(520.0)
             .frame(
-                egui::Frame::none()
+                egui::Frame::NONE
                     .fill(egui::Color32::from_rgb(240, 242, 245))
-                    .inner_margin(egui::Margin::same(8.0))
+                    .inner_margin(egui::Margin::same(8))
                     .stroke(egui::Stroke::new(1.0, EXCEL_GRID_BORDER)),
             )
-            .show(ctx, |ui| {
+            .show(root_ui, |ui| {
                 egui::ScrollArea::both().show(ui, |ui| {
                     let mut remove_idx = None;
                     for (idx, ds) in self.combiner_datasets.iter_mut().enumerate() {
-                        egui::Frame::none()
+                        egui::Frame::NONE
                             .fill(egui::Color32::WHITE)
                             .stroke(egui::Stroke::new(1.0, EXCEL_GRID_BORDER))
-                            .inner_margin(egui::Margin::same(6.0))
+                            .inner_margin(egui::Margin::same(6))
                             .show(ui, |ui| {
                                 ui.horizontal(|ui| {
                                     ui.strong(format!("Dataset {}", ds.id));
@@ -2183,7 +2258,7 @@ impl EhPhModuleState {
                                         egui::TextEdit::singleline(&mut ds.temp_str),
                                     );
                                     if r.changed() || r.lost_focus() {
-                                        if let Ok(v) = ds.temp_str.trim().parse::<f64>() {
+                                        if let Some(v) = parse_decimal_input(&ds.temp_str) {
                                             ds.temp_c = v;
                                         }
                                     }
@@ -2208,7 +2283,7 @@ impl EhPhModuleState {
                                                 egui::TextEdit::singleline(m_buf),
                                             );
                                             if rm.changed() || rm.lost_focus() {
-                                                if let Ok(v) = m_buf.trim().parse::<f64>() {
+                                                if let Some(v) = parse_decimal_input(&m_buf) {
                                                     if v > 0.0 {
                                                         el.molality = v;
                                                     }
@@ -2225,7 +2300,7 @@ impl EhPhModuleState {
                                                 egui::TextEdit::singleline(p_buf),
                                             );
                                             if rp.changed() || rp.lost_focus() {
-                                                if let Ok(v) = p_buf.trim().parse::<f64>() {
+                                                if let Some(v) = parse_decimal_input(&p_buf) {
                                                     if v > 0.0 {
                                                         el.pressure_bar = v;
                                                     }
@@ -2255,11 +2330,11 @@ impl EhPhModuleState {
 
         egui::CentralPanel::default()
             .frame(
-                egui::Frame::none()
+                egui::Frame::NONE
                     .fill(egui::Color32::WHITE)
-                    .inner_margin(egui::Margin::same(8.0)),
+                    .inner_margin(egui::Margin::same(8)),
             )
-            .show(ctx, |ui| {
+            .show(root_ui, |ui| {
                 if self.combiner_show_table {
                     ui.strong("Combiner Table");
                     ui.separator();
@@ -2332,11 +2407,15 @@ impl EhPhModuleState {
                     outer_rect.max - egui::vec2(margin_r, margin_b),
                 );
 
-                let min_ph: f64 = self.min_ph_str.trim().parse().unwrap_or(0.0);
-                let max_ph: f64 = self.max_ph_str.trim().parse().unwrap_or(14.0);
-                let min_eh: f64 = self.min_eh_str.trim().parse().unwrap_or(-2.0);
-                let max_eh: f64 = self.max_eh_str.trim().parse().unwrap_or(2.0);
+                let min_ph: f64 = parse_decimal_input(&self.min_ph_str).unwrap_or(0.0);
+                let max_ph: f64 = parse_decimal_input(&self.max_ph_str).unwrap_or(14.0);
+                let min_eh: f64 = parse_decimal_input(&self.min_eh_str).unwrap_or(-2.0);
+                let max_eh: f64 = parse_decimal_input(&self.max_eh_str).unwrap_or(2.0);
 
+                if self.invalid_numeric_input().is_some() || max_ph <= min_ph || max_eh <= min_eh {
+                    ui.colored_label(egui::Color32::RED, "Invalid plot limits");
+                    return;
+                }
                 let ph_to_x = |ph: f64| -> f32 {
                     plot_rect.left()
                         + (((ph - min_ph) / (max_ph - min_ph)) as f32) * plot_rect.width()
@@ -2473,10 +2552,10 @@ impl EhPhModuleState {
                 ui.separator();
                 ui.horizontal(|ui| {
                     if ui.button("Export SVG...").clicked() {
-                        self.export_active_svg("/home/nando/.gemini/antigravity/scratch/ehph_chart.svg");
+                        self.export_active_svg_dialog();
                     }
                     if ui.button("Export CSV...").clicked() {
-                        self.export_active_csv("/home/nando/.gemini/antigravity/scratch/ehph_table.csv");
+                        self.export_active_csv_dialog();
                     }
                     if ui.button(crate::i18n::text("common.004")).clicked() {
                         self.show_print_dialog = false;
@@ -2488,7 +2567,7 @@ impl EhPhModuleState {
         }
     }
 
-    fn ui_extra_modals(&mut self, ctx: &egui::Context, db: &dyn SpeciesCatalogPort) {
+    fn ui_extra_modals(&mut self, ctx: &egui::Context) {
         if let Some(sp) = self.species_modal.clone() {
             let mut open = true;
             let tk = self.t_k();
@@ -2681,43 +2760,9 @@ impl EhPhModuleState {
             }
         }
 
-        if self.show_file_modal {
-            let mut open = self.show_file_modal;
-            let title = if self.file_modal_is_save {
-                "Save Eh-pH Diagram (.eph8)"
-            } else {
-                "Open Eh-pH Diagram (.eph8)"
-            };
-            let mut action = false;
-            egui::Window::new(title).open(&mut open).default_width(420.0).show(ctx, |ui| {
-                ui.label(crate::i18n::text("common.085"));
-                ui.text_edit_singleline(&mut self.file_path_buf);
-                ui.horizontal(|ui| {
-                    let lbl = if self.file_modal_is_save { "Save" } else { "Open" };
-                    if ui.button(lbl).clicked() {
-                        action = true;
-                    }
-                    if ui.button(crate::i18n::text("common.000")).clicked() {
-                        self.show_file_modal = false;
-                    }
-                });
-            });
-            if action {
-                let p = self.file_path_buf.trim().to_string();
-                if self.file_modal_is_save {
-                    self.save_eph8(&p);
-                } else {
-                    self.open_eph8(db, &p);
-                }
-                self.show_file_modal = false;
-            } else if !open {
-                self.show_file_modal = false;
-            }
-        }
-
         if self.show_help_modal {
             let mut open = self.show_help_modal;
-            egui::Window::new("Eh-pH Diagrams Help (HSC Ch. 17)")
+            egui::Window::new("Eh-pH Diagrams Help (Ch. 17)")
                 .open(&mut open)
                 .default_width(460.0)
                 .show(ctx, |ui| {
@@ -2821,7 +2866,7 @@ fn draw_ehph_plot_frame(
     plot_rect: egui::Rect,
     y_label: &str,
 ) {
-    painter.rect_stroke(plot_rect, 0.0, egui::Stroke::new(1.3, egui::Color32::BLACK));
+    painter.rect_stroke(plot_rect, 0.0, egui::Stroke::new(1.3, egui::Color32::BLACK), egui::StrokeKind::Middle);
     painter.text(
         egui::pos2(plot_rect.center().x, plot_rect.bottom() + 26.0),
         egui::Align2::CENTER_CENTER,
@@ -2999,12 +3044,11 @@ mod tests {
 
     #[test]
     fn maindb6_cus25_and_s_cu_h2o_if_present() {
-        let path = "/home/nando/Descargas/HSC6/Databases/Maindb6.HSC";
-        if !std::path::Path::new(path).exists() {
+        let Some(path) = crate::test_support::test_maindb("maindb6_cus25_and_s_cu_h2o_if_present") else {
             return;
-        }
+        };
         let mut db = SpeciesDb::with_open_defaults();
-        db.load_main_hsc(path).expect("Maindb6 opens");
+        db.load_main_hsc(path).expect("catálogo principal opens");
         let mut st = EhPhModuleState::new(&db);
         // Check Search Mode Organics filter when C is selected
         st.selected_elements = vec![ElementSpec {

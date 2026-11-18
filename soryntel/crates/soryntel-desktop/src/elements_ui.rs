@@ -194,7 +194,11 @@ impl ElementsModuleState {
 
     fn export_csv(&mut self) {
         let csv = MiscUseCases::export_elements_csv(&self.workbook);
-        let path = "/tmp/soryntel_elements_export.csv";
+        let Some(chosen) = crate::storage::choose_file(true, "Exportar elementos", "csv", "elements.csv", None) else {
+            return;
+        };
+        let path = chosen.to_string_lossy().into_owned();
+        let path = path.as_str();
         match crate::storage::write_atomic(path, csv) {
             Ok(_) => {
                 self.status_msg = format!("Exported Elements workbook to {path}");
@@ -206,7 +210,11 @@ impl ElementsModuleState {
     }
 
     fn print_periodic_svg(&mut self) {
-        let path = "/tmp/soryntel_periodic_chart.svg";
+        let Some(chosen) = crate::storage::choose_file(true, "Guardar tabla periódica", "svg", "periodic_chart.svg", None) else {
+            return;
+        };
+        let path = chosen.to_string_lossy().into_owned();
+        let path = path.as_str();
         let title = self
             .diagram_cache
             .as_ref()
@@ -277,19 +285,21 @@ impl ElementsModuleState {
         }
     }
 
-    pub fn ui(&mut self, ctx: &egui::Context, catalog: &dyn SpeciesCatalogPort) {
+    pub fn ui(&mut self, root_ui: &mut egui::Ui, catalog: &dyn SpeciesCatalogPort) {
+        let ctx = &root_ui.ctx().clone();
         match self.view_mode {
-            ElementsViewMode::PeriodicChart => self.render_periodic_chart_view(ctx, catalog),
-            ElementsViewMode::DatabaseSpreadsheet => self.render_spreadsheet_view(ctx),
+            ElementsViewMode::PeriodicChart => self.render_periodic_chart_view(root_ui, catalog),
+            ElementsViewMode::DatabaseSpreadsheet => self.render_spreadsheet_view(root_ui),
         }
         self.render_modals(ctx);
     }
 
     fn render_periodic_chart_view(
         &mut self,
-        ctx: &egui::Context,
+        root_ui: &mut egui::Ui,
         catalog: &dyn SpeciesCatalogPort,
     ) {
+        let ctx = &root_ui.ctx().clone();
         let diag_map: HashMap<usize, (f64, bool, Option<f64>)> = self
             .diagram_cache
             .as_ref()
@@ -303,13 +313,13 @@ impl ElementsModuleState {
             .unwrap_or_default();
 
         // Bottom Toolbar & Optional Legend Bar inside BottomPanel so center fills remaining area cleanly
-        egui::TopBottomPanel::bottom("elements_periodic_bottom")
+        egui::Panel::bottom("elements_periodic_bottom")
             .frame(
-                egui::Frame::none()
+                egui::Frame::NONE
                     .fill(egui::Color32::from_rgb(237, 239, 243))
-                    .inner_margin(egui::Margin::symmetric(10.0, 6.0)),
+                    .inner_margin(egui::Margin::symmetric(10, 6)),
             )
-            .show(ctx, |ui| {
+            .show(root_ui, |ui| {
                 if self.show_legend {
                     ui.horizontal_wrapped(|ui| {
                         ui.spacing_mut().item_spacing = egui::vec2(10.0, 4.0);
@@ -325,6 +335,7 @@ impl ElementsModuleState {
                                     rect,
                                     2.0,
                                     egui::Stroke::new(1.0, egui::Color32::from_rgb(168, 174, 184)),
+                                    egui::StrokeKind::Middle,
                                 );
                             }
                             ui.label(
@@ -427,16 +438,16 @@ impl ElementsModuleState {
 
         // Docked Right Data Panel (Fig. 1)
         if self.show_data {
-            let panel_w = (ctx.screen_rect().width() * 0.27).clamp(220.0, 325.0);
-            egui::SidePanel::right("elements_right_data_panel")
-                .exact_width(panel_w)
+            let panel_w = (ctx.content_rect().width() * 0.27).clamp(220.0, 325.0);
+            egui::Panel::right("elements_right_data_panel")
+                .exact_size(panel_w)
                 .frame(
-                    egui::Frame::none()
+                    egui::Frame::NONE
                         .fill(egui::Color32::WHITE)
                         .stroke(egui::Stroke::new(1.0, EXCEL_HEADER_BORDER))
-                        .inner_margin(egui::Margin::same(3.0)),
+                        .inner_margin(egui::Margin::same(3)),
                 )
-                .show(ctx, |ui| {
+                .show(root_ui, |ui| {
                     self.render_right_data_sheet(ui, panel_w - 8.0);
                 });
         }
@@ -444,11 +455,11 @@ impl ElementsModuleState {
         // Main Central Periodic Chart Canvas
         egui::CentralPanel::default()
             .frame(
-                egui::Frame::none()
+                egui::Frame::NONE
                     .fill(egui::Color32::from_rgb(241, 243, 246))
-                    .inner_margin(egui::Margin::same(8.0)),
+                    .inner_margin(egui::Margin::same(8)),
             )
-            .show(ctx, |ui| {
+            .show(root_ui, |ui| {
                 let avail = ui.available_size();
                 if avail.x < 180.0 || avail.y < 140.0 {
                     ui.label("Resize window larger to display Periodic Chart.");
@@ -467,6 +478,7 @@ impl ElementsModuleState {
                     canvas_rect,
                     2.0,
                     egui::Stroke::new(1.0, egui::Color32::from_rgb(196, 202, 212)),
+                    egui::StrokeKind::Middle,
                 );
 
                 let pad = 8.0f32;
@@ -506,6 +518,7 @@ impl ElementsModuleState {
                         hr,
                         1.5,
                         egui::Stroke::new(1.0, egui::Color32::from_rgb(172, 178, 188)),
+                        egui::StrokeKind::Middle,
                     );
                     painter.text(
                         hr.center(),
@@ -567,7 +580,7 @@ impl ElementsModuleState {
                     let rect = cell_rect(el.grid_row, el.grid_col);
                     let resp = ui.interact(
                         rect,
-                        egui::Id::new(("periodic_el", el.z)),
+                        egui::Id::unique(("periodic_el", el.z)),
                         egui::Sense::click(),
                     );
                     if resp.clicked() {
@@ -631,7 +644,7 @@ impl ElementsModuleState {
                     } else {
                         egui::Stroke::new(1.0, egui::Color32::from_rgb(162, 170, 182))
                     };
-                    painter.rect_stroke(rect, 1.5, border);
+                    painter.rect_stroke(rect, 1.5, border, egui::StrokeKind::Middle);
 
                     // Tile text clipped inside rect
                     let tp = painter.with_clip_rect(rect.shrink(1.5));
@@ -842,21 +855,21 @@ impl ElementsModuleState {
             });
     }
 
-    fn render_spreadsheet_view(&mut self, ctx: &egui::Context) {
+    fn render_spreadsheet_view(&mut self, root_ui: &mut egui::Ui) {
         // Top Classic Menu Bar: File | Edit | Insert | Delete | Format | Help (Fig. 2)
-        egui::TopBottomPanel::top("elements_spreadsheet_menu")
+        egui::Panel::top("elements_spreadsheet_menu")
             .frame(
-                egui::Frame::none()
+                egui::Frame::NONE
                     .fill(egui::Color32::from_rgb(242, 244, 247))
                     .stroke(egui::Stroke::new(1.0, EXCEL_GRID_BORDER))
-                    .inner_margin(egui::Margin::symmetric(6.0, 2.0)),
+                    .inner_margin(egui::Margin::symmetric(6, 2)),
             )
-            .show(ctx, |ui| {
-                egui::menu::bar(ui, |ui| {
+            .show(root_ui, |ui| {
+                egui::MenuBar::new().ui(ui, |ui| {
                     ui.menu_button(crate::i18n::text("common.001"), |ui| {
                         if ui.button("Periodic Chart (Return)").clicked() {
                             self.view_mode = ElementsViewMode::PeriodicChart;
-                            ui.close_menu();
+                            ui.close_kind(egui::UiKind::Menu);
                         }
                         if ui.button("Plot Selected Row as Diagram").clicked() {
                             if self.active_cell.row > 0 {
@@ -868,26 +881,26 @@ impl ElementsModuleState {
                                 self.recompute_diagram();
                                 self.view_mode = ElementsViewMode::PeriodicChart;
                             }
-                            ui.close_menu();
+                            ui.close_kind(egui::UiKind::Menu);
                         }
                         ui.separator();
-                        if ui.button("Export CSV (/tmp/soryntel_elements_export.csv)").clicked() {
+                        if ui.button("Export CSV...").clicked() {
                             self.export_csv();
-                            ui.close_menu();
+                            ui.close_kind(egui::UiKind::Menu);
                         }
                         if ui.button("Reset Default Element4 Database").clicked() {
                             self.workbook = MiscUseCases::default_elements_workbook();
                             self.recompute_diagram();
                             self.sync_formula_from_active_cell();
                             self.status_msg = "Reset workbook to default Element4 (103 elements).".into();
-                            ui.close_menu();
+                            ui.close_kind(egui::UiKind::Menu);
                         }
                     });
                     ui.menu_button(crate::i18n::text("common.006"), |ui| {
                         if ui.button("Copy Active Cell").clicked() {
                             let val = self.cell_value(self.active_cell.row, self.active_cell.col);
                             ui.ctx().copy_text(val);
-                            ui.close_menu();
+                            ui.close_kind(egui::UiKind::Menu);
                         }
                         if ui.button("Toggle Diagram TRUE/FALSE on Row").clicked() {
                             if self.active_cell.row > 0 {
@@ -896,7 +909,7 @@ impl ElementsModuleState {
                                 }
                                 self.sync_formula_from_active_cell();
                             }
-                            ui.close_menu();
+                            ui.close_kind(egui::UiKind::Menu);
                         }
                     });
                     ui.menu_button(crate::i18n::text("common.010"), |ui| {
@@ -905,7 +918,7 @@ impl ElementsModuleState {
                             self.new_row_units.clear();
                             self.new_row_diagram = true;
                             self.show_insert_row_modal = true;
-                            ui.close_menu();
+                            ui.close_kind(egui::UiKind::Menu);
                         }
                     });
                     ui.menu_button(crate::i18n::text("common.013"), |ui| {
@@ -923,7 +936,7 @@ impl ElementsModuleState {
                                 self.active_cell.row = self.active_cell.row.min(self.workbook.rows.len());
                                 self.sync_formula_from_active_cell();
                             }
-                            ui.close_menu();
+                            ui.close_kind(egui::UiKind::Menu);
                         }
                     });
                     ui.menu_button(crate::i18n::text("common.019"), |ui| {
@@ -931,13 +944,13 @@ impl ElementsModuleState {
                             .checkbox(&mut self.fix_left_3_cols, "Fix Left 3 Columns (Property | Units | Diagram)")
                             .clicked()
                         {
-                            ui.close_menu();
+                            ui.close_kind(egui::UiKind::Menu);
                         }
                     });
                     ui.menu_button(crate::i18n::text("common.003"), |ui| {
                         if ui.button("About Elements Module").clicked() {
                             self.show_about_modal = true;
-                            ui.close_menu();
+                            ui.close_kind(egui::UiKind::Menu);
                         }
                     });
                 });
@@ -955,7 +968,7 @@ impl ElementsModuleState {
                     if ui.is_rect_visible(addr_rect) {
                         let p = ui.painter();
                         p.rect_filled(addr_rect, 1.0, egui::Color32::WHITE);
-                        p.rect_stroke(addr_rect, 1.0, egui::Stroke::new(1.0, EXCEL_HEADER_BORDER));
+                        p.rect_stroke(addr_rect, 1.0, egui::Stroke::new(1.0, EXCEL_HEADER_BORDER), egui::StrokeKind::Middle);
                         p.text(
                             addr_rect.left_center() + egui::vec2(6.0, 0.0),
                             egui::Align2::LEFT_CENTER,
@@ -990,17 +1003,17 @@ impl ElementsModuleState {
             });
 
         // Bottom Bar: Outotec | Exit | Fix Left 3 Columns (Fig. 2)
-        egui::TopBottomPanel::bottom("elements_spreadsheet_footer")
+        egui::Panel::bottom("elements_spreadsheet_footer")
             .frame(
-                egui::Frame::none()
+                egui::Frame::NONE
                     .fill(egui::Color32::from_rgb(236, 238, 242))
                     .stroke(egui::Stroke::new(1.0, EXCEL_GRID_BORDER))
-                    .inner_margin(egui::Margin::symmetric(8.0, 4.0)),
+                    .inner_margin(egui::Margin::symmetric(8, 4)),
             )
-            .show(ctx, |ui| {
+            .show(root_ui, |ui| {
                 ui.horizontal(|ui| {
                     ui.label(
-                        egui::RichText::new("Outotec")
+                        egui::RichText::new("Soryntel")
                             .strong()
                             .size(14.0)
                             .color(egui::Color32::from_rgb(198, 52, 40)),
@@ -1036,8 +1049,8 @@ impl ElementsModuleState {
 
         // Main Excel Grid Area
         egui::CentralPanel::default()
-            .frame(egui::Frame::none().fill(egui::Color32::WHITE))
-            .show(ctx, |ui| {
+            .frame(egui::Frame::NONE.fill(egui::Color32::WHITE))
+            .show(root_ui, |ui| {
                 let row_h = 20.5f32;
                 let rn_w = 34.0f32;
                 let [w_prop, w_unit, w_diag] = self.col_widths_base;
@@ -1397,6 +1410,7 @@ impl ElementsModuleState {
                                     chip,
                                     4.0,
                                     egui::Stroke::new(1.5, egui::Color32::from_rgb(80, 90, 110)),
+                                    egui::StrokeKind::Middle,
                                 );
                                 p.text(
                                     chip.center() - egui::vec2(0.0, 6.0),
@@ -1450,7 +1464,7 @@ impl ElementsModuleState {
                         ui.separator();
                         ui.label(
                             egui::RichText::new(format!(
-                                "HSC Maindb6 Species Containing {} ({} found)",
+                                "Species containing {} ({} found)",
                                 spec.symbol,
                                 self.modal_db_species.len()
                             ))
@@ -1563,10 +1577,10 @@ impl ElementsModuleState {
                 .open(&mut open)
                 .collapsible(false)
                 .show(ctx, |ui| {
-                    ui.label("Soryntel / HSC Elements Module — Z = 1..=103 (H..Lr)");
+                    ui.label("Soryntel Elements Module — Z = 1..=103 (H..Lr)");
                     ui.label("• Periodic Chart with category coloring, state colors, and proportional 3D-shaded property spheres.");
                     ui.label("• Interactive Elements spreadsheet with Fix Left 3 Columns, Diagram toggles, VB6 RGB color swatches, custom rows, and CSV export.");
-                    ui.label("• Integrated with Maindb6 species catalog lookup (double-click any element).");
+                    ui.label("• Integrated with catálogo principal species catalog lookup (double-click any element).");
                     if let Some(idx) = MiscUseCases::element_index("Os") {
                         let _ = idx;
                     }
@@ -1606,7 +1620,7 @@ fn hsc_toolbar_button(
         )
         .fill(fill)
         .stroke(stroke)
-        .rounding(2.5),
+        .corner_radius(3),
     )
 }
 
@@ -1619,6 +1633,7 @@ fn state_legend_chip(ui: &mut egui::Ui, sym: &str, sym_color: egui::Color32, lab
             rect,
             2.0,
             egui::Stroke::new(1.0, egui::Color32::from_rgb(156, 162, 172)),
+            egui::StrokeKind::Middle,
         );
         p.text(
             rect.center(),
@@ -1641,6 +1656,7 @@ fn draw_range_tile(painter: &egui::Painter, rect: egui::Rect, label: &str, fill:
         rect,
         1.5,
         egui::Stroke::new(1.0, egui::Color32::from_rgb(162, 170, 182)),
+        egui::StrokeKind::Middle,
     );
     painter.text(
         rect.center(),
@@ -1681,7 +1697,7 @@ fn paint_excel_hdr_rect(painter: &egui::Painter, rect: egui::Rect, text: &str, a
         EXCEL_HEADER_BG
     };
     painter.rect_filled(rect, 0.0, bg);
-    painter.rect_stroke(rect, 0.0, egui::Stroke::new(1.0, EXCEL_HEADER_BORDER));
+    painter.rect_stroke(rect, 0.0, egui::Stroke::new(1.0, EXCEL_HEADER_BORDER), egui::StrokeKind::Middle);
     painter.text(
         rect.center(),
         egui::Align2::CENTER_CENTER,
@@ -1725,7 +1741,7 @@ fn paint_grid_cell(
     } else {
         egui::Stroke::new(1.0, EXCEL_GRID_BORDER)
     };
-    painter.rect_stroke(rect, 0.0, stroke);
+    painter.rect_stroke(rect, 0.0, stroke, egui::StrokeKind::Middle);
     let clipped = painter.with_clip_rect(rect.shrink2(egui::vec2(3.0, 1.0)));
     let _ = bold;
     let (pos, align) = if center {

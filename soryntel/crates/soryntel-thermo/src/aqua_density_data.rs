@@ -1,6 +1,6 @@
 //! Laliberté & Cooper (2004) aqueous electrolyte solution density coefficients.
 //!
-//! Extracted cleanly from `/home/nando/Descargas/HSC6/Databases/Aqueous Solution Density.xls`
+//! Extracted cleanly from `HSC6/Databases/Aqueous Solution Density.xls`
 //! (`59` electrolytes, `c0..c4` + mass-fraction bounds) plus temperature bounds verified in
 //! `HSC 9/10 Aqua Density Calculator` (`Fig. 7`).
 

@@ -4,7 +4,7 @@
 
 Ejecute `soryntel-desktop` (Linux) o `soryntel-desktop.exe` (Windows). Seleccione un módulo en el panel principal; cada módulo se abre en su propia ventana. El indicador verde señala ventanas abiertas. La vista de tarjetas ofrece una descripción y filtros por categoría. La versión se obtiene del paquete Rust.
 
-El catálogo abierto incorporado tiene cobertura limitada. Una fórmula ausente requiere aportar datos o una base externa mediante `--hsc-db <archivo>`. Los registros HSC externos se leen sin modificar el archivo original. La prioridad y edición de OwnDB se gestionan en el módulo de especies. Compruebe fórmula, fase, carga, intervalos térmicos y referencias antes de calcular.
+El catálogo abierto incorporado tiene cobertura limitada. Una fórmula ausente requiere aportar datos o una base externa mediante `--database <archivo>`. Los registros de bases externas se leen sin modificar el archivo original. La prioridad y edición de OwnDB se gestionan en el módulo de especies. Compruebe fórmula, fase, carga, intervalos térmicos y referencias antes de calcular.
 
 Use símbolos químicos convencionales y distinga fases como `CO(g)` y `H2O(l)`. Escriba los números con punto decimal en las entradas que todavía usan el analizador numérico de Rust; las fórmulas y los formatos de intercambio conservan su sintaxis original. La traducción al español está en curso: navegación y muchos controles están traducidos, pero algunas hojas, ayudas y mensajes siguen en inglés.
 

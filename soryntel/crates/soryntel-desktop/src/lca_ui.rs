@@ -69,6 +69,7 @@ pub struct ClassicRowSelection {
 }
 
 pub struct LcaWindowState {
+    ipc_probe: Option<std::sync::mpsc::Receiver<(String, Result<(), String>)>>,
     pub ui_mode: LcaUiMode,
 
     // Classic state (49.3)
@@ -140,6 +141,7 @@ impl Default for LcaWindowState {
         expanded_folders.insert("recipe_midpoint_h".to_string());
 
         Self {
+            ipc_probe: None,
             ui_mode: LcaUiMode::Classic,
             classic: ClassicLcaState::default(),
             classic_tab: ClassicTab::Inputs,
@@ -188,6 +190,54 @@ impl Default for LcaWindowState {
 }
 
 impl LcaWindowState {
+    fn start_ipc_probe(&mut self, ctx: &egui::Context) {
+        let endpoint = self.beta.ipc_endpoint.trim().to_string();
+        let (sender, receiver) = std::sync::mpsc::channel();
+        let ctx = ctx.clone();
+        self.beta.ipc_live_connected = false;
+        match std::thread::Builder::new().name("openlca-probe".into()).spawn(move || {
+            let result = probe_openlca(&endpoint);
+            let _ = sender.send((endpoint, result));
+            ctx.request_repaint();
+        }) {
+            Ok(_) => {
+                self.ipc_probe = Some(receiver);
+                self.beta.ipc_status_note = "Checking openLCA IPC…".into();
+            }
+            Err(error) => {
+                self.ipc_probe = None;
+                self.beta.ipc_status_note = format!("Could not start openLCA IPC probe: {error}");
+            }
+        }
+        self.status_message.clone_from(&self.beta.ipc_status_note);
+    }
+
+    fn poll_ipc_probe(&mut self) {
+        let Some(receiver) = &self.ipc_probe else { return };
+        match receiver.try_recv() {
+            Ok((endpoint, result)) => {
+                self.ipc_probe = None;
+                if endpoint == self.beta.ipc_endpoint.trim() {
+                    self.beta.ipc_live_connected = result.is_ok();
+                    self.beta.ipc_status_note = match result {
+                        Ok(()) => format!("Connected to openLCA IPC ({endpoint})"),
+                        Err(error) => format!(
+                            "IPC {endpoint}: {error}. Using built-in {} catalog.",
+                            self.beta.active_db_name
+                        ),
+                    };
+                    self.status_message.clone_from(&self.beta.ipc_status_note);
+                }
+            }
+            Err(std::sync::mpsc::TryRecvError::Empty) => {}
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                self.ipc_probe = None;
+                self.beta.ipc_status_note = "openLCA IPC probe stopped.".into();
+                self.status_message.clone_from(&self.beta.ipc_status_note);
+            }
+        }
+    }
+
     pub fn with_preset_classic_zn() -> (SimProject, Self) {
         let (proj, classic) = SimulationUseCases::sim_lca_preset_classic_zn();
         let mut st = Self::default();
@@ -220,14 +270,15 @@ impl LcaWindowState {
 // ─────────────────────────────────────────────────────────────────────────────
 
 pub fn render_standalone_lca_module(
-    ctx: &egui::Context,
+    root_ui: &mut egui::Ui,
     project: &mut SimProject,
     state: &mut LcaWindowState,
 ) {
-    egui::TopBottomPanel::top("standalone_lca_top_bar").show(ctx, |ui| {
+        let ctx = &root_ui.ctx().clone();
+    egui::Panel::top("standalone_lca_top_bar").show(root_ui, |ui| {
         ui.horizontal(|ui| {
             ui.label(
-                RichText::new("Soryntel · Module 19: HSC Sim LCA")
+                RichText::new("Soryntel · Module 19: Sim LCA")
                     .strong()
                     .color(Color32::from_rgb(15, 23, 42)),
             );
@@ -260,7 +311,7 @@ pub fn render_standalone_lca_module(
         });
     });
 
-    egui::CentralPanel::default().show(ctx, |ui| {
+    egui::CentralPanel::default().show(root_ui, |ui| {
         render_lca_body(ui, ctx, project, state);
     });
 }
@@ -277,7 +328,7 @@ pub fn render_lca_floating_window(
         LcaUiMode::Beta => "LCA",
     };
     egui::Window::new(title)
-        .id(egui::Id::new("hsc_sim_lca_main_window"))
+        .id(egui::Id::unique("hsc_sim_lca_main_window"))
         .open(open)
         .default_size([1180.0, 690.0])
         .min_size([860.0, 500.0])
@@ -287,6 +338,54 @@ pub fn render_lca_floating_window(
         });
 }
 
+fn probe_openlca(endpoint: &str) -> Result<(), String> {
+    use std::io::{Read, Write};
+    use std::net::{SocketAddr, TcpStream};
+    use std::time::{Duration, Instant};
+
+    let address: SocketAddr = endpoint.parse().map_err(|_| "Invalid IP address or port")?;
+    let timeout = Duration::from_secs(1);
+    let deadline = Instant::now() + timeout;
+    let mut stream = TcpStream::connect_timeout(&address, timeout).map_err(|e| e.to_string())?;
+    stream.set_write_timeout(Some(timeout)).map_err(|e| e.to_string())?;
+    // GreenDelta openLCA IPC: data/get/descriptors returns a JSON-RPC array.
+    let body = r#"{"jsonrpc":"2.0","id":1,"method":"data/get/descriptors","params":{"@type":"FlowProperty"}}"#;
+    write!(
+        stream,
+        "POST / HTTP/1.0\r\nHost: {address}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        body.len()
+    ).map_err(|e| e.to_string())?;
+
+    let mut response = Vec::new();
+    let mut chunk = [0u8; 4096];
+    loop {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return Err("Probe timed out".into());
+        }
+        stream.set_read_timeout(Some(remaining)).map_err(|e| e.to_string())?;
+        let count = stream.read(&mut chunk).map_err(|e| e.to_string())?;
+        if count == 0 {
+            break;
+        }
+        response.extend_from_slice(&chunk[..count]);
+        if response.len() > 1024 * 1024 {
+            return Err("Probe response exceeded 1 MiB".into());
+        }
+    }
+    let response = std::str::from_utf8(&response).map_err(|e| e.to_string())?;
+    let (head, body) = response.split_once("\r\n\r\n").ok_or("Invalid HTTP response")?;
+    let code = head.lines().next().and_then(|line| line.split_whitespace().nth(1));
+    if code != Some("200") {
+        return Err(format!("Unexpected HTTP status {}", code.unwrap_or("unknown")));
+    }
+    let rpc: serde_json::Value = serde_json::from_str(body).map_err(|_| "Invalid JSON-RPC response")?;
+    if rpc["jsonrpc"] != "2.0" || rpc["id"] != 1 || !rpc["result"].is_array() || rpc.get("error").is_some() {
+        return Err("Missing successful openLCA descriptor response".into());
+    }
+    Ok(())
+}
+
 /// Shared inner canvas used by both standalone Launcher window and `HSC Sim -> Tools` floating window.
 pub fn render_lca_body(
     ui: &mut egui::Ui,
@@ -294,6 +393,7 @@ pub fn render_lca_body(
     project: &SimProject,
     state: &mut LcaWindowState,
 ) {
+    state.poll_ipc_probe();
     ui.colored_label(Color32::from_rgb(180, 90, 0), soryntel_application::models::lca::BUILTIN_LCA_NOTICE);
     match state.ui_mode {
         LcaUiMode::Classic => render_classic_lca(ui, ctx, project, state),
@@ -307,11 +407,11 @@ pub fn render_lca_body(
 // ─────────────────────────────────────────────────────────────────────────────
 
 fn ribbon_group(ui: &mut egui::Ui, title: &str, add_contents: impl FnOnce(&mut egui::Ui)) {
-    egui::Frame::none()
+    egui::Frame::NONE
         .fill(RIBBON_BG)
         .stroke(Stroke::new(1.0, RIBBON_BORDER))
-        .rounding(3.0)
-        .inner_margin(egui::Margin::symmetric(6.0, 4.0))
+        .corner_radius(3)
+        .inner_margin(egui::Margin::symmetric(6, 4))
         .show(ui, |ui| {
             ui.vertical(|ui| {
                 ui.horizontal(|ui| {
@@ -392,11 +492,11 @@ fn render_classic_lca(
                         state.classic.active_db = LcaDatabaseKind::OpenLca;
                         state.classic.refresh_indicators();
                         state.status_message = "Switched Classic DB to Built-in OpenLCA".to_string();
-                        ui.close_menu();
+                        ui.close_kind(egui::UiKind::Menu);
                     }
                     if ui.button("Set Active Database...").clicked() {
                         state.show_openlca_db_modal = true;
-                        ui.close_menu();
+                        ui.close_kind(egui::UiKind::Menu);
                     }
                 },
             );
@@ -458,15 +558,17 @@ fn render_classic_lca(
             let is_gabi = state.classic.active_db == LcaDatabaseKind::GaBi;
             if ribbon_tile_button(ui, "💾", "To EcoSpold\nv1.0 (GaBi)", false, is_gabi).clicked() {
                 match SimulationUseCases::sim_lca_classic_ecospold_xml(&mut state.classic) {
-                    Ok(xml) => {
-                        let out_path = "/tmp/soryntel_ecospold_v1.xml";
-                        let saved = crate::storage::write_atomic(out_path, xml.as_bytes()).is_ok();
-                        state.export_last_saved_path = saved.then(|| out_path.to_string());
-                        state.export_modal_title = "EcoSpold v1.0 export succeeded!".to_string();
-                        state.export_modal_body = xml;
-                        state.show_export_modal = true;
-                        state.classic_tab = ClassicTab::Normalized;
-                    }
+                    Ok(xml) => match save_export("To EcoSpold v1.0", "xml", "soryntel_ecospold_v1.xml", xml.as_bytes()) {
+                        Ok(Some(out_path)) => {
+                            state.export_last_saved_path = Some(out_path);
+                            state.export_modal_title = "EcoSpold v1.0 export succeeded!".to_string();
+                            state.export_modal_body = xml;
+                            state.show_export_modal = true;
+                            state.classic_tab = ClassicTab::Normalized;
+                        }
+                        Ok(None) => {}
+                        Err(e) => state.beta_error_modal = Some(e),
+                    },
                     Err(e) => state.beta_error_modal = Some(e),
                 }
             }
@@ -476,39 +578,43 @@ fn render_classic_lca(
                     for action in ["To Active Database", "To Empty File..."] {
                         if ui.button(action).clicked() {
                             match SimulationUseCases::sim_lca_classic_jsonld_zip(&mut state.classic) {
-                                Ok(bytes) => {
-                                    let out_path = "/tmp/soryntel_openlca_jsonld.zip";
-                                    let saved = crate::storage::write_atomic(out_path, &bytes).is_ok();
-                                    state.export_last_saved_path = saved.then(|| out_path.to_string());
-                                    state.export_modal_title = "JSON-LD export succeeded!".to_string();
-                                    state.export_modal_body = format!(
-                                        "Export target: {action}\nArchive size: {} bytes\nSaved: {out_path}\nProcess category: HSC\nNormalized flows exported: {}",
-                                        bytes.len(),
-                                        state.classic.normalized.len()
-                                    );
-                                    state.show_export_modal = true;
-                                    state.classic_tab = ClassicTab::Normalized;
-                                }
+                                Ok(bytes) => match save_export("To JSON-LD (OpenLCA)", "zip", "soryntel_openlca_jsonld.zip", &bytes) {
+                                    Ok(Some(out_path)) => {
+                                        state.export_modal_title = "JSON-LD export succeeded!".to_string();
+                                        state.export_modal_body = format!(
+                                            "Export target: {action}\nArchive size: {} bytes\nSaved: {out_path}\nProcess category: Soryntel\nNormalized flows exported: {}",
+                                            bytes.len(),
+                                            state.classic.normalized.len()
+                                        );
+                                        state.export_last_saved_path = Some(out_path);
+                                        state.show_export_modal = true;
+                                        state.classic_tab = ClassicTab::Normalized;
+                                    }
+                                    Ok(None) => {}
+                                    Err(e) => state.beta_error_modal = Some(e),
+                                },
                                 Err(e) => state.beta_error_modal = Some(e),
                             }
-                            ui.close_menu();
+                            ui.close_kind(egui::UiKind::Menu);
                         }
                     }
                 });
             });
             if ribbon_tile_button(ui, "XLS", "To Excel", false, true).clicked() {
                 match SimulationUseCases::sim_lca_classic_xlsx(&mut state.classic) {
-                    Ok(bytes) => {
-                        let out_path = "/tmp/soryntel_lca_classic.xlsx";
-                        let saved = crate::storage::write_atomic(out_path, &bytes).is_ok();
-                        state.export_last_saved_path = saved.then(|| out_path.to_string());
-                        state.export_modal_title = "Excel Export Succeeded".to_string();
-                        state.export_modal_body = format!(
-                            "Exported 6 sheets (Input Streams, Output Streams, Manual Input Streams, Manual Output Streams, Indicator Streams, Normalized Streams) ({} bytes) to {out_path}.",
-                            bytes.len()
-                        );
-                        state.show_export_modal = true;
-                    }
+                    Ok(bytes) => match save_export("To Excel", "xlsx", "soryntel_lca_classic.xlsx", &bytes) {
+                        Ok(Some(out_path)) => {
+                            state.export_modal_title = "Excel Export Succeeded".to_string();
+                            state.export_modal_body = format!(
+                                "Exported 6 sheets (Input Streams, Output Streams, Manual Input Streams, Manual Output Streams, Indicator Streams, Normalized Streams) ({} bytes) to {out_path}.",
+                                bytes.len()
+                            );
+                            state.export_last_saved_path = Some(out_path);
+                            state.show_export_modal = true;
+                        }
+                        Ok(None) => {}
+                        Err(e) => state.beta_error_modal = Some(e),
+                    },
                     Err(e) => state.beta_error_modal = Some(e),
                 }
             }
@@ -519,7 +625,7 @@ fn render_classic_lca(
                 state.show_help_modal = true;
             }
             if ribbon_tile_button(ui, "⟳", "Sync", false, true)
-                .on_hover_text("Synchronize boundary streams from active HSC Sim flowsheet")
+                .on_hover_text("Synchronize boundary streams from active Sim flowsheet")
                 .clicked()
             {
                 state.sync_from_project(project);
@@ -1172,7 +1278,7 @@ fn assign_classic_flow(state: &mut LcaWindowState, flow: &LcaCatalogFlow) {
 
 fn render_beta_lca(
     ui: &mut egui::Ui,
-    _ctx: &egui::Context,
+    ctx: &egui::Context,
     project: &SimProject,
     state: &mut LcaWindowState,
 ) {
@@ -1209,28 +1315,29 @@ fn render_beta_lca(
                         .clicked()
                     {
                         state.beta.mode = BetaLcaMode::UnitDatabase;
-                        let _ = SimulationUseCases::sim_lca_beta_probe_openlca_ipc(&mut state.beta);
-                        state.status_message = state.beta.ipc_status_note.clone();
-                        ui.close_menu();
+                        state.start_ipc_probe(ctx);
+                        ui.close_kind(egui::UiKind::Menu);
                     }
                     if ui
                         .selectable_label(state.beta.mode == BetaLcaMode::LciDatabase, "LCI database")
                         .clicked()
                     {
                         state.beta.mode = BetaLcaMode::LciDatabase;
-                        let _ = SimulationUseCases::sim_lca_beta_probe_openlca_ipc(&mut state.beta);
-                        state.status_message = state.beta.ipc_status_note.clone();
-                        ui.close_menu();
+                        state.start_ipc_probe(ctx);
+                        ui.close_kind(egui::UiKind::Menu);
                     }
                     ui.separator();
                     ui.horizontal(|ui| {
                         ui.label("IPC:");
-                        ui.add(egui::TextEdit::singleline(&mut state.beta.ipc_endpoint).desired_width(110.0));
+                        if ui.add(egui::TextEdit::singleline(&mut state.beta.ipc_endpoint).desired_width(110.0)).changed() {
+                            state.ipc_probe = None;
+                            state.beta.ipc_live_connected = false;
+                            state.beta.ipc_status_note = "Connect / Probe to check the new endpoint.".into();
+                        }
                     });
                     if ui.button("Connect / Probe openLCA IPC").clicked() {
-                        let _ = SimulationUseCases::sim_lca_beta_probe_openlca_ipc(&mut state.beta);
-                        state.status_message = state.beta.ipc_status_note.clone();
-                        ui.close_menu();
+                        state.start_ipc_probe(ctx);
+                        ui.close_kind(egui::UiKind::Menu);
                     }
                 },
             );
@@ -1322,16 +1429,20 @@ fn render_beta_lca(
             }
             if ribbon_tile_button(ui, "XLS", "Export to\nExcel", false, true).clicked() {
                 let bytes = SimulationUseCases::sim_lca_beta_xlsx(&state.beta);
-                let out_path = "/tmp/LCA_exports.xlsx";
-                let _ = crate::storage::write_atomic(out_path, &bytes);
-                state.export_last_saved_path = Some(out_path.to_string());
-                state.export_modal_title = "Export to Excel Succeeded".to_string();
-                state.export_modal_body = format!(
-                    "Saved workbook to {out_path} ({} bytes) including Inputs, Outputs, Results, and {} custom/saved/external sheets.",
-                    bytes.len(),
-                    state.beta.custom_sheets.len()
-                );
-                state.show_export_modal = true;
+                match save_export("Export to Excel", "xlsx", "LCA_exports.xlsx", &bytes) {
+                    Ok(Some(out_path)) => {
+                        state.export_modal_title = "Export to Excel Succeeded".to_string();
+                        state.export_modal_body = format!(
+                            "Saved workbook to {out_path} ({} bytes) including Inputs, Outputs, Results, and {} custom/saved/external sheets.",
+                            bytes.len(),
+                            state.beta.custom_sheets.len()
+                        );
+                        state.export_last_saved_path = Some(out_path);
+                        state.show_export_modal = true;
+                    }
+                    Ok(None) => {}
+                    Err(e) => state.beta_error_modal = Some(e),
+                }
             }
         });
 
@@ -1472,10 +1583,9 @@ fn render_beta_lca(
         });
     });
 
-    // Bottom Sheet Tabs (`◄ ► | Inputs | Outputs | Results | Saved... | Custom...`)
+    // Bottom sheet tabs
     ui.separator();
     ui.horizontal(|ui| {
-        ui.label(RichText::new("◄ ► │").small().color(Color32::GRAY));
         for (tab, lbl) in [
             (BetaSheetTab::Inputs, "Inputs"),
             (BetaSheetTab::Outputs, "Outputs"),
@@ -1507,10 +1617,10 @@ fn render_beta_lca(
 fn excel_header_row(ui: &mut egui::Ui, letters: &[&str]) {
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 0.0;
-        let corner = egui::Frame::none()
+        let corner = egui::Frame::NONE
             .fill(EXCEL_HDR_GRAY)
             .stroke(Stroke::new(0.8, EXCEL_GRID_LINE))
-            .inner_margin(egui::Margin::symmetric(4.0, 2.0));
+            .inner_margin(egui::Margin::symmetric(4, 2));
         corner.show(ui, |ui| {
             ui.set_width(26.0);
             ui.label("");
@@ -1536,19 +1646,19 @@ fn render_beta_io_excel_grid(ui: &mut egui::Ui, state: &mut LcaWindowState, is_o
 
     let paint_band = |ui: &mut egui::Ui, row_num: usize, fill: Color32, col_idx: usize, add_fn: Box<dyn FnOnce(&mut egui::Ui)>| {
         if col_idx == 0 {
-            egui::Frame::none()
+            egui::Frame::NONE
                 .fill(EXCEL_HDR_GRAY)
                 .stroke(Stroke::new(0.6, EXCEL_GRID_LINE))
-                .inner_margin(egui::Margin::symmetric(4.0, 3.0))
+                .inner_margin(egui::Margin::symmetric(4, 3))
                 .show(ui, |ui| {
                     ui.set_width(26.0);
                     ui.label(RichText::new(row_num.to_string()).size(10.5));
                 });
         }
-        egui::Frame::none()
+        egui::Frame::NONE
             .fill(fill)
             .stroke(Stroke::new(0.6, EXCEL_GRID_LINE))
-            .inner_margin(egui::Margin::symmetric(4.0, 3.0))
+            .inner_margin(egui::Margin::symmetric(4, 3))
             .show(ui, |ui| {
                 ui.set_width(cols_w[col_idx]);
                 add_fn(ui);
@@ -1884,19 +1994,19 @@ fn paint_cell_box(
     add_fn: impl FnOnce(&mut egui::Ui),
 ) -> bool {
     if draw_row_hdr {
-        egui::Frame::none()
+        egui::Frame::NONE
             .fill(EXCEL_HDR_GRAY)
             .stroke(Stroke::new(0.6, EXCEL_GRID_LINE))
-            .inner_margin(egui::Margin::symmetric(4.0, 2.0))
+            .inner_margin(egui::Margin::symmetric(4, 2))
             .show(ui, |ui| {
                 ui.set_width(26.0);
                 ui.label(RichText::new(row_num.to_string()).size(10.0));
             });
     }
-    let resp = egui::Frame::none()
+    let resp = egui::Frame::NONE
         .fill(fill)
         .stroke(Stroke::new(0.6, EXCEL_GRID_LINE))
-        .inner_margin(egui::Margin::symmetric(4.0, 2.0))
+        .inner_margin(egui::Margin::symmetric(4, 2))
         .show(ui, |ui| {
             ui.set_width(width);
             add_fn(ui);
@@ -1951,9 +2061,9 @@ fn render_beta_results_excel_grid(ui: &mut egui::Ui, state: &mut LcaWindowState)
         .spacing([2.0, 2.0])
         .show(ui, |ui| {
             for (h, w) in headers.iter().zip(widths.iter()) {
-                egui::Frame::none()
+                egui::Frame::NONE
                     .fill(BLUE_HEADER_FILL)
-                    .inner_margin(egui::Margin::symmetric(4.0, 4.0))
+                    .inner_margin(egui::Margin::symmetric(4, 4))
                     .show(ui, |ui| {
                         ui.set_width(*w);
                         ui.label(RichText::new(*h).strong().size(10.5).color(Color32::WHITE));
@@ -1978,10 +2088,10 @@ fn render_beta_results_excel_grid(ui: &mut egui::Ui, state: &mut LcaWindowState)
                     format!("{} per t/h of {}", cat.result_unit, cat.reference_stream_name),
                 ];
                 for (c, w) in cat_cells.iter().zip(widths.iter()) {
-                    egui::Frame::none()
+                    egui::Frame::NONE
                         .fill(BLUE_STREAM_FILL)
                         .stroke(Stroke::new(1.0, Color32::from_rgb(30, 41, 59)))
-                        .inner_margin(egui::Margin::symmetric(4.0, 3.0))
+                        .inner_margin(egui::Margin::symmetric(4, 3))
                         .show(ui, |ui| {
                             ui.set_width(*w);
                             ui.label(RichText::new(c).strong().size(10.5));
@@ -2009,9 +2119,9 @@ fn render_beta_results_excel_grid(ui: &mut egui::Ui, state: &mut LcaWindowState)
                         "".to_string(),
                     ];
                     for (c, w) in u_cells.iter().zip(widths.iter()) {
-                        egui::Frame::none()
+                        egui::Frame::NONE
                             .fill(BLUE_SUB_FILL)
-                            .inner_margin(egui::Margin::symmetric(4.0, 2.0))
+                            .inner_margin(egui::Margin::symmetric(4, 2))
                             .show(ui, |ui| {
                                 ui.set_width(*w);
                                 ui.label(RichText::new(c).strong().size(10.5));
@@ -2041,9 +2151,9 @@ fn render_beta_results_excel_grid(ui: &mut egui::Ui, state: &mut LcaWindowState)
                             "".to_string(),
                         ];
                         for (ci, (c, w)) in d_cells.iter().zip(widths.iter()).enumerate() {
-                            egui::Frame::none()
+                            egui::Frame::NONE
                                 .fill(Color32::from_rgb(245, 249, 253))
-                                .inner_margin(egui::Margin::symmetric(4.0, 2.0))
+                                .inner_margin(egui::Margin::symmetric(4, 2))
                                 .show(ui, |ui| {
                                     ui.set_width(*w);
                                     let mut rt = RichText::new(c).size(10.5);
@@ -2077,10 +2187,10 @@ fn render_beta_results_excel_grid(ui: &mut egui::Ui, state: &mut LcaWindowState)
                                 "".to_string(),
                             ];
                             for (c, w) in l_cells.iter().zip(widths.iter()) {
-                                egui::Frame::none()
+                                egui::Frame::NONE
                                     .fill(Color32::WHITE)
                                     .stroke(Stroke::new(0.4, Color32::from_rgb(226, 232, 240)))
-                                    .inner_margin(egui::Margin::symmetric(4.0, 2.0))
+                                    .inner_margin(egui::Margin::symmetric(4, 2))
                                     .show(ui, |ui| {
                                         ui.set_width(*w);
                                         let rt = if ln.is_reference_flow {
@@ -2358,7 +2468,7 @@ fn render_shared_lca_modals(ctx: &egui::Context, project: &SimProject, state: &m
                     ui.label("General Comment:");
                     ui.add(egui::TextEdit::multiline(&mut state.process_info_draft.general_comment).desired_rows(2));
                     ui.horizontal(|ui| {
-                        ui.label("HSC Ver. (Last save):");
+                        ui.label("File version:");
                         ui.add_enabled(false, egui::TextEdit::singleline(&mut state.process_info_draft.hsc_ver_last_save));
                     });
                 });
@@ -2640,7 +2750,7 @@ fn render_shared_lca_modals(ctx: &egui::Context, project: &SimProject, state: &m
     // 9. Quick Help Modal
     if state.show_help_modal {
         let mut open = state.show_help_modal;
-        egui::Window::new("HSC Sim LCA — Quick Guide (Ch. 49)")
+        egui::Window::new("Sim LCA — Quick Guide (Ch. 49)")
             .open(&mut open)
             .default_width(500.0)
             .show(ctx, |ui| {
@@ -2658,4 +2768,61 @@ fn render_shared_lca_modals(ctx: &egui::Context, project: &SimProject, state: &m
         state.show_help_modal = open;
     }
 
+}
+
+/// Pide la ruta con el diálogo nativo (carpeta de documentos del usuario) y escribe
+/// `bytes`. `Ok(None)` si el usuario cancela; `Err` con el mensaje para la interfaz si falla
+/// la escritura.
+fn save_export(title: &str, extension: &str, suggested: &str, bytes: &[u8]) -> Result<Option<String>, String> {
+    let Some(path) = crate::storage::choose_file(true, title, extension, suggested, None) else {
+        return Ok(None);
+    };
+    crate::storage::write_atomic(&path, bytes)
+        .map(|()| Some(path.display().to_string()))
+        .map_err(|e| format!("Export failed ({}): {e}", path.display()))
+}
+
+#[cfg(test)]
+mod area_d_regressions {
+    use super::*;
+    use std::io::{BufRead, BufReader, Read, Write};
+    use std::net::TcpListener;
+    use std::time::Duration;
+
+    #[test]
+    fn ipc_probe_requires_an_openlca_response() {
+        assert!(probe_fixture("OK").is_err());
+        assert!(probe_fixture(r#"{"jsonrpc":"2.0","id":1,"result":[]}"#).is_ok());
+        assert!(probe_fixture(r#"{"jsonrpc":"2.0","id":2,"result":[]}"#).is_err());
+    }
+
+    fn probe_fixture(body: &'static str) -> Result<(), String> {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let endpoint = listener.local_addr().unwrap().to_string();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            stream.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
+            let mut request = BufReader::new(&mut stream);
+            let mut length = 0;
+            loop {
+                let mut line = String::new();
+                assert_ne!(request.read_line(&mut line).unwrap(), 0);
+                if line == "\r\n" {
+                    break;
+                }
+                if let Some(value) = line.strip_prefix("Content-Length: ") {
+                    length = value.trim().parse().unwrap();
+                }
+            }
+            request.read_exact(&mut vec![0; length]).unwrap();
+            write!(
+                stream,
+                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            ).unwrap();
+        });
+        let result = probe_openlca(&endpoint);
+        server.join().unwrap();
+        result
+    }
 }

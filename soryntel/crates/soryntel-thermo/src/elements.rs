@@ -64,6 +64,7 @@ pub struct ElementStaticSpec {
     pub z: u16,
     pub symbol: &'static str,
     pub name: &'static str,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub atomic_weight: f64,
     pub category: ElementCategory,
     pub state: StandardState,
@@ -73,31 +74,51 @@ pub struct ElementStaticSpec {
     pub grid_col: usize,
     pub most_stable_ox: &'static str,
     pub ox_states: &'static str,
+    #[serde(default, with = "soryntel_core::serde_nonfinite::option")]
     pub density: Option<f64>, // g/ml (HSC stores gases in g/L as 0.0899 etc.)
     pub electron_config: &'static str,
+    #[serde(default, with = "soryntel_core::serde_nonfinite::option")]
     pub melting_k: Option<f64>,
+    #[serde(default, with = "soryntel_core::serde_nonfinite::option")]
     pub melting_p_atm: Option<f64>,
+    #[serde(default, with = "soryntel_core::serde_nonfinite::option")]
     pub boiling_k: Option<f64>,
+    #[serde(default, with = "soryntel_core::serde_nonfinite::option")]
     pub electronegativity: Option<f64>,
+    #[serde(default, with = "soryntel_core::serde_nonfinite::option")]
     pub heat_vap_kj: Option<f64>,
+    #[serde(default, with = "soryntel_core::serde_nonfinite::option")]
     pub heat_fus_kj: Option<f64>,
+    #[serde(default, with = "soryntel_core::serde_nonfinite::option")]
     pub elec_cond: Option<f64>,    // E6/(ohm*cm)
+    #[serde(default, with = "soryntel_core::serde_nonfinite::option")]
     pub therm_cond: Option<f64>,   // W/(cm*K)
+    #[serde(default, with = "soryntel_core::serde_nonfinite::option")]
     pub spec_heat: Option<f64>,    // J/(g*K)
+    #[serde(default, with = "soryntel_core::serde_nonfinite::option")]
     pub ionization_ev: Option<f64>,
+    #[serde(default, with = "soryntel_core::serde_nonfinite::option")]
     pub atomic_vol: Option<f64>,   // ml/mol
+    #[serde(default, with = "soryntel_core::serde_nonfinite::option")]
     pub atomic_rad: Option<f64>,   // A
+    #[serde(default, with = "soryntel_core::serde_nonfinite::option")]
     pub covalent_rad: Option<f64>, // A
     pub crystal: &'static str,
     pub acid_base: &'static str,
     pub year_discovered: &'static str,
     pub color_name: &'static str,
     pub color_rgb: u32,
+    #[serde(default, with = "soryntel_core::serde_nonfinite::option")]
     pub electron_affinity_ev: Option<f64>,
+    #[serde(default, with = "soryntel_core::serde_nonfinite::option")]
     pub polarizability: Option<f64>, // 1e-24 cm3
+    #[serde(default, with = "soryntel_core::serde_nonfinite::option")]
     pub dh_gas_kj: Option<f64>,
+    #[serde(default, with = "soryntel_core::serde_nonfinite::option")]
     pub dh_solid_kj: Option<f64>,
+    #[serde(default, with = "soryntel_core::serde_nonfinite::option")]
     pub s_gas_jk: Option<f64>,
+    #[serde(default, with = "soryntel_core::serde_nonfinite::option")]
     pub s_solid_jk: Option<f64>,
 }
 
@@ -119,8 +140,10 @@ pub struct ElementWorkbook {
 pub struct SpherePoint {
     pub z: u16,
     pub symbol: String,
+    #[serde(default, with = "soryntel_core::serde_nonfinite::option")]
     pub raw_value: Option<f64>,
     /// Linear normalized diameter ratio in `[0.0, 1.0]` (`|v| / max|v|`).
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub norm_diameter: f64,
     pub is_negative: bool,
 }
@@ -129,9 +152,13 @@ pub struct SpherePoint {
 pub struct PeriodicDiagramData {
     pub property_name: String,
     pub units: String,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub min_val: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub max_val: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub max_abs: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub mean_val: f64,
     pub valid_count: usize,
     pub points: Vec<SpherePoint>,

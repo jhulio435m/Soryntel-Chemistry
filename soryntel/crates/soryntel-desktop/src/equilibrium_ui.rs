@@ -1039,117 +1039,165 @@ impl EquilibriumUiState {
         self.file_status_msg = Some("Updated species records from database.".to_string());
     }
 
-    pub fn ui(&mut self, ctx: &egui::Context, db: &dyn SpeciesCatalogPort) {
+    fn current_gem9_file(&self) -> Option<std::path::PathBuf> {
+        Some(std::path::PathBuf::from(&self.file_path_input)).filter(|p| p.is_absolute())
+    }
+
+    fn suggested_gem9_name(&self) -> String {
+        let name = std::path::Path::new(&self.file_path_input)
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        crate::storage::suggested_file_name(&name, "gem9")
+    }
+
+    fn choose_and_open_gem9(&mut self) {
+        let current = self.current_gem9_file();
+        if let Some(path) = crate::storage::choose_file(false, "Abrir libro (.gem9)", "gem9", "", current.as_deref()) {
+            self.open_gem9(&path);
+        }
+    }
+
+    /// Guardar como: diálogo nativo con confirmación al sobrescribir; nunca una ruta relativa.
+    fn choose_and_save_gem9(&mut self) {
+        let current = self.current_gem9_file();
+        let suggested = self.suggested_gem9_name();
+        if let Some(path) = crate::storage::choose_file(true, "Guardar libro (.gem9)", "gem9", &suggested, current.as_deref()) {
+            self.save_gem9(&path);
+        }
+    }
+
+    /// Abre un `.gem9`. Si falla, el libro abierto queda intacto; si va bien, se reinicia el
+    /// estado que dependía del libro anterior (resultados, especies ocultas, cachés y selección).
+    fn open_gem9(&mut self, path: &std::path::Path) {
+        match std::fs::read_to_string(path)
+            .map_err(|e| e.to_string())
+            .and_then(|s| EquilibriumWorkbookFile::from_gem9_str(&s))
+        {
+            Ok(wb) if wb.system.phases.is_empty() => {
+                self.last_error = Some("Open error: el libro no contiene fases.".into());
+            }
+            Ok(wb) => {
+                self.system = wb.system;
+                self.params = wb.params;
+                self.result = None;
+                self.last_error = None;
+                self.selected_phase_idx = 0;
+                self.chart_hidden_species.clear();
+                self.chart_is_3d = false;
+                self.chart_3d_cache = None;
+                self.active_sheet = EquilSheetTab::Species;
+                self.file_path_input = path.to_string_lossy().into_owned();
+                self.file_status_msg = Some(format!("Loaded {}", path.display()));
+            }
+            Err(e) => {
+                self.last_error = Some(format!("Open error: {}", e));
+            }
+        }
+    }
+
+    fn save_gem9(&mut self, path: &std::path::Path) {
+        let wb = EquilibriumWorkbookFile {
+            system: self.system.clone(),
+            params: self.params.clone(),
+        };
+        match wb
+            .to_gem9_json()
+            .and_then(|json| crate::storage::write_atomic(path, json).map_err(|e| e.to_string()))
+        {
+            Ok(()) => {
+                self.last_error = None;
+                self.file_path_input = path.to_string_lossy().into_owned();
+                self.file_status_msg = Some(format!("Saved {}", path.display()));
+            }
+            Err(e) => {
+                self.last_error = Some(format!("Save error: {}", e));
+            }
+        }
+    }
+
+    pub fn ui(&mut self, root_ui: &mut egui::Ui, db: &dyn SpeciesCatalogPort) {
+        let ctx = &root_ui.ctx().clone();
         // Los solvers de equilibrio son genéricos sobre `R: SpeciesRepository` (con `Sized`);
         // el adaptador permite pasarles un puerto `dyn`.
         let catalog = db;
         let db = &CatalogRepo(catalog);
         // Consistent Top Menu Bar (matching Modules 1, 2, and 3)
-        egui::TopBottomPanel::top("equil_menu_bar").show(ctx, |ui| {
-            egui::menu::bar(ui, |ui| {
+        egui::Panel::top("equil_menu_bar").show(root_ui, |ui| {
+            egui::MenuBar::new().ui(ui, |ui| {
                 ui.menu_button(crate::i18n::text("common.001"), |ui| {
                     if ui.button(crate::i18n::text("review.046")).clicked() {
                         self.load_empty_workbook(false);
-                        ui.close_menu();
+                        ui.close_kind(egui::UiKind::Menu);
                     }
                     if ui.button(crate::i18n::text("review.047")).clicked() {
                         self.load_empty_workbook(true);
-                        ui.close_menu();
+                        ui.close_kind(egui::UiKind::Menu);
                     }
                     ui.separator();
                     if ui.button(crate::i18n::text("review.048")).clicked() {
-                        match std::fs::read_to_string(&self.file_path_input)
-                            .map_err(|e| e.to_string())
-                            .and_then(|s| EquilibriumWorkbookFile::from_gem9_str(&s))
-                        {
-                            Ok(wb) => {
-                                self.system = wb.system;
-                                self.params = wb.params;
-                                self.result = None;
-                                self.last_error = None;
-                                self.file_status_msg =
-                                    Some(format!("Loaded {}", self.file_path_input));
-                            }
-                            Err(e) => {
-                                self.last_error = Some(format!("Open error: {}", e));
-                            }
-                        }
-                        ui.close_menu();
+                        self.choose_and_open_gem9();
+                        ui.close_kind(egui::UiKind::Menu);
                     }
                     if ui.button(crate::i18n::text("review.049")).clicked() {
-                        let wb = EquilibriumWorkbookFile {
-                            system: self.system.clone(),
-                            params: self.params.clone(),
-                        };
-                        match wb
-                            .to_gem9_json()
-                            .and_then(|json| crate::storage::write_atomic(&self.file_path_input, json).map_err(|e| e.to_string()))
-                        {
-                            Ok(()) => {
-                                self.file_status_msg =
-                                    Some(format!("Saved {}", self.file_path_input));
-                            }
-                            Err(e) => {
-                                self.last_error = Some(format!("Save error: {}", e));
-                            }
-                        }
-                        ui.close_menu();
+                        self.choose_and_save_gem9();
+                        ui.close_kind(egui::UiKind::Menu);
                     }
                     ui.separator();
                     ui.label(egui::RichText::new(crate::i18n::text("review.050")).small().strong());
                     if ui.button("Preset: Ni-CO(g) (NICO.gem9)").clicked() {
                         self.load_preset_nico();
-                        ui.close_menu();
+                        ui.close_kind(egui::UiKind::Menu);
                     }
                     if ui.button("Preset: FeS2 Decomposition").clicked() {
                         self.load_preset_fes2();
-                        ui.close_menu();
+                        ui.close_kind(egui::UiKind::Menu);
                     }
                     if ui.button("Preset: CaCO3 + CO2(g) + Aqua").clicked() {
                         self.load_preset_caco3_aqua();
-                        ui.close_menu();
+                        ui.close_kind(egui::UiKind::Menu);
                     }
                     if ui.button("Preset: FeSO4*4H2O Target (Fig. 7-8)").clicked() {
                         self.load_preset_feso4_target();
-                        ui.close_menu();
+                        ui.close_kind(egui::UiKind::Menu);
                     }
                     if ui.button("Preset: Na2SO4 + C Reduction (NA2SO4.gem9, Fig. 34)").clicked() {
                         self.load_preset_na2so4();
-                        ui.close_menu();
+                        ui.close_kind(egui::UiKind::Menu);
                     }
                     if ui.button("Preset: FeSO4*7H2O Adiabatic (FESO4_adiabatic.gem9, Fig. 37)").clicked() {
                         self.load_preset_feso4_adiabatic();
-                        ui.close_menu();
+                        ui.close_kind(egui::UiKind::Menu);
                     }
                     if ui.button("Preset: Lead-Acid Battery Cell Mode (LEADBATT.gem9, Fig. 41-44)").clicked() {
                         self.load_preset_leadbatt();
-                        ui.close_menu();
+                        ui.close_kind(egui::UiKind::Menu);
                     }
                     if ui.button("Preset: CO2 Dissolution — Remove % (Fig. 9-10)").clicked() {
                         self.load_preset_co2_modes(CalculationMode::Normal);
-                        ui.close_menu();
+                        ui.close_kind(egui::UiKind::Menu);
                     }
                     if ui.button("Preset: CO2 Dissolution — Infinite Phase (Fig. 11-12)").clicked() {
                         self.load_preset_co2_modes(CalculationMode::InfinitePhase);
-                        ui.close_menu();
+                        ui.close_kind(egui::UiKind::Menu);
                     }
                     if ui.button("Preset: CO2 Dissolution — Fixed Activity (Fig. 13-15)").clicked() {
                         self.load_preset_co2_modes(CalculationMode::FixedActivity);
-                        ui.close_menu();
+                        ui.close_kind(egui::UiKind::Menu);
                     }
                     if ui.button("Preset: Al-Zn Redlich-Kister Alloy (Appendix C)").clicked() {
                         self.load_preset_al_zn_appendix_c();
-                        ui.close_menu();
+                        ui.close_kind(egui::UiKind::Menu);
                     }
                     if ui.button("Preset: H-C-O-Ca 3D (CO2 x T)").clicked() {
                         self.load_preset_h_c_o_ca_3d();
-                        ui.close_menu();
+                        ui.close_kind(egui::UiKind::Menu);
                     }
                 });
                 ui.menu_button(crate::i18n::text("common.006"), |ui| {
                     if ui.button(crate::i18n::text("review.051")).clicked() {
                         self.update_species_from_db(db);
-                        ui.close_menu();
+                        ui.close_kind(egui::UiKind::Menu);
                     }
                     if ui
                         .add_enabled(
@@ -1163,13 +1211,13 @@ impl EquilibriumUiState {
                             .min(self.system.phases.len().saturating_sub(1));
                         self.system.phases.remove(p_idx);
                         self.selected_phase_idx = 0;
-                        ui.close_menu();
+                        ui.close_kind(egui::UiKind::Menu);
                     }
                 });
                 ui.menu_button(crate::i18n::text("common.010"), |ui| {
                     if ui.button(crate::i18n::text("review.052")).clicked() {
                         self.show_from_elements = true;
-                        ui.close_menu();
+                        ui.close_kind(egui::UiKind::Menu);
                     }
                     if ui.button(crate::i18n::text("review.053")).clicked() {
                         let idx = self.system.phases.len() + 1;
@@ -1181,11 +1229,11 @@ impl EquilibriumUiState {
                             capacitance_farads: 0.0,
                             species: Vec::new(),
                         });
-                        ui.close_menu();
+                        ui.close_kind(egui::UiKind::Menu);
                     }
                     if ui.button(crate::i18n::text("review.054")).clicked() {
                         self.sort_phases(db);
-                        ui.close_menu();
+                        ui.close_kind(egui::UiKind::Menu);
                     }
                     if ui.button(crate::i18n::text("review.055")).clicked() {
                         if let Some(first) = self.system.phases.first_mut() {
@@ -1193,7 +1241,7 @@ impl EquilibriumUiState {
                                 first.species.insert(0, Self::make_sp("N2(g)", 1e-10));
                             }
                         }
-                        ui.close_menu();
+                        ui.close_kind(egui::UiKind::Menu);
                     }
                 });
                 ui.menu_button(crate::i18n::text("common.027"), |ui| {
@@ -1203,14 +1251,14 @@ impl EquilibriumUiState {
                         .clicked()
                     {
                         self.params.temp_unit_kelvin = false;
-                        ui.close_menu();
+                        ui.close_kind(egui::UiKind::Menu);
                     }
                     if ui
                         .radio(self.params.temp_unit_kelvin, "Kelvin (K)")
                         .clicked()
                     {
                         self.params.temp_unit_kelvin = true;
-                        ui.close_menu();
+                        ui.close_kind(egui::UiKind::Menu);
                     }
                     ui.separator();
                     ui.label(egui::RichText::new(crate::i18n::text("review.056")).small().strong());
@@ -1219,14 +1267,14 @@ impl EquilibriumUiState {
                         .clicked()
                     {
                         self.params.column_c_lnf_mode = false;
-                        ui.close_menu();
+                        ui.close_kind(egui::UiKind::Menu);
                     }
                     if ui
                         .radio(self.params.column_c_lnf_mode, "Natural Log ln(f)")
                         .clicked()
                     {
                         self.params.column_c_lnf_mode = true;
-                        ui.close_menu();
+                        ui.close_kind(egui::UiKind::Menu);
                     }
                     ui.separator();
                     ui.label(egui::RichText::new(crate::i18n::text("review.057")).small().strong());
@@ -1242,20 +1290,20 @@ impl EquilibriumUiState {
                                     sp.amount_unit = u;
                                 }
                             }
-                            ui.close_menu();
+                            ui.close_kind(egui::UiKind::Menu);
                         }
                     }
                 });
                 ui.menu_button(crate::i18n::text("common.011"), |ui| {
                     if ui.button(crate::i18n::text("review.058")).clicked() {
                         self.request_calculate(db);
-                        ui.close_menu();
+                        ui.close_kind(egui::UiKind::Menu);
                     }
                     if ui.button(crate::i18n::text("review.059")).clicked() {
                         self.warnings = EquilibriumUseCases::collect_cp_warnings(db, &self.system, &self.params);
                         self.warnings_pending_calc = false;
                         self.show_warnings_modal = true;
-                        ui.close_menu();
+                        ui.close_kind(egui::UiKind::Menu);
                     }
                 });
                 ui.menu_button(crate::i18n::text("common.028"), |ui| {
@@ -1267,7 +1315,7 @@ impl EquilibriumUiState {
                         .clicked()
                     {
                         self.show_chart_window = true;
-                        ui.close_menu();
+                        ui.close_kind(egui::UiKind::Menu);
                     }
                     if ui
                         .add_enabled(
@@ -1277,20 +1325,20 @@ impl EquilibriumUiState {
                         .clicked()
                     {
                         self.show_diagram_table = true;
-                        ui.close_menu();
+                        ui.close_kind(egui::UiKind::Menu);
                     }
                 });
                 ui.menu_button(crate::i18n::text("review.060"), |ui| {
                     if ui.button(crate::i18n::text("review.061")).clicked() {
                         self.show_addins_modal = true;
-                        ui.close_menu();
+                        ui.close_kind(egui::UiKind::Menu);
                     }
                 });
             });
         });
 
         // Bottom Status Bar (matching Modules 1, 2, and 3)
-        egui::TopBottomPanel::bottom("equil_status_bar").show(ctx, |ui| {
+        egui::Panel::bottom("equil_status_bar").show(root_ui, |ui| {
             ui.horizontal(|ui| {
                 ui.label(
                     egui::RichText::new(format!(
@@ -1327,15 +1375,15 @@ impl EquilibriumUiState {
         });
 
         // Right Docked Parameters Panel (matches Fig. 6)
-        egui::SidePanel::right("equil_parameters_panel")
+        egui::Panel::right("equil_parameters_panel")
             .resizable(true)
-            .default_width(355.0)
-            .show(ctx, |ui| {
+            .default_size(355.0)
+            .show(root_ui, |ui| {
                 self.render_parameters_panel(ui, db);
             });
 
         // Central Excel Workbook Area
-        egui::CentralPanel::default().show(ctx, |ui| {
+        egui::CentralPanel::default().show(root_ui, |ui| {
             self.render_toolbar_and_formula_bar(ui, db);
             ui.separator();
 
@@ -1349,7 +1397,6 @@ impl EquilibriumUiState {
             // Bottom Excel-style sheet tabs
             ui.separator();
             ui.horizontal(|ui| {
-                ui.label(egui::RichText::new("◄ ►").small().color(egui::Color32::GRAY));
                 ui.selectable_value(&mut self.active_sheet, EquilSheetTab::Species, "Species");
                 ui.selectable_value(
                     &mut self.active_sheet,
@@ -1469,10 +1516,11 @@ impl EquilibriumUiState {
             }
             ui.separator();
             ui.label(crate::i18n::text("common.064"));
-            ui.add(
-                egui::TextEdit::singleline(&mut self.file_path_input)
-                    .desired_width(120.0),
-            );
+            let shown = std::path::Path::new(&self.file_path_input)
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            ui.label(shown).on_hover_text(&self.file_path_input);
             ui.separator();
             egui::ComboBox::from_id_salt("equil_presets")
                 .selected_text("Presets")
@@ -2222,7 +2270,7 @@ impl EquilibriumUiState {
             // Operations
             egui::Frame::group(ui.style())
                 .fill(egui::Color32::WHITE)
-                .inner_margin(egui::Margin::same(8.0))
+                .inner_margin(egui::Margin::same(8))
                 .show(ui, |ui| {
                     ui.strong("Operations");
                     ui.add_space(4.0);
@@ -2769,7 +2817,7 @@ impl EquilibriumUiState {
                         self.elem_aq_neutral,
                         200,
                     );
-                    ui.label(format!("Matching Species in Maindb6: {}", matches.len()));
+                    ui.label(format!("Matching Species in catálogo principal: {}", matches.len()));
                     egui::ScrollArea::vertical().max_height(180.0).show(ui, |ui| {
                         for sp in &matches {
                             ui.label(format!("{} — {} ({:?})", sp.formula, sp.name, sp.phase));
@@ -2884,7 +2932,7 @@ impl EquilibriumUiState {
                 .open(&mut open)
                 .default_width(740.0)
                 .show(ctx, |ui| {
-                    ui.strong("HSC-data will be extrapolated outside available temperature range.");
+                    ui.strong("Thermochemical data will be extrapolated outside available temperature range.");
                     let mut all_checked = !self.warnings.is_empty()
                         && self.warnings.iter().all(|w| {
                             self.system.phases[w.phase_idx].species[w.species_idx].excluded
@@ -3080,11 +3128,11 @@ impl EquilibriumUiState {
 
                     // Right legend panel (~265 px) with color swatches, species list, element chips & phase filter
                     if !self.chart_is_3d || self.chart_3d_show_legend {
-                        egui::SidePanel::right("equil_chart_legend_panel")
+                        egui::Panel::right("equil_chart_legend_panel")
                             .resizable(true)
-                            .default_width(265.0)
-                            .min_width(200.0)
-                            .show_inside(ui, |ui| {
+                            .default_size(265.0)
+                            .min_size(200.0)
+                            .show(ui, |ui| {
                                 ui.strong("Chart parameters — Legend");
                                 ui.horizontal(|ui| {
                                     if ui.small_button("All").clicked() {
@@ -3190,7 +3238,7 @@ impl EquilibriumUiState {
                             });
                     }
 
-                    egui::CentralPanel::default().show_inside(ui, |ui| {
+                    egui::CentralPanel::default().show(ui, |ui| {
                         if self.chart_is_3d && has_z_data {
                             render_3d_surface_chart(
                                 ctx,
@@ -3252,7 +3300,7 @@ impl EquilibriumUiState {
                                             ]
                                         })
                                         .collect();
-                                    plot_ui.line(Line::new(pts).name("Cell Voltage (V)"));
+                                    plot_ui.line(Line::new("Cell Voltage (V)", pts));
                                 } else if self.chart_y_kind == ChartYKind::UserFormula {
                                     for uf in &self.user_formulas {
                                         let base_vals: Vec<(f64, f64)> = res
@@ -3270,7 +3318,7 @@ impl EquilibriumUiState {
                                                 .iter()
                                                 .map(|&(x, y)| [x, transform_y(y)])
                                                 .collect();
-                                            plot_ui.line(Line::new(pts).name(&uf.label));
+                                            plot_ui.line(Line::new(&uf.label, pts));
                                         }
                                         if uf.show_diff {
                                             let mut prev =
@@ -3284,8 +3332,7 @@ impl EquilibriumUiState {
                                                 })
                                                 .collect();
                                             plot_ui.line(
-                                                Line::new(pts)
-                                                    .name(format!("{} (Diff)", uf.label)),
+                                                Line::new(format!("{} (Diff)", uf.label), pts),
                                             );
                                         }
                                         if uf.show_cumul {
@@ -3298,8 +3345,7 @@ impl EquilibriumUiState {
                                                 })
                                                 .collect();
                                             plot_ui.line(
-                                                Line::new(pts)
-                                                    .name(format!("{} (Cumul)", uf.label)),
+                                                Line::new(format!("{} (Cumul)", uf.label), pts),
                                             );
                                         }
                                     }
@@ -3338,18 +3384,18 @@ impl EquilibriumUiState {
                                             pts_vec
                                         };
                                         plot_ui.line(
-                                            Line::new(PlotPoints::from(pts_smoothed))
+                                            Line::new(&sp0.formula, PlotPoints::from(pts_smoothed))
                                                 .width(2.0)
-                                                .color(species_palette_color(s_idx))
-                                                .name(&sp0.formula),
+                                                .color(species_palette_color(s_idx)),
                                         );
                                         if self.chart_show_curve_labels {
                                             if let Some([mx, my]) = max_pt {
                                                 if my.abs() > 1e-6 || self.chart_log_y {
                                                     plot_ui.text(egui_plot::Text::new(
+                                                        "",
                                                         egui_plot::PlotPoint::new(mx, my),
                                                         sp0.formula.clone(),
-                                                    ));
+                                                    ).id(("species_curve_label", s_idx)));
                                                 }
                                             }
                                         }
@@ -3523,7 +3569,7 @@ impl EquilibriumUiState {
                                         }
                                         tsv.push('\n');
                                     }
-                                    ui.output_mut(|o| o.copied_text = tsv);
+                                    ui.ctx().copy_text(tsv);
                                     self.file_status_msg =
                                         Some("Copied diagram table to clipboard.".to_string());
                                 }
@@ -4107,7 +4153,7 @@ fn render_3d_surface_chart(
 
     let p = ui.painter_at(rect);
     p.rect_filled(rect, 2.0, egui::Color32::WHITE);
-    p.rect_stroke(rect, 2.0, egui::Stroke::new(1.0, egui::Color32::GRAY));
+    p.rect_stroke(rect, 2.0, egui::Stroke::new(1.0, egui::Color32::GRAY), egui::StrokeKind::Middle);
 
     let center = rect.center() + egui::vec2(0.0, 12.0);
     let scale_px = rect.width().min(rect.height()) * 0.34;
@@ -4474,6 +4520,39 @@ fn render_3d_surface_chart(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn opening_gem9_resets_state_and_saving_clears_old_error() {
+        let mut st = EquilibriumUiState::default();
+        let dir = std::env::temp_dir().join(format!("soryntel-c10-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("libro ñ.gem9");
+        st.last_error = Some("Save error: anterior".into());
+        st.save_gem9(&path);
+        assert!(st.last_error.is_none(), "un guardado correcto debe borrar el error anterior");
+        assert_eq!(st.file_path_input, path.to_string_lossy());
+
+        st.chart_hidden_species.insert("CO(g)".into());
+        st.selected_phase_idx = 5;
+        st.open_gem9(&path);
+        assert!(st.last_error.is_none(), "{:?}", st.last_error);
+        assert!(st.chart_hidden_species.is_empty());
+        assert_eq!(st.selected_phase_idx, 0);
+
+        // Un archivo dañado no toca el libro abierto.
+        let phases = st.system.phases.len();
+        std::fs::write(&path, "{ no es json").unwrap();
+        st.open_gem9(&path);
+        assert!(st.last_error.is_some());
+        assert_eq!(st.system.phases.len(), phases);
+        let _ = std::fs::remove_dir_all(&dir);
+
+        // Los ejemplos solo proponen un nombre; nunca se escribe en una ruta relativa.
+        assert!(st.current_gem9_file().is_some());
+        st.file_path_input = "NICO.gem9".into();
+        assert!(st.current_gem9_file().is_none());
+        assert_eq!(st.suggested_gem9_name(), "NICO.gem9");
+    }
     use soryntel_db::ThermoDatabase;
 
     #[test]
@@ -4493,12 +4572,11 @@ mod tests {
 
     #[test]
     fn test_na2so4_preset_3d_sweep_with_maindb6() {
-        let hsc_path = "/home/nando/Descargas/HSC6/Databases/Maindb6.HSC";
-        if !std::path::Path::new(hsc_path).exists() {
+        let Some(hsc_path) = crate::test_support::test_maindb("test_na2so4_preset_3d_sweep_with_maindb6") else {
             return;
-        }
+        };
         let mut db = ThermoDatabase::with_open_defaults();
-        db.load_main_hsc(hsc_path).unwrap();
+        db.load_main_hsc(&hsc_path).unwrap();
         let mut state = EquilibriumUiState::default();
         state.load_preset_na2so4();
         state.run_calculate(&db);
@@ -4559,12 +4637,11 @@ mod tests {
         assert!(state.params.pressure_range.steps >= 2);
         assert!((state.params.pressure_range.final_val - state.params.pressure_range.initial).abs() > 1.0);
 
-        let hsc_path = "/home/nando/Descargas/HSC6/Databases/Maindb6.HSC";
-        if !std::path::Path::new(hsc_path).exists() {
+        let Some(hsc_path) = crate::test_support::test_maindb("test_switching_1d_preset_to_2d_produces_valid_3d_grid") else {
             return;
-        }
+        };
         let mut db = ThermoDatabase::with_open_defaults();
-        db.load_main_hsc(hsc_path).unwrap();
+        db.load_main_hsc(&hsc_path).unwrap();
         state.load_preset_nico();
         state.params.num_indep_vars = 2;
         state.ensure_2d_sweep_defaults();

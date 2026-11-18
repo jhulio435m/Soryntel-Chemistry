@@ -1,5 +1,6 @@
 use eframe::egui;
 use soryntel_application::ports::SpeciesCatalogPort;
+use soryntel_core::SpeciesWorkspacePort;
 use soryntel_application::use_cases::{CatalogUseCases, MiscUseCases};
 use soryntel_core::CAL_TO_JOULE;
 use soryntel_application::models::benson::{
@@ -225,35 +226,36 @@ impl BensonModuleState {
         }
     }
 
-    pub fn ui(&mut self, ctx: &egui::Context, db: &mut dyn SpeciesCatalogPort) {
+    pub fn ui(&mut self, root_ui: &mut egui::Ui, db: &mut dyn SpeciesWorkspacePort) {
+        let ctx = &root_ui.ctx().clone();
         // Gentle idle spin on the small Selected group preview viewport
         self.preview_yaw += ctx.input(|i| i.stable_dt).min(0.05) * 0.45;
         ctx.request_repaint_after(std::time::Duration::from_millis(60));
 
         // 1. Top Ribbon Bar (HSC-BEN layout matching Fig. 1, 6, 7, 8)
-        egui::TopBottomPanel::top("benson_ribbon_top")
+        egui::Panel::top("benson_ribbon_top")
             .frame(
-                egui::Frame::none()
+                egui::Frame::NONE
                     .fill(egui::Color32::from_rgb(245, 247, 250))
                     .stroke(egui::Stroke::new(1.0, egui::Color32::from_rgb(206, 212, 222)))
-                    .inner_margin(egui::Margin::symmetric(8.0, 5.0)),
+                    .inner_margin(egui::Margin::symmetric(8, 5)),
             )
-            .show(ctx, |ui| {
+            .show(root_ui, |ui| {
                 self.render_top_ribbon(ui, db);
             });
 
         // 2. Bottom Status Bar (Outotec/Soryntel + Status + Progress Bar)
-        egui::TopBottomPanel::bottom("benson_status_bottom")
+        egui::Panel::bottom("benson_status_bottom")
             .frame(
-                egui::Frame::none()
+                egui::Frame::NONE
                     .fill(egui::Color32::from_rgb(242, 244, 248))
                     .stroke(egui::Stroke::new(1.0, egui::Color32::from_rgb(208, 214, 224)))
-                    .inner_margin(egui::Margin::symmetric(8.0, 4.0)),
+                    .inner_margin(egui::Margin::symmetric(8, 4)),
             )
-            .show(ctx, |ui| {
+            .show(root_ui, |ui| {
                 ui.horizontal(|ui| {
                     ui.label(
-                        egui::RichText::new("Outotec")
+                        egui::RichText::new("Soryntel")
                             .strong()
                             .size(13.0)
                             .color(egui::Color32::from_rgb(198, 40, 40)),
@@ -283,25 +285,25 @@ impl BensonModuleState {
             });
 
         // 3. Right Sidebar (`Please select` Palette + `Selected group` 3D Preview + Formula/MW)
-        egui::SidePanel::right("benson_right_palette")
+        egui::Panel::right("benson_right_palette")
             .resizable(true)
-            .default_width(190.0)
-            .min_width(178.0)
-            .max_width(290.0)
+            .default_size(190.0)
+            .min_size(178.0)
+            .max_size(290.0)
             .frame(
-                egui::Frame::none()
+                egui::Frame::NONE
                     .fill(egui::Color32::from_rgb(243, 245, 248))
                     .stroke(egui::Stroke::new(1.0, egui::Color32::from_rgb(206, 212, 222)))
-                    .inner_margin(egui::Margin::same(8.0)),
+                    .inner_margin(egui::Margin::same(8)),
             )
-            .show(ctx, |ui| {
+            .show(root_ui, |ui| {
                 self.render_right_palette(ui, db);
             });
 
         // 4. Central 3D Interactive Molecule Workspace
         egui::CentralPanel::default()
-            .frame(egui::Frame::none().fill(egui::Color32::from_rgb(24, 26, 30)))
-            .show(ctx, |ui| {
+            .frame(egui::Frame::NONE.fill(egui::Color32::from_rgb(24, 26, 30)))
+            .show(root_ui, |ui| {
                 self.render_3d_workspace(ui, db);
             });
 
@@ -320,7 +322,7 @@ impl BensonModuleState {
         }
     }
 
-    fn render_top_ribbon(&mut self, ui: &mut egui::Ui, db: &mut dyn SpeciesCatalogPort) {
+    fn render_top_ribbon(&mut self, ui: &mut egui::Ui, db: &mut dyn SpeciesWorkspacePort) {
         egui::ScrollArea::horizontal().show(ui, |ui| {
             ui.horizontal(|ui| {
                 // --- Group 1: Menu ---
@@ -331,11 +333,11 @@ impl BensonModuleState {
                             self.molecule = MoleculeGraph::empty();
                             self.estimation = None;
                             self.status_text = "Workspace cleared.".into();
-                            ui.close_menu();
+                            ui.close_kind(egui::UiKind::Menu);
                         }
                         if ui.button("Enter / Edit SMILES...").clicked() {
                             self.show_smiles_modal = true;
-                            ui.close_menu();
+                            ui.close_kind(egui::UiKind::Menu);
                         }
                         ui.separator();
                         ui.menu_button("Load Showcase Preset", |ui| {
@@ -357,14 +359,14 @@ impl BensonModuleState {
                                     if let Some(spec) = MiscUseCases::find_benson_structural_block(id) {
                                         self.load_molecule(MoleculeGraph::from_block(spec), db);
                                     }
-                                    ui.close_menu();
+                                    ui.close_kind(egui::UiKind::Menu);
                                 }
                             }
                         });
                         ui.separator();
                         if ui.button("Export Report (CSV)...").clicked() {
                             self.export_csv_report();
-                            ui.close_menu();
+                            ui.close_kind(egui::UiKind::Menu);
                         }
                     });
                 });
@@ -396,7 +398,7 @@ impl BensonModuleState {
                                             self.preview_group_mol = mol.clone();
                                             self.load_molecule(mol, db);
                                         }
-                                        ui.close_menu();
+                                        ui.close_kind(egui::UiKind::Menu);
                                     }
                                 }
                             });
@@ -507,24 +509,24 @@ impl BensonModuleState {
                             self.pitch = -0.35;
                             self.zoom = 1.0;
                             self.pan = egui::Vec2::ZERO;
-                            ui.close_menu();
+                            ui.close_kind(egui::UiKind::Menu);
                         }
                         if ui.button("Top View (XY Plane)").clicked() {
                             self.yaw = 0.0;
                             self.pitch = 0.0;
-                            ui.close_menu();
+                            ui.close_kind(egui::UiKind::Menu);
                         }
                         if ui.button("Space-Filling Preset (3.60x Sky Blue · Fig. 4)").clicked() {
                             self.atom_size = 3.60;
                             self.opacity = 1.00;
                             self.background = CanvasBackground::SkyBlue;
-                            ui.close_menu();
+                            ui.close_kind(egui::UiKind::Menu);
                         }
                         if ui.button("Ball-and-Stick Preset (1.00x Dark Radial)").clicked() {
                             self.atom_size = 1.00;
                             self.opacity = 1.00;
                             self.background = CanvasBackground::DarkRadial;
-                            ui.close_menu();
+                            ui.close_kind(egui::UiKind::Menu);
                         }
                         ui.separator();
                         ui.label("Background:");
@@ -536,7 +538,7 @@ impl BensonModuleState {
                         ] {
                             if ui.radio(self.background == bg, bg.label()).clicked() {
                                 self.background = bg;
-                                ui.close_menu();
+                                ui.close_kind(egui::UiKind::Menu);
                             }
                         }
                     });
@@ -557,7 +559,7 @@ impl BensonModuleState {
         });
     }
 
-    fn render_right_palette(&mut self, ui: &mut egui::Ui, db: &mut dyn SpeciesCatalogPort) {
+    fn render_right_palette(&mut self, ui: &mut egui::Ui, db: &mut dyn SpeciesWorkspacePort) {
         egui::ScrollArea::vertical().show(ui, |ui| {
             let panel_w = ui.available_width();
             ui.add_sized(
@@ -597,7 +599,7 @@ impl BensonModuleState {
                             } else {
                                 egui::Stroke::new(1.0, egui::Color32::from_rgb(186, 194, 206))
                             };
-                            ui.painter().rect(rect, 3.0, bg, border);
+                            ui.painter().rect(rect, 3.0, bg, border, egui::StrokeKind::Middle);
                             let center = rect.center();
                             let rad = 11.5;
                             ui.painter().circle_filled(center, rad, fill_col);
@@ -664,6 +666,7 @@ impl BensonModuleState {
                 prev_rect,
                 2.0,
                 egui::Stroke::new(1.0, egui::Color32::from_rgb(148, 163, 184)),
+                egui::StrokeKind::Middle,
             );
 
             ui.add_space(10.0);
@@ -740,7 +743,7 @@ impl BensonModuleState {
         });
     }
 
-    fn render_3d_workspace(&mut self, ui: &mut egui::Ui, db: &mut dyn SpeciesCatalogPort) {
+    fn render_3d_workspace(&mut self, ui: &mut egui::Ui, db: &mut dyn SpeciesWorkspacePort) {
         let avail = ui.available_rect_before_wrap();
         let response = ui.allocate_rect(avail, egui::Sense::click_and_drag());
 
@@ -757,7 +760,7 @@ impl BensonModuleState {
             self.pan += response.drag_delta();
         }
         if response.hovered() {
-            let scroll = ui.input(|i| i.raw_scroll_delta.y);
+            let scroll = ui.input(|i| i.smooth_scroll_delta.y);
             if scroll.abs() > 0.1 {
                 self.zoom = (self.zoom * (1.0 + scroll * 0.0015)).clamp(0.35, 3.8);
             }
@@ -790,7 +793,7 @@ impl BensonModuleState {
         let mut arrow_hovered_or_clicked = false;
         for (glyph, pos, (dyaw, dpitch)) in arrow_specs {
             let r = egui::Rect::from_center_size(pos, egui::vec2(22.0, 22.0));
-            let resp = ui.interact(r, ui.id().with(glyph), egui::Sense::click());
+            let resp = ui.interact(r, ui.scope_id().with(glyph), egui::Sense::click());
             let col = if resp.hovered() {
                 arrow_hovered_or_clicked = true;
                 egui::Color32::WHITE
@@ -836,7 +839,7 @@ impl BensonModuleState {
         }
     }
 
-    fn render_results_window(&mut self, ctx: &egui::Context, db: &mut dyn SpeciesCatalogPort) {
+    fn render_results_window(&mut self, ctx: &egui::Context, db: &mut dyn SpeciesWorkspacePort) {
         let mut open = self.show_results_window;
         let title = self.results_unit.title();
         let Some(est) = self.estimation.clone() else {
@@ -845,7 +848,7 @@ impl BensonModuleState {
         };
 
         egui::Window::new(title)
-            .id(egui::Id::new("benson_estimation_results_modal"))
+            .id(egui::Id::unique("benson_estimation_results_modal"))
             .open(&mut open)
             .resizable(true)
             .default_width(640.0)
@@ -885,10 +888,10 @@ impl BensonModuleState {
                     ResultsEnergyUnit::Calories => jk / CAL_TO_JOULE,
                 };
 
-                egui::Frame::none()
+                egui::Frame::NONE
                     .fill(egui::Color32::WHITE)
                     .stroke(egui::Stroke::new(1.0, egui::Color32::from_rgb(185, 193, 206)))
-                    .inner_margin(egui::Margin::same(6.0))
+                    .inner_margin(egui::Margin::same(6))
                     .show(ui, |ui| {
                         egui::ScrollArea::horizontal().show(ui, |ui| {
                             egui::Grid::new("benson_results_phase_table")
@@ -940,7 +943,7 @@ impl BensonModuleState {
 
                                     let cell = |ui: &mut egui::Ui, val: Option<f64>| {
                                         let s = val.map(|v| format!("{v:.2}")).unwrap_or_default();
-                                        egui::Frame::none().fill(hl_bg).show(ui, |ui| {
+                                        egui::Frame::NONE.fill(hl_bg).show(ui, |ui| {
                                             ui.label(egui::RichText::new(s).monospace().color(txt_col));
                                         });
                                     };
@@ -1015,18 +1018,7 @@ impl BensonModuleState {
                 // Bottom toolbar matching Fig. 10 & Fig. 11
                 ui.horizontal_wrapped(|ui| {
                     if ui.button("Save to own database").clicked() {
-                        let sp = MiscUseCases::save_benson_species(
-                            db,
-                            &est,
-                            self.selected_save_phase,
-                            &self.edit_formula,
-                        );
-                        self.status_text = format!(
-                            "Saved '{}' ({:?}) to database ({} species total).",
-                            sp.formula,
-                            sp.phase,
-                            CatalogUseCases::species_count(db)
-                        );
+                        self.save_estimation_to_own_db(db, &est);
                     }
 
                     egui::ComboBox::from_id_salt("benson_base_ref_combo")
@@ -1075,7 +1067,7 @@ impl BensonModuleState {
         }
     }
 
-    fn render_smiles_modal(&mut self, ctx: &egui::Context, db: &mut dyn SpeciesCatalogPort) {
+    fn render_smiles_modal(&mut self, ctx: &egui::Context, db: &mut dyn SpeciesWorkspacePort) {
         let mut open = self.show_smiles_modal;
         egui::Window::new("Enter / Edit SMILES Structure")
             .open(&mut open)
@@ -1110,7 +1102,7 @@ impl BensonModuleState {
 
     fn render_help_window(&mut self, ctx: &egui::Context) {
         let mut open = self.show_help;
-        egui::Window::new("HSC-BEN Help — Benson GAV Estimation")
+        egui::Window::new("Benson Help — Benson GAV Estimation")
             .open(&mut open)
             .show(ctx, |ui| {
                 ui.label("1. Load a skeleton from 'Add structural block' (e.g. Aromatic group -> Benzene) or File -> SMILES.");
@@ -1127,12 +1119,12 @@ impl BensonModuleState {
 
     fn render_about_window(&mut self, ctx: &egui::Context) {
         let mut open = self.show_about;
-        egui::Window::new("About HSC-BEN (Benson Estimation)")
+        egui::Window::new("About Benson (Benson Estimation)")
             .open(&mut open)
             .show(ctx, |ui| {
                 ui.strong("Module 11 — Benson Group Additivity Value (GAV) Estimation");
                 ui.label("Estimates standard gas-phase ΔfH°, S°, and Cp(T) via Benson (1958, 1969, 1976) second-order group contributions, Kelley 4-parameter regression, and Joback/Trouton condensed phase transitions.");
-                ui.label("Integrated with Soryntel Hexagonal Architecture & Maindb6 SpeciesCatalogPort.");
+                ui.label("Integrated with Soryntel Hexagonal Architecture & catálogo principal SpeciesCatalogPort.");
             });
         if !open {
             self.show_about = false;
@@ -1161,8 +1153,36 @@ impl BensonModuleState {
         }
     }
 
+    /// Guarda la estimación en OwnDB y la persiste en el archivo OwnDB (no solo en memoria).
+    fn save_estimation_to_own_db(&mut self, db: &mut dyn SpeciesWorkspacePort, est: &BensonEstimationResult) {
+        let result = crate::composition::prepare_own_db_target(db, "").and_then(|path| {
+            let sp = MiscUseCases::save_benson_species(db, est, self.selected_save_phase, &self.edit_formula);
+            crate::composition::persist_own_db(db, &path).map(|_| (sp, path))
+        });
+        match result {
+            Ok((sp, path)) => {
+                self.last_error = None;
+                self.status_text = format!(
+                    "Saved '{}' ({:?}) to OwnDB {} ({} species total).",
+                    sp.formula,
+                    sp.phase,
+                    path.display(),
+                    CatalogUseCases::species_count(db)
+                );
+            }
+            Err(e) => {
+                self.last_error = Some(e.clone());
+                self.status_text = format!("OwnDB save failed: {e}");
+            }
+        }
+    }
+
     fn export_csv_report(&mut self) {
-        let path = "/tmp/soryntel_benson_report.csv";
+        let Some(chosen) = crate::storage::choose_file(true, "Exportar informe Benson", "csv", "benson_report.csv", None) else {
+            return;
+        };
+        let path = chosen.to_string_lossy().into_owned();
+        let path = path.as_str();
         let content = self.format_clipboard_text();
         match crate::storage::write_atomic(path, content) {
             Ok(_) => {
@@ -1176,7 +1196,11 @@ impl BensonModuleState {
     }
 
     fn save_svg_snapshot(&mut self) {
-        let path = "/tmp/soryntel_benson_molecule.svg";
+        let Some(chosen) = crate::storage::choose_file(true, "Guardar imagen de la molécula", "svg", "benson_molecule.svg", None) else {
+            return;
+        };
+        let path = chosen.to_string_lossy().into_owned();
+        let path = path.as_str();
         let mut svg = String::from("<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"640\" height=\"480\" viewBox=\"-6 -4.5 12 9\">\n<rect x=\"-6\" y=\"-4.5\" width=\"12\" height=\"9\" fill=\"#181a1e\"/>\n");
         for b in &self.molecule.bonds {
             let p1 = rotate_point(self.molecule.atoms[b.a].pos, self.yaw, self.pitch);
@@ -1557,4 +1581,32 @@ fn paint_glossy_sphere(
         radius * 0.17,
         blend(base, 1.82),
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use soryntel_core::SpeciesRepository;
+    use soryntel_db::ThermoDatabase;
+
+    #[test]
+    fn save_to_own_database_persists_the_own_db_file() {
+        let dir = std::env::temp_dir().join(format!("soryntel-c20-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("OWNDB6.HSC");
+        let mut db = ThermoDatabase::with_open_defaults();
+        CatalogUseCases::create_empty_own_db(&mut db, &path).unwrap();
+        let mut st = BensonModuleState::new(&db);
+        let est = st.estimation.clone().expect("estimación inicial");
+        st.edit_formula = "C16H14O2".into();
+        st.save_estimation_to_own_db(&mut db, &est);
+        assert!(st.last_error.is_none(), "{:?}", st.last_error);
+
+        // Otra ventana (otro proceso) ve la especie al abrir la misma OwnDB.
+        let mut reread = ThermoDatabase::with_open_defaults();
+        CatalogUseCases::open_own_db(&mut reread, &path).unwrap();
+        assert!(reread.get_species("C16H14O2(BEst)").is_some(), "la especie no llegó al archivo OwnDB: {}", st.status_text);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

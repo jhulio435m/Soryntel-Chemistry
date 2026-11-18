@@ -9,11 +9,17 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, Default)]
 pub struct PitzerTempCurve {
     pub defined: bool,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub a: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub b: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub c: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub d: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub e: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub f: f64,
 }
 
@@ -120,11 +126,17 @@ impl PitzerTempCurve {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ValidityRange {
+    #[serde(default, with = "soryntel_core::serde_nonfinite::option")]
     pub min_t_c: Option<f64>,
+    #[serde(default, with = "soryntel_core::serde_nonfinite::option")]
     pub max_t_c: Option<f64>,
+    #[serde(default, with = "soryntel_core::serde_nonfinite::option")]
     pub min_m: Option<f64>,
+    #[serde(default, with = "soryntel_core::serde_nonfinite::option")]
     pub max_m: Option<f64>,
+    #[serde(default, with = "soryntel_core::serde_nonfinite::option")]
     pub min_i: Option<f64>,
+    #[serde(default, with = "soryntel_core::serde_nonfinite::option")]
     pub max_i: Option<f64>,
 }
 

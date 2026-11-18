@@ -15,6 +15,7 @@
 //! 6. **DB Tools & Refs**: Active `.HSC`/`.REF` paths, `.CAT` refresh, `Sort`, `Merge HSC1 -> HSC2`
 //!    with duplicate inspection, legacy `HSC 2.0-5.0 -> 6.0`, CSV/JSON import/export, and `MainDB6.REF` explorer.
 
+use crate::ui_common::{parse_user_number, NumberFields};
 use eframe::egui;
 use egui_plot::{Line, Plot, PlotPoints, Points};
 use soryntel_application::use_cases::CatalogUseCases;
@@ -218,17 +219,18 @@ impl SpeciesModuleState {
             .main_path
             .as_ref()
             .map(|p| p.display().to_string())
-            .unwrap_or_else(|| "/home/nando/Descargas/HSC6/Databases/Maindb6.HSC".into());
+            .unwrap_or_default();
         let default_own = summary
             .own_path
-            .as_ref()
+            .clone()
+            .or_else(crate::composition::default_own_db_path)
             .map(|p| p.display().to_string())
-            .unwrap_or_else(|| crate::ui_common::temp_file_path("soryntel_owndb6.HSC"));
+            .unwrap_or_default();
         let default_ref = summary
             .ref_path
             .as_ref()
             .map(|p| p.display().to_string())
-            .unwrap_or_else(|| "/home/nando/Descargas/HSC6/Databases/MainDB6.REF".into());
+            .unwrap_or_default();
 
         let mut st = Self {
             active_tab: SpeciesViewTab::Browser,
@@ -293,16 +295,16 @@ impl SpeciesModuleState {
             gibbs_normal_out: None,
 
             main_path_input: default_main,
-            own_path_input: default_own,
+            own_path_input: default_own.clone(),
             ref_path_input: default_ref,
-            merge_src_path: crate::ui_common::temp_file_path("hsc_src.HSC"),
-            merge_dst_path: crate::ui_common::temp_file_path("soryntel_owndb6.HSC"),
+            merge_src_path: String::new(),
+            merge_dst_path: default_own.clone(),
             merge_show_duplicates: true,
             merge_conflicts: Vec::new(),
             merge_decisions: BTreeMap::new(),
-            legacy_src_path: "/home/nando/Descargas/HSC6/Databases/MAINDB3.HSC".into(),
-            legacy_dst_path: crate::ui_common::temp_file_path("maindb3_upgraded.HSC"),
-            csv_io_path: crate::ui_common::temp_file_path("soryntel_species_export.csv"),
+            legacy_src_path: String::new(),
+            legacy_dst_path: String::new(),
+            csv_io_path: String::new(),
             ref_search_query: String::new(),
 
             status_msg: format!(
@@ -476,7 +478,8 @@ impl SpeciesModuleState {
             return;
         }
         let inv_scale = if self.use_calories { CAL_TO_JOULE } else { 1.0 };
-        let parse_f = |s: &str| s.trim().parse::<f64>().unwrap_or(0.0);
+        let fields = NumberFields::default();
+        let parse_f = |s: &str| fields.or(s, 0.0);
 
         let mut mw = parse_f(&self.editor.mw_str);
         let mut charge = 0;
@@ -495,6 +498,10 @@ impl SpeciesModuleState {
             if !self.use_kelvin {
                 t1 += 273.15;
                 t2 += 273.15;
+            }
+            if let Err(e) = fields.check() {
+                self.set_status(e, true);
+                return;
             }
             if t2 <= t1 {
                 self.set_status(
@@ -546,6 +553,10 @@ impl SpeciesModuleState {
             },
             reliability_class: self.editor.reliability_class.clamp(1, 10),
         };
+        if let Err(e) = fields.check() {
+            self.set_status(e, true);
+            return;
+        }
         let raw_ph = self.editor.raw_phase_code.clone();
         CatalogUseCases::save_own_species(db, sp, meta, raw_ph);
         self.selected_formula = Some(formula.clone());
@@ -557,22 +568,38 @@ impl SpeciesModuleState {
         );
     }
 
+    fn choose_and_export_csv(&mut self, db: &dyn SpeciesWorkspacePort) {
+        let current = Some(std::path::PathBuf::from(&self.csv_io_path)).filter(|p| p.is_absolute());
+        let Some(path) = crate::storage::choose_file(true, "Exportar especies a CSV", "csv", "species.csv", current.as_deref()) else {
+            return;
+        };
+        let csv = CatalogUseCases::export_csv(db, self.source_filter);
+        match crate::storage::write_atomic(&path, csv) {
+            Ok(_) => {
+                self.csv_io_path = path.to_string_lossy().into_owned();
+                self.set_status(format!("Exported CSV -> {}", path.display()), false);
+            }
+            Err(e) => self.set_status(format!("CSV write failed: {e}"), true),
+        }
+    }
+
     /// Main UI entry point. Returns optional formula imported for Reaction Equations module.
-    pub fn ui(&mut self, ctx: &egui::Context, db: &mut dyn SpeciesWorkspacePort) -> Option<String> {
+    pub fn ui(&mut self, root_ui: &mut egui::Ui, db: &mut dyn SpeciesWorkspacePort) -> Option<String> {
+        let ctx = &root_ui.ctx().clone();
         if self.results_dirty {
             self.refresh_search(db);
         }
 
-        self.show_menu_bar(ctx, db);
-        self.show_status_footer(ctx, db);
+        self.show_menu_bar(root_ui, db);
+        self.show_status_footer(root_ui, db);
 
         if self.show_help_dialog {
             let mut open = true;
-            egui::Window::new("HSC Databases (Module 16) Help")
+            egui::Window::new("Thermochemical Database Help")
                 .open(&mut open)
                 .default_width(520.0)
                 .show(ctx, |ui| {
-                    ui.strong("Module 16: Species & Thermochemical Databases (HSC 6.0 Ch. 28)");
+                    ui.strong("Module 16: Species & Thermochemical Databases (Guía de especies)");
                     ui.separator();
                     ui.label("• Precedence: Calculation modules always resolve species from OwnDB first, then MainDB.");
                     ui.label("• Search Modes: Elements (Some / All), Stoichiometry (Fix Ratio OFF = isomer/mineral match e.g. SiO4FeFe -> *2FeO*SiO2; ON = empirical ratio e.g. AsS -> As2S2), Keyword (Formula, Structural, Name, Common, CAS).");
@@ -583,7 +610,7 @@ impl SpeciesModuleState {
             self.show_help_dialog = open;
         }
 
-        egui::CentralPanel::default().show(ctx, |ui| match self.active_tab {
+        egui::CentralPanel::default().show(root_ui, |ui| match self.active_tab {
             SpeciesViewTab::Browser => self.show_browser_tab(ui, db),
             SpeciesViewTab::Editor => self.show_editor_tab(ui, db),
             SpeciesViewTab::FitCp => self.show_fit_cp_tab(ui),
@@ -595,41 +622,37 @@ impl SpeciesModuleState {
         self.import_to_reaction_formula.take()
     }
 
-    fn show_menu_bar(&mut self, ctx: &egui::Context, db: &mut dyn SpeciesWorkspacePort) {
-        egui::TopBottomPanel::top("species_top_menu").show(ctx, |ui| {
-            egui::menu::bar(ui, |ui| {
+    fn show_menu_bar(&mut self, root_ui: &mut egui::Ui, db: &mut dyn SpeciesWorkspacePort) {
+        egui::Panel::top("species_top_menu").show(root_ui, |ui| {
+            egui::MenuBar::new().ui(ui, |ui| {
                 ui.menu_button(crate::i18n::text("common.001"), |ui| {
-                    if ui.button("Open OwnDB (.HSC)...").clicked() {
+                    if ui.button("Open OwnDB (formato heredado)...").clicked() {
                         self.active_tab = SpeciesViewTab::DbTools;
-                        ui.close_menu();
+                        ui.close_kind(egui::UiKind::Menu);
                     }
-                    if ui.button("Save OwnDB (.HSC)").clicked() {
+                    if ui.button("Save OwnDB (formato heredado)").clicked() {
                         let path = self.own_path_input.clone();
                         match CatalogUseCases::save_own_db(db, &path) {
                             Ok(n) => self.set_status(format!("Saved {n} OwnDB datasets -> {path}"), false),
                             Err(e) => self.set_status(format!("{e}"), true),
                         }
-                        ui.close_menu();
+                        ui.close_kind(egui::UiKind::Menu);
                     }
                     if ui.button("Export Resolved View -> CSV").clicked() {
-                        let csv = CatalogUseCases::export_csv(db, self.source_filter);
-                        match crate::storage::write_atomic(&self.csv_io_path, csv) {
-                            Ok(_) => self.set_status(format!("Exported CSV -> {}", self.csv_io_path), false),
-                            Err(e) => self.set_status(format!("CSV write failed: {e}"), true),
-                        }
-                        ui.close_menu();
+                        self.choose_and_export_csv(db);
+                        ui.close_kind(egui::UiKind::Menu);
                     }
                 });
                 ui.menu_button(crate::i18n::text("common.006"), |ui| {
                     if ui.button("New Blank Species in OwnDB Editor").clicked() {
                         self.editor = EditableSpeciesForm::default();
                         self.active_tab = SpeciesViewTab::Editor;
-                        ui.close_menu();
+                        ui.close_kind(egui::UiKind::Menu);
                     }
                     if ui.button("Edit Selected Species in OwnDB").clicked() {
                         self.load_selected_into_editor(db);
                         self.active_tab = SpeciesViewTab::Editor;
-                        ui.close_menu();
+                        ui.close_kind(egui::UiKind::Menu);
                     }
                     if ui.button("Delete Selected from OwnDB").clicked() {
                         if let Some(f) = self.selected_formula.clone() {
@@ -640,7 +663,7 @@ impl SpeciesModuleState {
                                 self.set_status(format!("'{f}' is in MainDB (read-only), not OwnDB."), true);
                             }
                         }
-                        ui.close_menu();
+                        ui.close_kind(egui::UiKind::Menu);
                     }
                 });
                 ui.menu_button(crate::i18n::text("common.028"), |ui| {
@@ -655,36 +678,41 @@ impl SpeciesModuleState {
                         (SpeciesViewTab::FitCp, "Fit Cp Data (Kelley OLS)"),
                         (SpeciesViewTab::ConvertCp, "Convert Cp Functions"),
                         (SpeciesViewTab::ConvertGibbs, "Convert G(T) -> H, S, Cp"),
-                        (SpeciesViewTab::DbTools, "Merge / Legacy HSC 2-5 / .CAT"),
+                        (SpeciesViewTab::DbTools, "Merge / Legacy databases / .CAT"),
                     ] {
                         if ui.button(lbl).clicked() {
                             self.active_tab = tab;
-                            ui.close_menu();
+                            ui.close_kind(egui::UiKind::Menu);
                         }
                     }
                 });
                 ui.menu_button("Databases", |ui| {
-                    if ui.button("Active Layer: OwnDB > MainDB").clicked() {
+                    if ui.button("Active Layer: OwnDB > MainDB > SoryntelDB").clicked() {
                         self.source_filter = None;
                         self.refresh_search(db);
-                        ui.close_menu();
+                        ui.close_kind(egui::UiKind::Menu);
                     }
                     if ui.button("Show OwnDB Only").clicked() {
                         self.source_filter = Some(DbSource::Own);
                         self.refresh_search(db);
-                        ui.close_menu();
+                        ui.close_kind(egui::UiKind::Menu);
                     }
                     if ui.button("Show MainDB Only").clicked() {
                         self.source_filter = Some(DbSource::Main);
                         self.refresh_search(db);
-                        ui.close_menu();
+                        ui.close_kind(egui::UiKind::Menu);
+                    }
+                    if ui.button("Show SoryntelDB Only").clicked() {
+                        self.source_filter = Some(DbSource::Soryntel);
+                        self.refresh_search(db);
+                        ui.close_kind(egui::UiKind::Menu);
                     }
                     ui.separator();
                     if ui.button("Sort OwnDB Alphabetically").clicked() {
                         CatalogUseCases::sort_layer(db, DbSource::Own);
                         self.refresh_search(db);
                         self.set_status("OwnDB sorted canonically.", false);
-                        ui.close_menu();
+                        ui.close_kind(egui::UiKind::Menu);
                     }
                     if ui.button("Refresh Active .CAT Indexes").clicked() {
                         let (main_ok, own_ok) = CatalogUseCases::refresh_catalogues(db);
@@ -692,13 +720,13 @@ impl SpeciesModuleState {
                             format!("Catalogue refresh — Main: {main_ok:?}, Own: {own_ok:?}"),
                             false,
                         );
-                        ui.close_menu();
+                        ui.close_kind(egui::UiKind::Menu);
                     }
                 });
                 ui.menu_button(crate::i18n::text("common.003"), |ui| {
                     if ui.button("Module 16 Guide & Validation Reference").clicked() {
                         self.show_help_dialog = true;
-                        ui.close_menu();
+                        ui.close_kind(egui::UiKind::Menu);
                     }
                 });
 
@@ -734,9 +762,9 @@ impl SpeciesModuleState {
         });
     }
 
-    fn show_status_footer(&self, ctx: &egui::Context, db: &dyn SpeciesWorkspacePort) {
+    fn show_status_footer(&self, root_ui: &mut egui::Ui, db: &dyn SpeciesWorkspacePort) {
         let sum = CatalogUseCases::status(db);
-        egui::TopBottomPanel::bottom("species_status_footer").show(ctx, |ui| {
+        egui::Panel::bottom("species_status_footer").show(root_ui, |ui| {
             ui.horizontal(|ui| {
                 let col = if self.status_is_err {
                     egui::Color32::from_rgb(185, 28, 28)
@@ -798,6 +826,10 @@ impl SpeciesModuleState {
                 }
                 if ui.selectable_label(self.source_filter == Some(DbSource::Main), "MainDB").clicked() {
                     self.source_filter = Some(DbSource::Main);
+                    changed = true;
+                }
+                if ui.selectable_label(self.source_filter == Some(DbSource::Soryntel), "SoryntelDB").clicked() {
+                    self.source_filter = Some(DbSource::Soryntel);
                     changed = true;
                 }
             });
@@ -952,6 +984,7 @@ impl SpeciesModuleState {
                         let badge = match entry.source {
                             DbSource::Own => "[Own]",
                             DbSource::Main => "[Main]",
+                            DbSource::Soryntel => "[Sdb]",
                             DbSource::OpenDefault => "[Def]",
                         };
                         let label = format!("{}  {}", entry.formula, badge);
@@ -987,10 +1020,6 @@ impl SpeciesModuleState {
                             .clicked()
                         {
                             self.import_to_reaction_formula = Some(sel.formula.clone());
-                            let _ = crate::storage::write_atomic(
-                                crate::ui_common::temp_file_path("soryntel_import_formula.txt"),
-                                &sel.formula,
-                            );
                         }
                         if ui.button("Edit Copy in OwnDB").clicked() {
                             self.load_into_editor(&sel.species, &sel.metadata, &sel.raw_phase_code);
@@ -1072,6 +1101,7 @@ impl SpeciesModuleState {
                                 rect,
                                 2.0,
                                 egui::Stroke::new(1.0, egui::Color32::DARK_GRAY),
+                                egui::StrokeKind::Middle,
                             );
                             ui.monospace(format!(
                                 "{} ({})  |  Rel: {}",
@@ -1144,7 +1174,7 @@ impl SpeciesModuleState {
                     let cites = CatalogUseCases::citations_for(db, &first_iv.reference);
                     if !cites.is_empty() {
                         cols[2].separator();
-                        cols[2].strong("Resolved Citations (MainDB6.REF)");
+                        cols[2].strong("Resolved Citations (archivo de referencias)");
                         egui::ScrollArea::vertical()
                             .id_salt("browser_citations_scroll")
                             .max_height(105.0)
@@ -1159,7 +1189,7 @@ impl SpeciesModuleState {
                     }
                 }
             } else {
-                cols[2].label("Select a species on the left to inspect its 19 HSC fields and thermochemical ranges.");
+                cols[2].label("Select a species on the left to inspect its 19 fields and thermochemical ranges.");
             }
         });
     }
@@ -1195,7 +1225,7 @@ impl SpeciesModuleState {
             {
                 self.save_editor_to_owndb(db);
             }
-            if ui.button("Persist OwnDB File (.HSC)").clicked() {
+            if ui.button("Persist OwnDB File (formato heredado)").clicked() {
                 self.save_editor_to_owndb(db);
                 let p = self.own_path_input.clone();
                 match CatalogUseCases::save_own_db(db, &p) {
@@ -1251,7 +1281,7 @@ impl SpeciesModuleState {
                     let c = CatalogUseCases::species_color_spec(self.editor.color_code);
                     let (rect, _) = ui.allocate_exact_size(egui::vec2(16.0, 16.0), egui::Sense::hover());
                     ui.painter().rect_filled(rect, 2.0, egui::Color32::from_rgb(c.rgb[0], c.rgb[1], c.rgb[2]));
-                    ui.painter().rect_stroke(rect, 2.0, egui::Stroke::new(1.0, egui::Color32::BLACK));
+                    ui.painter().rect_stroke(rect, 2.0, egui::Stroke::new(1.0, egui::Color32::BLACK), egui::StrokeKind::Middle);
                     if ui.button(format!("{} ({})", c.code, c.name)).clicked() {
                         self.show_color_palette = !self.show_color_palette;
                     }
@@ -1261,7 +1291,7 @@ impl SpeciesModuleState {
 
         if self.show_color_palette {
             ui.separator();
-            ui.label("Select HSC Color Code (0..53):");
+            ui.label("Select Color Code (0..53):");
             ui.horizontal_wrapped(|ui| {
                 for spec in HSC_COLOR_PALETTE.iter() {
                     let bg = egui::Color32::from_rgb(spec.rgb[0], spec.rgb[1], spec.rgb[2]);
@@ -1304,9 +1334,11 @@ impl SpeciesModuleState {
             if ui.button("Auto dS = dH / Ttr (Rows >= 1)").clicked() {
                 let is_cal = self.use_calories;
                 for row in self.editor.intervals.iter_mut().skip(1) {
-                    let t1 = row.t1.trim().parse::<f64>().unwrap_or(0.0);
+                    // Filas con texto no numérico se dejan sin tocar.
+                    let (Ok(t1), Ok(dh)) = (parse_user_number(&row.t1), parse_user_number(&row.h_disp)) else {
+                        continue;
+                    };
                     let t1_k = if self.use_kelvin { t1 } else { t1 + 273.15 };
-                    let dh = row.h_disp.trim().parse::<f64>().unwrap_or(0.0);
                     if t1_k > 0.0 {
                         let ds = (dh * 1000.0) / t1_k;
                         let _ = is_cal;
@@ -1382,7 +1414,8 @@ impl SpeciesModuleState {
             return;
         }
         let inv_scale = if self.use_calories { CAL_TO_JOULE } else { 1.0 };
-        let parse_f = |s: &str| s.trim().parse::<f64>().unwrap_or(0.0);
+        let fields = NumberFields::default();
+        let parse_f = |s: &str| fields.or(s, 0.0);
         let solids: Vec<SpeciesThermoInterval> = self.editor.intervals[..li]
             .iter()
             .map(|r| {
@@ -1420,6 +1453,10 @@ impl SpeciesModuleState {
             c: parse_f(&liq_row.c_disp) * inv_scale,
             d: parse_f(&liq_row.d_disp) * inv_scale,
         };
+        if let Err(e) = fields.check() {
+            self.set_status(e, true);
+            return;
+        }
         match CatalogUseCases::species_extrapolate_liquid_298(&solids, t_melt_k, dh_fus_j, liq_k) {
             Ok((h_l_298, s_l_298)) => {
                 let e_scale = self.energy_scale_to_display();
@@ -1547,9 +1584,9 @@ impl SpeciesModuleState {
                     .fit_points
                     .iter()
                     .filter_map(|p| {
-                        let t = p.t_str.trim().parse::<f64>().ok()?;
+                        let t = parse_user_number(&p.t_str).ok()?;
                         let t_k = if self.use_kelvin { t } else { t + 273.15 };
-                        let cp_j = p.cp_str.trim().parse::<f64>().ok()? * inv_scale;
+                        let cp_j = parse_user_number(&p.cp_str).ok()? * inv_scale;
                         Some([t_k, cp_j * s_scale])
                     })
                     .collect();
@@ -1565,8 +1602,8 @@ impl SpeciesModuleState {
                     .x_axis_label("T (K)")
                     .y_axis_label(s_u)
                     .show(&mut cols[1], |plot_ui| {
-                        plot_ui.line(Line::new(PlotPoints::from(line_pts)).name("Kelley Fit"));
-                        plot_ui.points(Points::new(PlotPoints::from(exp_pts)).radius(4.0).name("Experimental"));
+                        plot_ui.line(Line::new("Kelley Fit", PlotPoints::from(line_pts)));
+                        plot_ui.points(Points::new("Experimental", PlotPoints::from(exp_pts)).radius(4.0));
                     });
             } else {
                 cols[1].label("Click 'Fit Cp Curve' to compute Kelley A, B, C, D and inspect residuals.");
@@ -1576,22 +1613,31 @@ impl SpeciesModuleState {
 
     fn run_fit_cp(&mut self) {
         let inv_scale = if self.use_calories { CAL_TO_JOULE } else { 1.0 };
+        let fields = NumberFields::default();
         let pts: Vec<CpDataPoint> = self
             .fit_points
             .iter()
-            .filter_map(|p| {
-                let t = p.t_str.trim().parse::<f64>().ok()?;
+            // Una fila completamente vacía no es un dato; cualquier otra debe ser numérica.
+            .filter(|p| !(p.t_str.trim().is_empty() && p.cp_str.trim().is_empty()))
+            .map(|p| {
+                let t = fields.req(&p.t_str);
                 let t_k = if self.use_kelvin { t } else { t + 273.15 };
-                let cp_j = p.cp_str.trim().parse::<f64>().ok()? * inv_scale;
-                Some(CpDataPoint { t_k, cp_j })
+                let cp_j = fields.req(&p.cp_str) * inv_scale;
+                CpDataPoint { t_k, cp_j }
             })
             .collect();
+        // Solo se leen los coeficientes bloqueados (los que no se ajustan).
+        let lock = |fit: bool, text: &str| if fit { 0.0 } else { fields.or(text, 0.0) * inv_scale };
         let locked = KelleyCoefficients {
-            a: self.lock_a.trim().parse::<f64>().unwrap_or(0.0) * inv_scale,
-            b: self.lock_b.trim().parse::<f64>().unwrap_or(0.0) * inv_scale,
-            c: self.lock_c.trim().parse::<f64>().unwrap_or(0.0) * inv_scale,
-            d: self.lock_d.trim().parse::<f64>().unwrap_or(0.0) * inv_scale,
+            a: lock(self.fit_mask.fit_a, &self.lock_a),
+            b: lock(self.fit_mask.fit_b, &self.lock_b),
+            c: lock(self.fit_mask.fit_c, &self.lock_c),
+            d: lock(self.fit_mask.fit_d, &self.lock_d),
         };
+        if let Err(e) = fields.check() {
+            self.set_status(format!("Fit Cp: {e}"), true);
+            return;
+        }
         match CatalogUseCases::species_fit_cp(&pts, self.fit_mask, locked) {
             Ok(res) => {
                 self.set_status(
@@ -1606,7 +1652,7 @@ impl SpeciesModuleState {
 
     fn show_convert_cp_tab(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
-            ui.strong("Convert Cp Functions -> HSC Format (Ch. 28.13 Fig. 12)");
+            ui.strong("Convert Cp Functions -> legacy format (Ch. 28.13 Fig. 12)");
             ui.separator();
             egui::ComboBox::from_label("Template")
                 .selected_text(self.ext_template.label())
@@ -1625,7 +1671,7 @@ impl SpeciesModuleState {
                 });
             if ui
                 .add(
-                    egui::Button::new("Convert Cp Functions to HSC Format")
+                    egui::Button::new("Convert Cp Functions to legacy format")
                         .fill(egui::Color32::from_rgb(219, 234, 254)),
                 )
                 .clicked()
@@ -1702,18 +1748,23 @@ impl SpeciesModuleState {
                 .x_axis_label("T (K)")
                 .y_axis_label(s_u)
                 .show(ui, |plot_ui| {
-                    plot_ui.line(Line::new(PlotPoints::from(fit_plot)).name("Kelley HSC Fit"));
-                    plot_ui.points(Points::new(PlotPoints::from(pts_plot)).radius(4.0).name("External f(T)"));
+                    plot_ui.line(Line::new("Kelley Fit", PlotPoints::from(fit_plot)));
+                    plot_ui.points(Points::new("External f(T)", PlotPoints::from(pts_plot)).radius(4.0));
                 });
         }
     }
 
     fn run_convert_cp(&mut self) {
-        let t1 = self.ext_t1.trim().parse::<f64>().unwrap_or(298.15);
-        let t2 = self.ext_t2.trim().parse::<f64>().unwrap_or(1500.0);
+        let fields = NumberFields::default();
+        let t1 = fields.or(&self.ext_t1, 298.15);
+        let t2 = fields.or(&self.ext_t2, 1500.0);
         let mut params = [0.0_f64; 6];
         for (i, s) in self.ext_params.iter().enumerate() {
-            params[i] = s.trim().parse::<f64>().unwrap_or(0.0);
+            params[i] = fields.or(s, 0.0);
+        }
+        if let Err(e) = fields.check() {
+            self.set_status(format!("Convert Cp: {e}"), true);
+            return;
         }
         match CatalogUseCases::species_convert_cp_function(
             &self.ext_expr,
@@ -1864,7 +1915,8 @@ impl SpeciesModuleState {
     }
 
     fn run_convert_gibbs(&mut self) {
-        let parse = |s: &str| s.trim().parse::<f64>().unwrap_or(0.0);
+        let fields = NumberFields::default();
+        let parse = |s: &str| fields.or(s, 0.0);
         let inp = GibbsCoeffsInput {
             h: parse(&self.gibbs_h),
             s: parse(&self.gibbs_s),
@@ -1875,6 +1927,10 @@ impl SpeciesModuleState {
             is_calories: self.use_calories,
             t_ref_k: T_REF_K,
         };
+        if let Err(e) = fields.check() {
+            self.set_status(format!("Convert G(T): {e}"), true);
+            return;
+        }
         match CatalogUseCases::species_convert_gibbs(&inp) {
             Ok(out) => {
                 self.gibbs_delta_out = Some(out);
@@ -1888,7 +1944,7 @@ impl SpeciesModuleState {
         egui::ScrollArea::vertical().id_salt("db_tools_main_scroll").show(ui, |ui| {
             ui.strong("Active Databases & Paths (Ch. 28.17)");
             egui::Grid::new("db_paths_grid").spacing([10.0, 5.0]).show(ui, |ui| {
-                ui.label("MainDB (.HSC):");
+                ui.label("MainDB (formato heredado):");
                 ui.add(egui::TextEdit::singleline(&mut self.main_path_input).desired_width(420.0));
                 if ui.button("Open MainDB").clicked() {
                     match CatalogUseCases::open_main_db(db, &self.main_path_input) {
@@ -1901,7 +1957,7 @@ impl SpeciesModuleState {
                 }
                 ui.end_row();
 
-                ui.label("OwnDB (.HSC):");
+                ui.label("OwnDB (formato heredado):");
                 ui.add(egui::TextEdit::singleline(&mut self.own_path_input).desired_width(420.0));
                 ui.horizontal(|ui| {
                     if ui.button("Open OwnDB").clicked() {
@@ -1943,11 +1999,11 @@ impl SpeciesModuleState {
             });
 
             ui.separator();
-            ui.strong("Merge Databases (HSC1 -> HSC2), Legacy HSC 2.0–5.0 Upgrade & CSV/JSON (Ch. 28.15–28.16)");
+            ui.strong("Merge Databases (source → target), Legacy database Upgrade & CSV/JSON (Ch. 28.15–28.16)");
             egui::Grid::new("db_merge_legacy_grid").spacing([10.0, 5.0]).show(ui, |ui| {
-                ui.label("Merge Source (HSC1):");
+                ui.label("Source database:");
                 ui.add(egui::TextEdit::singleline(&mut self.merge_src_path).desired_width(300.0));
-                ui.label("Target (HSC2):");
+                ui.label("Target:");
                 ui.add(egui::TextEdit::singleline(&mut self.merge_dst_path).desired_width(300.0));
                 ui.horizontal(|ui| {
                     ui.checkbox(&mut self.merge_show_duplicates, "Show Duplicates");
@@ -1977,29 +2033,32 @@ impl SpeciesModuleState {
                 });
                 ui.end_row();
 
-                ui.label("Legacy HSC 2–5 -> 6:");
+                ui.label("Actualizar base heredada:");
                 ui.add(egui::TextEdit::singleline(&mut self.legacy_src_path).desired_width(300.0));
-                ui.label("Output HSC 6:");
+                ui.label("Output database:");
                 ui.add(egui::TextEdit::singleline(&mut self.legacy_dst_path).desired_width(300.0));
-                if ui.button("Convert Legacy -> HSC 6").clicked() {
+                if ui.button("Convert legacy database").clicked() {
                     match CatalogUseCases::convert_legacy_to_hsc6(db, &self.legacy_src_path, &self.legacy_dst_path) {
-                        Ok(n) => self.set_status(format!("Converted {n} datasets -> sorted HSC 6.0 + .CAT at {}", self.legacy_dst_path), false),
+                        Ok(n) => self.set_status(format!("Converted {n} datasets -> sorted database + index at {}", self.legacy_dst_path), false),
                         Err(e) => self.set_status(format!("Legacy convert failed: {e}"), true),
                     }
                 }
                 ui.end_row();
 
                 ui.label("CSV Interchange:");
-                ui.add(egui::TextEdit::singleline(&mut self.csv_io_path).desired_width(300.0));
+                ui.label(&self.csv_io_path);
                 ui.horizontal(|ui| {
                     if ui.button(crate::i18n::text("common.031")).clicked() {
-                        let csv = CatalogUseCases::export_csv(db, self.source_filter);
-                        match crate::storage::write_atomic(&self.csv_io_path, csv) {
-                            Ok(_) => self.set_status(format!("CSV saved -> {}", self.csv_io_path), false),
-                            Err(e) => self.set_status(format!("{e}"), true),
-                        }
+                        self.choose_and_export_csv(db);
                     }
-                    if ui.button("Import CSV -> OwnDB").clicked() {
+                    let current = Some(std::path::PathBuf::from(&self.csv_io_path)).filter(|p| p.is_absolute());
+                    let picked = ui
+                        .button("Import CSV -> OwnDB")
+                        .clicked()
+                        .then(|| crate::storage::choose_file(false, "Importar CSV en OwnDB", "csv", "", current.as_deref()))
+                        .flatten();
+                    if let Some(path) = picked {
+                        self.csv_io_path = path.to_string_lossy().into_owned();
                         match CatalogUseCases::import_csv_file_into_own(db, &self.csv_io_path) {
                             Ok(n) => {
                                 self.refresh_search(db);
@@ -2047,7 +2106,7 @@ impl SpeciesModuleState {
 
             ui.separator();
             ui.horizontal(|ui| {
-                ui.strong("Bibliographic Dictionary (MainDB6.REF)");
+                ui.strong("Bibliographic Dictionary (archivo de referencias)");
                 ui.add(egui::TextEdit::singleline(&mut self.ref_search_query).hint_text("Filter key or author (e.g. Barin, JANAF, SGTE)"));
             });
             let refs: Vec<ReferenceEntry> = CatalogUseCases::search_references(db, &self.ref_search_query, 150);
@@ -2096,5 +2155,38 @@ mod tests {
 
     fn assert_relative_approx(actual: f64, expected: f64) {
         assert!((actual - expected).abs() < 1e-3, "actual={actual}, expected={expected}");
+    }
+
+    #[test]
+    fn fit_cp_reports_points_it_cannot_parse() {
+        let db = ThermoDatabase::with_open_defaults();
+        let mut st = SpeciesModuleState::new(&db);
+        // Formato regional: la coma decimal se acepta y el punto se usa (no se descarta).
+        let exact = st.fit_points[1].cp_str.clone();
+        st.fit_points[1].t_str = "400,0".into();
+        st.fit_points[1].cp_str = exact.replace('.', ",");
+        st.run_fit_cp();
+        assert!(!st.status_is_err, "{}", st.status_msg);
+        assert!(st.fit_result.as_ref().unwrap().max_abs_error_pct < 0.01);
+        // Un texto no numérico detiene el ajuste con un error, sin resultado nuevo.
+        st.fit_result = None;
+        st.fit_points[2].cp_str = "abc".into();
+        st.run_fit_cp();
+        assert!(st.status_is_err, "el ajuste se informó como correcto ignorando un punto: {}", st.status_msg);
+        assert!(st.fit_result.is_none());
+    }
+
+    #[test]
+    fn fit_cp_locked_coefficient_with_comma_is_not_zeroed() {
+        let db = ThermoDatabase::with_open_defaults();
+        let mut st = SpeciesModuleState::new(&db);
+        st.fit_mask.fit_a = false;
+        st.lock_a = "11,166".into();
+        st.run_fit_cp();
+        let a = st.fit_result.as_ref().map(|r| r.kelley_si.a);
+        assert!(
+            st.status_is_err || a.is_some_and(|a| (a / CAL_TO_JOULE - 11.166).abs() < 1e-6),
+            "A bloqueado = {a:?} J (esperado 11.166 cal o un error)"
+        );
     }
 }

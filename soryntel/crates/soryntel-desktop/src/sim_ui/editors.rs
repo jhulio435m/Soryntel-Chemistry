@@ -1,3 +1,4 @@
+use crate::excel_grid::parse_decimal_input;
 use eframe::egui::{self, Color32, RichText};
 use egui_plot::{HLine, Legend, Line, Plot, PlotPoints, Points, VLine};
 use soryntel_application::use_cases::SimulationUseCases;
@@ -278,7 +279,7 @@ fn render_table_editor(ctx: &egui::Context, state: &mut SimModuleState) {
                         ui.label("Organization / Author:");
                         ui.text_edit_singleline(&mut tbl.organization_author);
                         ui.end_row();
-                        ui.label("HSC Version:");
+                        ui.label("File version:");
                         ui.text_edit_singleline(&mut tbl.hsc_version);
                         ui.end_row();
                         ui.label(crate::i18n::text("common.089"));
@@ -529,7 +530,7 @@ fn render_select_unit_models(ctx: &egui::Context, state: &mut SimModuleState) {
                         crate::sim_ui::icons::unit_kind_icon_fallback(UnitKind::Reactions)
                     };
                     let (pre_r, _) = ui.allocate_exact_size(egui::Vec2::splat(44.0), egui::Sense::hover());
-                    ui.painter().rect_stroke(pre_r, 2.0, egui::Stroke::new(1.0, SIM_BORDER));
+                    ui.painter().rect_stroke(pre_r, 2.0, egui::Stroke::new(1.0, SIM_BORDER), egui::StrokeKind::Middle);
                     crate::sim_ui::icons::draw_equipment_icon(ui.painter(), pre_r.shrink(3.0), preview_k);
                     ui.vertical(|ui| {
                         ui.label(RichText::new(&entry.model_name).strong().size(13.5));
@@ -829,32 +830,29 @@ fn render_control_monitor(ctx: &egui::Context, state: &mut SimModuleState) {
                     .y_axis_label(format!("{} ({})", ctrl.y_target_name, ctrl.y_unit))
                     .show(&mut cols[1], |plot_ui| {
                         plot_ui.line(
-                            Line::new(line_pts)
-                                .name("Response Curve")
+                            Line::new("Response Curve", line_pts)
                                 .color(Color32::from_rgb(37, 99, 235))
                                 .width(2.0),
                         );
                         plot_ui.hline(
-                            HLine::new(ctrl.set_point)
-                                .name("Set Point")
+                            HLine::new("Set Point", ctrl.set_point)
                                 .color(Color32::from_rgb(22, 163, 74))
                                 .width(1.6),
                         );
                         if state.monitor_plot_tolerance {
                             plot_ui.hline(
-                                HLine::new(ctrl.set_point + ctrl.tolerance)
+                                HLine::new("", ctrl.set_point + ctrl.tolerance).id("upper_tolerance")
                                     .style(egui_plot::LineStyle::dashed_dense())
                                     .color(Color32::from_rgb(120, 180, 120)),
                             );
                             plot_ui.hline(
-                                HLine::new(ctrl.set_point - ctrl.tolerance)
+                                HLine::new("", ctrl.set_point - ctrl.tolerance).id("lower_tolerance")
                                     .style(egui_plot::LineStyle::dashed_dense())
                                     .color(Color32::from_rgb(120, 180, 120)),
                             );
                         }
                         plot_ui.points(
-                            Points::new(PlotPoints::from(vec![[ctrl.control_variable, ctrl.measured]]))
-                                .name("Current Solution")
+                            Points::new("Current Solution", PlotPoints::from(vec![[ctrl.control_variable, ctrl.measured]]))
                                 .radius(5.0)
                                 .color(Color32::from_rgb(234, 179, 8)),
                         );
@@ -934,12 +932,14 @@ fn render_scenario_editor(ctx: &egui::Context, state: &mut SimModuleState) {
                 let col_letter = char::from(b'C' + (state.scenario_selected_col as u8).min(20));
                 ui.label(RichText::new(format!("{}{}", col_letter, 18 + state.scenario_selected_run)).strong());
                 if ui.text_edit_singleline(&mut state.scenario_formula_bar).lost_focus() {
-                    if let Ok(parsed) = state.scenario_formula_bar.trim().parse::<f64>() {
+                    if let Some(parsed) = parse_decimal_input(&state.scenario_formula_bar) {
                         if let Some(row) = state.project.scenarios[s_idx].values.get_mut(state.scenario_selected_run) {
                             if let Some(cell) = row.get_mut(state.scenario_selected_col) {
                                 *cell = parsed;
                             }
                         }
+                    } else {
+                        ui.colored_label(egui::Color32::RED, "Número inválido");
                     }
                 }
             });
@@ -1051,15 +1051,15 @@ fn render_scenario_editor(ctx: &egui::Context, state: &mut SimModuleState) {
                         cols[1].label(RichText::new(format!("Monte Carlo — mu = {:.1}, sigma = {:.2}", col.mc_mean, col.mc_sd)).strong());
                         let pdf_pts: PlotPoints = pdf.iter().map(|p| [p[0], p[1]]).collect();
                         Plot::new("mc_pdf_plot").height(190.0).show(&mut cols[1], |plot_ui| {
-                            plot_ui.line(Line::new(pdf_pts).color(Color32::from_rgb(76, 114, 52)).width(1.8));
-                            plot_ui.vline(VLine::new(col.mc_mean).color(Color32::from_rgb(37, 99, 235)).width(1.4));
-                            plot_ui.vline(VLine::new(col.mc_min).color(Color32::from_rgb(208, 38, 38)));
-                            plot_ui.vline(VLine::new(col.mc_max).color(Color32::from_rgb(208, 38, 38)));
+                            plot_ui.line(Line::new("", pdf_pts).id("probability_density").color(Color32::from_rgb(76, 114, 52)).width(1.8));
+                            plot_ui.vline(VLine::new("", col.mc_mean).id("mean").color(Color32::from_rgb(37, 99, 235)).width(1.4));
+                            plot_ui.vline(VLine::new("", col.mc_min).id("minimum").color(Color32::from_rgb(208, 38, 38)));
+                            plot_ui.vline(VLine::new("", col.mc_max).id("maximum").color(Color32::from_rgb(208, 38, 38)));
                         });
                         let cdf_pts: PlotPoints = cdf.iter().map(|p| [p[0], p[1]]).collect();
                         Plot::new("mc_cdf_plot").height(190.0).show(&mut cols[1], |plot_ui| {
-                            plot_ui.line(Line::new(cdf_pts).color(Color32::from_rgb(76, 114, 52)).width(1.8));
-                            plot_ui.vline(VLine::new(col.mc_mean).color(Color32::from_rgb(37, 99, 235)).width(1.4));
+                            plot_ui.line(Line::new("", cdf_pts).id("cumulative_probability").color(Color32::from_rgb(76, 114, 52)).width(1.8));
+                            plot_ui.vline(VLine::new("", col.mc_mean).id("mean").color(Color32::from_rgb(37, 99, 235)).width(1.4));
                         });
                     }
                 } else {
@@ -1077,7 +1077,7 @@ fn render_scenario_editor(ctx: &egui::Context, state: &mut SimModuleState) {
                         .x_axis_label(&sc_snapshot.columns[x_col].variable_name)
                         .y_axis_label(&sc_snapshot.columns[y_col].variable_name)
                         .show(&mut cols[1], |plot_ui| {
-                            plot_ui.line(Line::new(pts).name("Scenario Sweep").color(Color32::from_rgb(0, 102, 204)).width(2.0));
+                            plot_ui.line(Line::new("Scenario Sweep", pts).color(Color32::from_rgb(0, 102, 204)).width(2.0));
                         });
                 }
             });
@@ -1102,7 +1102,7 @@ fn render_reports_window(ctx: &egui::Context, state: &mut SimModuleState) {
                     if let Some(ref wb) = state.reports_cache {
                         if let Some(sh) = wb.sheets.get(state.report_sheet_idx) {
                             let csv = SimulationUseCases::sim_report_csv(sh);
-                            ui.output_mut(|o| o.copied_text = csv);
+                            ui.ctx().copy_text(csv);
                             state.status_banner = format!("Copied '{}' CSV to clipboard", sh.name);
                         }
                     }
@@ -1257,8 +1257,8 @@ fn render_convergence_monitor(ctx: &egui::Context, state: &mut SimModuleState) {
                 .x_axis_label("Iteration Round")
                 .y_axis_label("Balance Error (%)")
                 .show(ui, |plot_ui| {
-                    plot_ui.line(Line::new(mb_pts).name("MB %").color(Color32::from_rgb(37, 99, 235)).width(2.0));
-                    plot_ui.line(Line::new(eb_pts).name("EB %").color(Color32::from_rgb(220, 38, 38)).width(2.0));
+                    plot_ui.line(Line::new("MB %", mb_pts).color(Color32::from_rgb(37, 99, 235)).width(2.0));
+                    plot_ui.line(Line::new("EB %", eb_pts).color(Color32::from_rgb(220, 38, 38)).width(2.0));
                 });
         });
     state.show_convergence_monitor = open;
@@ -1340,7 +1340,7 @@ fn render_visualization_picker(ctx: &egui::Context, state: &mut SimModuleState) 
 
 fn render_sim7_migrator(ctx: &egui::Context, state: &mut SimModuleState) {
     let mut open = state.show_sim7_migrator;
-    egui::Window::new("HSC Sim 7 -> Sim 10 Model Converter")
+    egui::Window::new("Conversor de modelos de simulación heredados")
         .open(&mut open)
         .default_size([520.0, 260.0])
         .show(ctx, |ui| {
@@ -1389,7 +1389,7 @@ fn render_export_modal(ctx: &egui::Context, state: &mut SimModuleState) {
                         }
                     }
                 } else if ui.button("Copy All to Clipboard").clicked() {
-                    ui.output_mut(|o| o.copied_text = state.export_buffer.clone());
+                    ui.ctx().copy_text(state.export_buffer.clone());
                     state.status_banner = "Copied export output to clipboard".to_string();
                 }
             });
@@ -1406,13 +1406,13 @@ fn render_export_modal(ctx: &egui::Context, state: &mut SimModuleState) {
 
 fn render_about_modal(ctx: &egui::Context, state: &mut SimModuleState) {
     let mut open = state.show_about_modal;
-    egui::Window::new("About HSC Sim")
+    egui::Window::new("About Sim")
         .open(&mut open)
         .collapsible(false)
         .resizable(false)
         .default_width(340.0)
         .show(ctx, |ui| {
-            ui.heading("Soryntel HSC Sim");
+            ui.heading("Soryntel Sim");
             ui.label(RichText::new("Version 10.3.1.0 (Clean-Room Edition)").strong());
             ui.separator();
             ui.label("Modules integrated:");
@@ -1433,7 +1433,7 @@ fn render_updates_modal(ctx: &egui::Context, state: &mut SimModuleState) {
         .resizable(false)
         .default_width(320.0)
         .show(ctx, |ui| {
-            ui.label(RichText::new("Soryntel HSC Sim 10.3.1.0 is up to date.").strong());
+            ui.label(RichText::new("No hay una actualización configurada para este módulo.").strong());
             ui.label("Offline clean-room thermodynamic database & solver engine verified.");
         });
     state.show_updates_modal = open;

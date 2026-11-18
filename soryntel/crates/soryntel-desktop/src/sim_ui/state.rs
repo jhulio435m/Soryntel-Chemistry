@@ -327,7 +327,7 @@ impl Default for SimModuleState {
             toolbar_search_text: String::new(),
             dynamic_running: false,
             highlight_calc_order_on_canvas: false,
-            status_banner: "Ready — Empty HSC Sim Workspace (Select preset from File -> Load Demo Project)".to_string(),
+            status_banner: "Ready — Empty Sim Workspace (Select preset from File -> Load Demo Project)".to_string(),
             show_streams_src_dest: false,
             src_dest_stream_id: None,
             src_dest_draft_src: None,

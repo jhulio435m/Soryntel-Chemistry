@@ -7,7 +7,7 @@
 //!    Review SD variance plots, `Balance Convergence` + `Parity Chart`, and `Reporting -> Charts`.
 //! 4. `Properties` — right inspector for unit/stream/variable/selected-cell & algorithm summary.
 
-use eframe::egui::{self, Align2, Color32, FontId, Pos2, Rect, RichText, Rounding, Stroke, Vec2};
+use eframe::egui::{self, Align2, Color32, FontId, Pos2, Rect, RichText, CornerRadius, Stroke, Vec2};
 use egui_plot::{HLine, Legend, Line, Plot, PlotPoints, Points};
 use serde::{Deserialize, Serialize};
 use soryntel_application::use_cases::SimulationUseCases;
@@ -363,10 +363,20 @@ impl MassBalanceWindowState {
         self.text_modal_buf = content;
     }
 
-    fn export_xlsx_to_tmp(&mut self) {
+    fn export_xlsx_dialog(&mut self) {
         match SimulationUseCases::mb_export_xlsx(&self.workbook) {
             Ok(bytes) => {
-                let path = "/tmp/soryntel_mass_balance_results.xlsx";
+                let Some(chosen) = crate::storage::choose_file(
+                    true,
+                    "Exportar resultados de Mass Balance",
+                    "xlsx",
+                    "mass_balance_results.xlsx",
+                    None,
+                ) else {
+                    return;
+                };
+                let path = chosen.to_string_lossy().into_owned();
+                let path = path.as_str();
                 match crate::storage::write_atomic(path, &bytes) {
                     Ok(_) => {
                         self.status_banner = format!(
@@ -391,14 +401,15 @@ impl MassBalanceWindowState {
 // ---------------------------------------------------------------------------
 
 pub fn render_standalone_mb_module(
-    ctx: &egui::Context,
+    root_ui: &mut egui::Ui,
     project: &mut SimProject,
     state: &mut MassBalanceWindowState,
 ) {
-    egui::TopBottomPanel::top("standalone_mb_top_strip").show(ctx, |ui| {
+        let ctx = &root_ui.ctx().clone();
+    egui::Panel::top("standalone_mb_top_strip").show(root_ui, |ui| {
         ui.horizontal(|ui| {
             ui.label(
-                RichText::new("Soryntel · Module 20: HSC - Mass Balance (Mas)")
+                RichText::new("Soryntel · Module 20: - Mass Balance (Mas)")
                     .strong()
                     .color(DARK_INK),
             );
@@ -419,7 +430,7 @@ pub fn render_standalone_mb_module(
         });
     });
 
-    egui::CentralPanel::default().show(ctx, |ui| {
+    egui::CentralPanel::default().show(root_ui, |ui| {
         let mut dummy_open = true;
         render_mb_body(ui, ctx, Some(project), &mut dummy_open, state, false);
     });
@@ -432,7 +443,7 @@ pub fn render_mb_floating_window(
     state: &mut MassBalanceWindowState,
 ) {
     egui::Window::new("Mass Balancing")
-        .id(egui::Id::new("hsc_sim_mass_balance_window"))
+        .id(egui::Id::unique("hsc_sim_mass_balance_window"))
         .open(open)
         .default_size([1280.0, 760.0])
         .min_size([920.0, 560.0])
@@ -443,17 +454,17 @@ pub fn render_mb_floating_window(
             render_mb_body(ui, ctx, Some(project), &mut keep_open, state, true);
             if !keep_open {
                 ui.ctx().memory_mut(|m| {
-                    m.data.insert_temp(egui::Id::new("mb_close_req"), true);
+                    m.data.insert_temp(egui::Id::unique("mb_close_req"), true);
                 });
             }
         });
     let close_req = ctx.memory_mut(|m| {
         let v = m
             .data
-            .get_temp::<bool>(egui::Id::new("mb_close_req"))
+            .get_temp::<bool>(egui::Id::unique("mb_close_req"))
             .unwrap_or(false);
         if v {
-            m.data.insert_temp(egui::Id::new("mb_close_req"), false);
+            m.data.insert_temp(egui::Id::unique("mb_close_req"), false);
         }
         v
     });
@@ -491,10 +502,10 @@ fn render_mb_body(
             let center_w = (ui.available_width() - props_w - 6.0).max(300.0);
 
             // Zone 3: Central Working Area
-            egui::Frame::none()
+            egui::Frame::NONE
                 .fill(Color32::WHITE)
                 .stroke(Stroke::new(1.0, RIBBON_BORDER))
-                .rounding(2.0)
+                .corner_radius(2)
                 .show(ui, |ui| {
                     ui.set_width(center_w);
                     ui.set_height(body_h);
@@ -509,10 +520,10 @@ fn render_mb_body(
     );
 
     // Bottom status bar
-    egui::Frame::none()
+    egui::Frame::NONE
         .fill(RIBBON_BG)
         .stroke(Stroke::new(1.0, RIBBON_BORDER))
-        .inner_margin(egui::Margin::symmetric(8.0, 3.0))
+        .inner_margin(egui::Margin::symmetric(8, 3))
         .show(ui, |ui| {
             ui.horizontal(|ui| {
                 ui.label(RichText::new(crate::i18n::text("common.101")).strong().size(11.0));
@@ -543,11 +554,11 @@ fn render_mb_body(
 // ---------------------------------------------------------------------------
 
 fn ribbon_group(ui: &mut egui::Ui, label: &str, add_contents: impl FnOnce(&mut egui::Ui)) {
-    egui::Frame::none()
+    egui::Frame::NONE
         .fill(RIBBON_GROUP_BG)
         .stroke(Stroke::new(1.0, RIBBON_BORDER))
-        .rounding(3.0)
-        .inner_margin(egui::Margin::symmetric(6.0, 3.0))
+        .corner_radius(3)
+        .inner_margin(egui::Margin::symmetric(6, 3))
         .show(ui, |ui| {
             ui.vertical(|ui| {
                 ui.horizontal(|ui| add_contents(ui));
@@ -589,10 +600,10 @@ fn render_upper_ribbon(
     state: &mut MassBalanceWindowState,
     is_floating: bool,
 ) {
-    egui::Frame::none()
+    egui::Frame::NONE
         .fill(RIBBON_BG)
         .stroke(Stroke::new(1.0, RIBBON_BORDER))
-        .inner_margin(egui::Margin::symmetric(6.0, 4.0))
+        .inner_margin(egui::Margin::symmetric(6, 4))
         .show(ui, |ui| {
             egui::ScrollArea::horizontal()
                 .id_salt("mb_upper_ribbon_scroll")
@@ -612,9 +623,9 @@ fn render_upper_ribbon(
                                         );
                                     } else {
                                         state.status_banner =
-                                            "No parent Flowsheet attached (use inside Sim -> Tools or export .HSCMas)".into();
+                                            "No parent Flowsheet attached (use inside Sim → Tools or export a JSON backup)".into();
                                     }
-                                    ui.close_menu();
+                                    ui.close_kind(egui::UiKind::Menu);
                                 }
                                 if ui.button("Save Recoveries / Properties Info Only").clicked() {
                                     if let Some(proj) = project.as_deref_mut() {
@@ -626,7 +637,7 @@ fn render_upper_ribbon(
                                             "Synced {n} stream recoveries to Flowsheet"
                                         );
                                     }
-                                    ui.close_menu();
+                                    ui.close_kind(egui::UiKind::Menu);
                                 }
                             });
 
@@ -645,44 +656,44 @@ fn render_upper_ribbon(
                             }
 
                             ui.menu_button(RichText::new("Backup ▾").size(10.5), |ui| {
-                                if ui.button("Export Backup (.HSCMas JSON)").clicked() {
+                                if ui.button("Export Backup (JSON)").clicked() {
                                     let json = serde_json::to_string_pretty(&state.workbook)
                                         .unwrap_or_else(|e| format!("Serialize error: {e}"));
                                     state.open_text_modal(
                                         TextModalKind::BackupJson,
-                                        "Mass Balance Backup (.HSCMas JSON)",
+                                        "Mass Balance Backup (JSON)",
                                         json,
                                     );
-                                    ui.close_menu();
+                                    ui.close_kind(egui::UiKind::Menu);
                                 }
-                                if ui.button("Restore from .HSCMas JSON...").clicked() {
+                                if ui.button("Restore from JSON...").clicked() {
                                     state.open_text_modal(
                                         TextModalKind::BackupJson,
-                                        "Restore .HSCMas JSON Backup",
+                                        "Restore JSON Backup",
                                         String::new(),
                                     );
-                                    ui.close_menu();
+                                    ui.close_kind(egui::UiKind::Menu);
                                 }
                                 ui.separator();
                                 if ui.button("Load Benchmark: Rougher Flotation").clicked() {
                                     let (_, next) = MassBalanceWindowState::with_preset_rougher();
                                     *state = next;
-                                    ui.close_menu();
+                                    ui.close_kind(egui::UiKind::Menu);
                                 }
                                 if ui.button("Load Benchmark: Grinding Survey").clicked() {
                                     let (_, next) = MassBalanceWindowState::with_preset_grinding();
                                     *state = next;
-                                    ui.close_menu();
+                                    ui.close_kind(egui::UiKind::Menu);
                                 }
                             });
 
-                            if rbtn(ui, "Import\nHSC7 Data", false).clicked() {
+                            if rbtn(ui, "Import\nLegacy Data", false).clicked() {
                                 state.show_import_hsc7_modal = true;
                             }
                             if rbtn(ui, "Import\nReX Data", false).clicked() {
                                 state.open_text_modal(
                                     TextModalKind::ImportRex,
-                                    "Import HSC ReX / Tab-Delimited Mineral Assay Data",
+                                    "Import Tab-Delimited Mineral Assay Data",
                                     "Stream\tCcp\tPy\tSp\tQtz\nFeed\t2.93\t73.50\t2.93\t20.66".into(),
                                 );
                             }
@@ -870,7 +881,7 @@ fn render_upper_ribbon(
                                                 "Copied Measurement Table (TSV)",
                                                 txt,
                                             );
-                                            ui.close_menu();
+                                            ui.close_kind(egui::UiKind::Menu);
                                         }
                                         if ui.button("Copy Empty Template").clicked() {
                                             let mut out = String::from("Stream");
@@ -892,7 +903,7 @@ fn render_upper_ribbon(
                                                 "Measurement Template (TSV)",
                                                 out,
                                             );
-                                            ui.close_menu();
+                                            ui.close_kind(egui::UiKind::Menu);
                                         }
                                     });
                                     if rbtn(ui, "Paste\nExp. Data", false).clicked() {
@@ -920,7 +931,7 @@ fn render_upper_ribbon(
 
                                 ribbon_group(ui, "Data Tools", |ui| {
                                     if rbtn(ui, "Element to\nMineral...", false)
-                                        .on_hover_text("Convert elemental assays (A) to minerals (M) via HSC Geo NNLS")
+                                        .on_hover_text("Convert elemental assays (A) to minerals (M) via non-negative least squares")
                                         .clicked()
                                     {
                                         match state.workbook.convert_elements_to_minerals(false) {
@@ -1144,7 +1155,7 @@ fn render_upper_ribbon(
                                                         .clicked()
                                                     {
                                                         ds.method = m;
-                                                        ui.close_menu();
+                                                        ui.close_kind(egui::UiKind::Menu);
                                                     }
                                                 }
                                             },
@@ -1175,7 +1186,7 @@ fn render_upper_ribbon(
                                                         .clicked()
                                                     {
                                                         ds.sizing = sz;
-                                                        ui.close_menu();
+                                                        ui.close_kind(egui::UiKind::Menu);
                                                     }
                                                 }
                                             },
@@ -1201,7 +1212,7 @@ fn render_upper_ribbon(
                                                         .clicked()
                                                     {
                                                         ds.balance_type = bt;
-                                                        ui.close_menu();
+                                                        ui.close_kind(egui::UiKind::Menu);
                                                     }
                                                 }
                                             },
@@ -1244,7 +1255,7 @@ fn render_upper_ribbon(
                                                 "Batch Run: {ok_cnt}/{} dataset(s) solved",
                                                 res.len()
                                             );
-                                            ui.close_menu();
+                                            ui.close_kind(egui::UiKind::Menu);
                                         }
                                     });
                                 });
@@ -1287,7 +1298,7 @@ fn render_upper_ribbon(
                                                 "Stream Summary (TSV)",
                                                 tsv,
                                             );
-                                            ui.close_menu();
+                                            ui.close_kind(egui::UiKind::Menu);
                                         }
                                     });
                                     ui.menu_button(
@@ -1306,7 +1317,7 @@ fn render_upper_ribbon(
                                             if ui.button("Recalculate SG & m3/h").clicked() {
                                                 state.run_calculate_active();
                                                 state.results_tab = ResultsTab::PhysicalProperties;
-                                                ui.close_menu();
+                                                ui.close_kind(egui::UiKind::Menu);
                                             }
                                         },
                                     );
@@ -1328,7 +1339,7 @@ fn render_upper_ribbon(
                                                 .clicked()
                                             {
                                                 state.results_filter_mode = 0;
-                                                ui.close_menu();
+                                                ui.close_kind(egui::UiKind::Menu);
                                             }
                                             if ui
                                                 .selectable_label(
@@ -1338,12 +1349,12 @@ fn render_upper_ribbon(
                                                 .clicked()
                                             {
                                                 state.results_filter_mode = 1;
-                                                ui.close_menu();
+                                                ui.close_kind(egui::UiKind::Menu);
                                             }
                                         },
                                     );
                                     if rbtn(ui, "Export to\nExcel (.xlsx)", false).clicked() {
-                                        state.export_xlsx_to_tmp();
+                                        state.export_xlsx_dialog();
                                     }
                                     if rbtn(ui, "Save Stream\nAs...", false).clicked() {
                                         let tsv = state.workbook.export_summary_tsv();
@@ -1397,7 +1408,7 @@ fn render_upper_ribbon(
                                                     show_stream_composition: false,
                                                     selected_var_ids: Vec::new(),
                                                 });
-                                                ui.close_menu();
+                                                ui.close_kind(egui::UiKind::Menu);
                                             }
                                             if ui.button("2. Stream Composition (100% Stacked)")
                                                 .clicked()
@@ -1408,7 +1419,7 @@ fn render_upper_ribbon(
                                                     show_stream_composition: true,
                                                     selected_var_ids: Vec::new(),
                                                 });
-                                                ui.close_menu();
+                                                ui.close_kind(egui::UiKind::Menu);
                                             }
                                         },
                                     );
@@ -1499,7 +1510,7 @@ fn nav_accordion(
 
 fn render_left_navigator(ui: &mut egui::Ui, state: &mut MassBalanceWindowState, body_h: f32) {
     if !state.nav_open {
-        egui::Frame::none()
+        egui::Frame::NONE
             .fill(NAV_BG)
             .stroke(Stroke::new(1.0, RIBBON_BORDER))
             .show(ui, |ui| {
@@ -1521,10 +1532,10 @@ fn render_left_navigator(ui: &mut egui::Ui, state: &mut MassBalanceWindowState, 
     let sf_tot = state.workbook.size_fractions.len();
     let ds_tot = state.workbook.datasets.len();
 
-    egui::Frame::none()
+    egui::Frame::NONE
         .fill(NAV_BG)
         .stroke(Stroke::new(1.0, RIBBON_BORDER))
-        .rounding(2.0)
+        .corner_radius(2)
         .show(ui, |ui| {
             ui.set_width(220.0);
             ui.set_height(body_h);
@@ -1614,10 +1625,10 @@ fn render_left_navigator(ui: &mut egui::Ui, state: &mut MassBalanceWindowState, 
 
 fn render_working_area(ui: &mut egui::Ui, state: &mut MassBalanceWindowState, body_h: f32) {
     // Top breadcrumb & active Size Fraction / Data Set strip
-    egui::Frame::none()
+    egui::Frame::NONE
         .fill(HDR_GRAY_BG)
         .stroke(Stroke::new(1.0, RIBBON_BORDER))
-        .inner_margin(egui::Margin::symmetric(8.0, 4.0))
+        .inner_margin(egui::Margin::symmetric(8, 4))
         .show(ui, |ui| {
             ui.horizontal(|ui| {
                 ui.label(RichText::new(state.active_page.title()).strong().size(12.0));
@@ -1683,10 +1694,10 @@ fn render_working_area(ui: &mut egui::Ui, state: &mut MassBalanceWindowState, bo
 
 fn cell_hdr(ui: &mut egui::Ui, label: &str, w: f32) {
     ui.allocate_ui(Vec2::new(w, 22.0), |ui| {
-        egui::Frame::none()
+        egui::Frame::NONE
             .fill(HDR_GRAY_BG)
             .stroke(Stroke::new(0.5, GRID_LINE))
-            .inner_margin(egui::Margin::symmetric(5.0, 3.0))
+            .inner_margin(egui::Margin::symmetric(5, 3))
             .show(ui, |ui| {
                 ui.set_min_width(w - 10.0);
                 ui.label(RichText::new(label).strong().size(11.0).color(DARK_INK));
@@ -1820,7 +1831,7 @@ fn render_streams_page(ui: &mut egui::Ui, state: &mut MassBalanceWindowState, h:
                             .find(|x| x.0 == eq.source_stream_id)
                             .map(|x| x.1.as_str())
                             .unwrap_or("?");
-                        egui::Frame::none().fill(GREEN_EQ_BG).show(ui, |ui| {
+                        egui::Frame::NONE.fill(GREEN_EQ_BG).show(ui, |ui| {
                             ui.label(
                                 RichText::new(format!("{} * {}", eq.factor, src_name))
                                     .size(10.5)
@@ -2106,7 +2117,7 @@ fn render_measurement_data_page(ui: &mut egui::Ui, state: &mut MassBalanceWindow
                             Color32::WHITE
                         };
 
-                        let resp = egui::Frame::none().fill(bg_col).show(ui, |ui| {
+                        let resp = egui::Frame::NONE.fill(bg_col).show(ui, |ui| {
                             let te = egui::TextEdit::singleline(&mut val_str)
                                 .desired_width(74.0)
                                 .text_color(text_col)
@@ -2125,7 +2136,7 @@ fn render_measurement_data_page(ui: &mut egui::Ui, state: &mut MassBalanceWindow
                                 if let Some(map) = target_map {
                                     if val_str.trim().is_empty() {
                                         map.remove(&k);
-                                    } else if let Ok(vnum) = val_str.trim().replace(',', ".").parse::<f64>() {
+                                    } else if let Ok(vnum) = crate::ui_common::parse_user_number(&val_str) {
                                         map.insert(k, vnum);
                                         ds.estimated_cells.remove(&k);
                                     }
@@ -2299,10 +2310,10 @@ fn render_data_status_page(ui: &mut egui::Ui, state: &mut MassBalanceWindowState
 }
 
 fn render_pie_chart_card(ui: &mut egui::Ui, title: &str, slices: &[(&str, usize, Color32)]) {
-    egui::Frame::none()
+    egui::Frame::NONE
         .fill(ALT_ROW_BG)
         .stroke(Stroke::new(1.0, RIBBON_BORDER))
-        .inner_margin(egui::Margin::same(8.0))
+        .inner_margin(egui::Margin::same(8))
         .show(ui, |ui| {
             ui.label(RichText::new(title).strong().size(12.0));
             ui.horizontal(|ui| {
@@ -2348,7 +2359,7 @@ fn render_pie_chart_card(ui: &mut egui::Ui, title: &str, slices: &[(&str, usize,
                         };
                         ui.horizontal(|ui| {
                             let (sq, _) = ui.allocate_exact_size(Vec2::new(10.0, 10.0), egui::Sense::hover());
-                            ui.painter().rect_filled(sq, Rounding::same(2.0), color);
+                            ui.painter().rect_filled(sq, CornerRadius::same(2), color);
                             ui.label(RichText::new(format!("{label}: {cnt} ({pct:.0}%)")).size(10.5));
                         });
                     }
@@ -2495,7 +2506,7 @@ fn render_edit_sd_page(ui: &mut egui::Ui, state: &mut MassBalanceWindowState, h:
                             if let Some(ds) = state.workbook.datasets.get_mut(ds_idx) {
                                 if edit_str.trim().is_empty() {
                                     ds.sd_override.remove(&k);
-                                } else if let Ok(vnum) = edit_str.trim().replace(',', ".").parse::<f64>() {
+                                } else if let Ok(vnum) = crate::ui_common::parse_user_number(&edit_str) {
                                     ds.sd_override.insert(k, vnum.max(1e-6));
                                 }
                             }
@@ -2645,7 +2656,7 @@ fn render_balance_data_grid(
                             );
                             let painter = ui.painter();
                             if fill != Color32::TRANSPARENT {
-                                painter.rect_filled(rect, Rounding::ZERO, fill);
+                                painter.rect_filled(rect, CornerRadius::ZERO, fill);
                             }
                             if ds.show_data_bars {
                                 if let Some(rec) = rec_opt {
@@ -2657,13 +2668,14 @@ fn render_balance_data_grid(
                                     );
                                     painter.rect_filled(
                                         bar_rect,
-                                        Rounding::same(1.0),
+                                        CornerRadius::same(1),
                                         Color32::from_rgba_unmultiplied(96, 165, 250, 90),
                                     );
                                     painter.rect_stroke(
                                         bar_rect,
-                                        Rounding::same(1.0),
+                                        CornerRadius::same(1),
                                         Stroke::new(0.6, BAR_FILL),
+                                        egui::StrokeKind::Middle,
                                     );
                                 }
                             }
@@ -2809,7 +2821,7 @@ fn render_balance_details_grid(
                         } else {
                             Color32::TRANSPARENT
                         };
-                        egui::Frame::none().fill(bg).show(ui, |ui| {
+                        egui::Frame::NONE.fill(bg).show(ui, |ui| {
                             ui.label(
                                 c.rel_diff_pct
                                     .map(|x| format!("{x:.2}%"))
@@ -2955,20 +2967,18 @@ fn render_convergence_plot(
         .y_axis_label("log10(Iterated Tolerance)")
         .show(ui, |plot_ui| {
             plot_ui.hline(
-                HLine::new(tol_val.log10())
-                    .name("Tolerance")
+                HLine::new("Tolerance", tol_val.log10())
                     .color(Color32::from_rgb(220, 38, 38))
                     .style(egui_plot::LineStyle::dashed_dense()),
             );
             if !pts.is_empty() {
                 plot_ui.line(
-                    Line::new(PlotPoints::from(pts.clone()))
-                        .name("Step Δ")
+                    Line::new("Step Δ", PlotPoints::from(pts.clone()))
                         .color(Color32::from_rgb(37, 99, 235))
                         .width(2.0),
                 );
                 plot_ui.points(
-                    Points::new(PlotPoints::from(pts))
+                    Points::new("", PlotPoints::from(pts)).id("iteration_points")
                         .color(Color32::from_rgb(37, 99, 235))
                         .radius(3.5),
                 );
@@ -3018,14 +3028,12 @@ fn render_parity_plot(
         .show(ui, |plot_ui| {
             if !pts.is_empty() && min_v.is_finite() && max_v.is_finite() {
                 plot_ui.line(
-                    Line::new(PlotPoints::from(vec![[min_v, min_v], [max_v, max_v]]))
-                        .name("1:1 Parity")
+                    Line::new("1:1 Parity", PlotPoints::from(vec![[min_v, min_v], [max_v, max_v]]))
                         .color(Color32::from_rgb(100, 116, 139))
                         .style(egui_plot::LineStyle::dashed_dense()),
                 );
                 plot_ui.points(
-                    Points::new(PlotPoints::from(pts))
-                        .name("Cells")
+                    Points::new("Cells", PlotPoints::from(pts))
                         .color(Color32::from_rgb(22, 163, 74))
                         .radius(3.8),
                 );
@@ -3210,10 +3218,10 @@ fn render_reporting_charts_page(
 
     egui::ScrollArea::vertical().max_height(h).show(ui, |ui| {
         if state.show_chart_props_panel {
-            egui::Frame::none()
+            egui::Frame::NONE
                 .fill(ALT_ROW_BG)
                 .stroke(Stroke::new(1.0, RIBBON_BORDER))
-                .inner_margin(egui::Margin::same(6.0))
+                .inner_margin(egui::Margin::same(6))
                 .show(ui, |ui| {
                     ui.label(RichText::new("Chart Panel Properties").strong());
                     for (pi, panel) in state.workbook.chart_panels.iter_mut().enumerate() {
@@ -3229,10 +3237,10 @@ fn render_reporting_charts_page(
         }
 
         for (pi, panel) in state.workbook.chart_panels.iter().enumerate() {
-            egui::Frame::none()
+            egui::Frame::NONE
                 .fill(Color32::WHITE)
                 .stroke(Stroke::new(1.0, RIBBON_BORDER))
-                .inner_margin(egui::Margin::same(8.0))
+                .inner_margin(egui::Margin::same(8))
                 .show(ui, |ui| {
                     ui.label(RichText::new(format!("Panel {}: {}", pi + 1, panel.title)).strong());
                     if panel.show_total_solids {
@@ -3285,7 +3293,7 @@ fn render_solids_bar_chart(
         Pos2::new(rect.left() + 45.0, rect.top() + 12.0),
         Pos2::new(rect.right() - 12.0, rect.bottom() - 28.0),
     );
-    painter.rect_stroke(plot_rect, Rounding::ZERO, Stroke::new(1.0, GRID_LINE));
+    painter.rect_stroke(plot_rect, CornerRadius::ZERO, Stroke::new(1.0, GRID_LINE), egui::StrokeKind::Middle);
 
     let n = pairs.len().max(1);
     let slot_w = plot_rect.width() / n as f32;
@@ -3298,7 +3306,7 @@ fn render_solids_bar_chart(
             Pos2::new(cx - bar_w * 0.5, plot_rect.bottom() - bh),
             Pos2::new(cx + bar_w * 0.5, plot_rect.bottom()),
         );
-        painter.rect_filled(r, Rounding::same(2.0), CHART_PALETTE[0]);
+        painter.rect_filled(r, CornerRadius::same(2), CHART_PALETTE[0]);
         painter.text(
             Pos2::new(cx, r.top() - 7.0),
             Align2::CENTER_CENTER,
@@ -3341,7 +3349,7 @@ fn render_stacked_comp_chart(
         for (i, v) in assays.iter().enumerate() {
             let col = CHART_PALETTE[i % CHART_PALETTE.len()];
             let (sq, _) = ui.allocate_exact_size(Vec2::new(10.0, 10.0), egui::Sense::hover());
-            ui.painter().rect_filled(sq, Rounding::same(2.0), col);
+            ui.painter().rect_filled(sq, CornerRadius::same(2), col);
             ui.label(RichText::new(&v.name).size(10.5));
         }
     });
@@ -3382,7 +3390,7 @@ fn render_stacked_comp_chart(
             let seg_w = bar_w * (v / tot) as f32;
             if seg_w > 0.5 {
                 let seg_r = Rect::from_min_size(Pos2::new(x_acc, y + 2.0), Vec2::new(seg_w, 16.0));
-                painter.rect_filled(seg_r, Rounding::ZERO, CHART_PALETTE[vi % CHART_PALETTE.len()]);
+                painter.rect_filled(seg_r, CornerRadius::ZERO, CHART_PALETTE[vi % CHART_PALETTE.len()]);
                 if seg_w > 26.0 {
                     painter.text(
                         seg_r.center(),
@@ -3414,7 +3422,7 @@ fn prop_row(ui: &mut egui::Ui, label: &str, value: &str, blue: bool) {
 
 fn render_properties_panel(ui: &mut egui::Ui, state: &mut MassBalanceWindowState, body_h: f32) {
     if !state.props_open {
-        egui::Frame::none()
+        egui::Frame::NONE
             .fill(NAV_BG)
             .stroke(Stroke::new(1.0, RIBBON_BORDER))
             .show(ui, |ui| {
@@ -3428,10 +3436,10 @@ fn render_properties_panel(ui: &mut egui::Ui, state: &mut MassBalanceWindowState
     }
 
     let ds_idx = state.workbook.active_dataset;
-    egui::Frame::none()
+    egui::Frame::NONE
         .fill(NAV_BG)
         .stroke(Stroke::new(1.0, RIBBON_BORDER))
-        .rounding(2.0)
+        .corner_radius(2)
         .show(ui, |ui| {
             ui.set_width(276.0);
             ui.set_height(body_h);
@@ -3854,11 +3862,11 @@ fn render_mb_modals(ctx: &egui::Context, state: &mut MassBalanceWindowState) {
     if state.show_import_hsc7_modal {
         let mut open = state.show_import_hsc7_modal;
         let mut close_now = false;
-        egui::Window::new("Import HSC7 Mass Balance Data")
+        egui::Window::new("Import Legacy Mass Balance Data")
             .open(&mut open)
             .default_width(580.0)
             .show(ctx, |ui| {
-                ui.label("Paste HSC7 'Flowsheet' incidence matrix (+1/-1/0, optional) and 'Analyses.xls' data:");
+                ui.label("Paste 'Flowsheet' incidence matrix (+1/-1/0, optional) and 'Analyses.xls' data:");
                 ui.checkbox(&mut state.import_hsc7_horizontal, "Horizontal Layout (streams in rows)");
                 ui.label(RichText::new("Flowsheet Matrix (optional):").strong());
                 ui.add(
@@ -3874,7 +3882,7 @@ fn render_mb_modals(ctx: &egui::Context, state: &mut MassBalanceWindowState) {
                         .desired_width(540.0)
                         .code_editor(),
                 );
-                if ui.button("Import & Parse HSC7 Data").clicked() {
+                if ui.button("Import & Parse Legacy Data").clicked() {
                     let fs_opt = if state.import_hsc7_flowsheet_buf.trim().is_empty() {
                         None
                     } else {
@@ -3890,11 +3898,11 @@ fn render_mb_modals(ctx: &egui::Context, state: &mut MassBalanceWindowState) {
                             state.selected_unit_id = state.workbook.units.first().map(|u| u.id);
                             state.selected_stream_id = state.workbook.streams.first().map(|s| s.id);
                             state.selected_var_id = state.workbook.variables.first().map(|v| v.id);
-                            state.status_banner = format!("Imported {n} HSC7 measurement cell(s)");
+                            state.status_banner = format!("Imported {n} legacy measurement cell(s)");
                             close_now = true;
                         }
                         Err(e) => {
-                            state.status_banner = format!("HSC7 import failed: {e}");
+                            state.status_banner = format!("Legacy import failed: {e}");
                         }
                     }
                 }
@@ -3979,7 +3987,7 @@ fn render_mb_modals(ctx: &egui::Context, state: &mut MassBalanceWindowState) {
     // 6. Mineral Matrix Viewer (`MINERALS_RAW` from HSC Geo catalog)
     if state.show_mineral_matrix_modal {
         let mut open = state.show_mineral_matrix_modal;
-        egui::Window::new("View Mineral Matrix (HSC Geo Catalog)")
+        egui::Window::new("View Mineral Matrix (mineral catalog)")
             .open(&mut open)
             .default_width(540.0)
             .show(ctx, |ui| {
@@ -4156,11 +4164,11 @@ fn render_mb_modals(ctx: &egui::Context, state: &mut MassBalanceWindowState) {
                                 match serde_json::from_str::<MassBalanceWorkbook>(&state.text_modal_buf) {
                                     Ok(wb) => {
                                         state.workbook = wb;
-                                        state.status_banner = "Restored .HSCMas JSON backup".into();
+                                        state.status_banner = "Restored JSON backup".into();
                                         state.show_text_modal = None;
                                     }
                                     Err(e) => {
-                                        state.status_banner = format!("Invalid .HSCMas JSON: {e}");
+                                        state.status_banner = format!("Invalid JSON: {e}");
                                     }
                                 }
                             }
@@ -4181,7 +4189,7 @@ fn render_mb_modals(ctx: &egui::Context, state: &mut MassBalanceWindowState) {
     // 10. Chapter 51 Help Modal
     if state.show_help_modal {
         let mut open = state.show_help_modal;
-        egui::Window::new("HSC Mass Balance · Chapter 51 Reference")
+        egui::Window::new("Mass Balance Help")
             .open(&mut open)
             .default_width(470.0)
             .show(ctx, |ui| {
@@ -4257,7 +4265,7 @@ fn paste_sd_tsv(wb: &mut MassBalanceWorkbook, text: &str, frac_idx: usize) -> us
         for (ci, c) in r.iter().enumerate().skip(1) {
             if let (Some(vid), Ok(val)) = (
                 col_vids.get(ci).copied().flatten(),
-                c.replace(',', ".").parse::<f64>(),
+                crate::ui_common::parse_user_number(c),
             ) {
                 ds.sd_override.insert(
                     CellKey {

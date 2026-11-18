@@ -28,6 +28,7 @@ fn tb_icon_btn(ui: &mut egui::Ui, glyph: &str, active: bool, tip: &str) -> egui:
             rect,
             2.0,
             Stroke::new(0.8, if active { SIM_ACCENT_BLUE } else { SIM_BORDER }),
+            egui::StrokeKind::Middle,
         );
     }
     icons::draw_toolbar_glyph(ui.painter(), rect, glyph, active);
@@ -45,7 +46,8 @@ fn tb_text_btn(ui: &mut egui::Ui, label: &str, active: bool, tip: &str) -> egui:
 }
 
 impl SimModuleState {
-    pub fn ui(&mut self, ctx: &egui::Context) {
+    pub fn ui(&mut self, root_ui: &mut egui::Ui) {
+        let ctx = &root_ui.ctx().clone();
         self.handle_shortcuts(ctx);
         if self.dynamic_running && self.project.lock_state != LockState::EntireProcessLocked {
             SimulationUseCases::sim_step_dynamic(&mut self.project, 1);
@@ -53,9 +55,9 @@ impl SimModuleState {
         }
 
         // 1. Top Menu Bar & 15 Top Toolbars
-        egui::TopBottomPanel::top("sim_top_panel")
-            .frame(egui::Frame::none().fill(SIM_WIN_BG))
-            .show(ctx, |ui| {
+        egui::Panel::top("sim_top_panel")
+            .frame(egui::Frame::NONE.fill(SIM_WIN_BG))
+            .show(root_ui, |ui| {
                 self.render_menu_bar(ui);
                 if self.show_top_toolbars {
                     self.render_top_toolbars(ui);
@@ -63,49 +65,49 @@ impl SimModuleState {
             });
 
         // 2. Bottom Status Bar (Zoom, Auto Backup, Auto Route, Orthogonal, Persist Tool, Snap to Grid, Coords)
-        egui::TopBottomPanel::bottom("sim_status_panel")
+        egui::Panel::bottom("sim_status_panel")
             .frame(
-                egui::Frame::none()
+                egui::Frame::NONE
                     .fill(SIM_WIN_BG)
                     .stroke(Stroke::new(1.0, SIM_BORDER))
-                    .inner_margin(egui::Margin::symmetric(6.0, 3.0)),
+                    .inner_margin(egui::Margin::symmetric(6, 3)),
             )
-            .show(ctx, |ui| {
+            .show(root_ui, |ui| {
                 self.render_status_bar(ui);
             });
 
         // 3. Left Vertical Toolbar (12 toggleable groups; hides drawing tools when Drawing Locked - Fig. 58!)
         if self.show_left_toolbars {
-            egui::SidePanel::left("sim_left_toolbar")
+            egui::Panel::left("sim_left_toolbar")
                 .resizable(false)
-                .exact_width(30.0)
+                .exact_size(30.0)
                 .frame(
-                    egui::Frame::none()
+                    egui::Frame::NONE
                         .fill(SIM_TOOLBAR_BG)
                         .stroke(Stroke::new(0.8, SIM_BORDER))
                         .inner_margin(2.0),
                 )
-                .show(ctx, |ui| {
+                .show(root_ui, |ui| {
                     self.render_left_toolbar(ui);
                 });
         }
 
         // 4. Right Docking Area (`Properties` / `Inspector` + `Icons`..`Log`)
         if self.show_right_top_dock || self.show_right_bottom_dock {
-            egui::SidePanel::right("sim_right_docks")
+            egui::Panel::right("sim_right_docks")
                 .resizable(true)
-                .default_width(370.0)
-                .min_width(250.0)
-                .frame(egui::Frame::none().fill(SIM_WIN_BG).inner_margin(3.0))
-                .show(ctx, |ui| {
+                .default_size(370.0)
+                .min_size(250.0)
+                .frame(egui::Frame::NONE.fill(SIM_WIN_BG).inner_margin(3.0))
+                .show(root_ui, |ui| {
                     docks::render_right_docks(ui, self);
                 });
         }
 
         // 5. Center Flowsheet Canvas + Bottom Page Navigation Tabs (`Page1 | Page2 | Page3 | +`)
         egui::CentralPanel::default()
-            .frame(egui::Frame::none().fill(Color32::WHITE))
-            .show(ctx, |ui| {
+            .frame(egui::Frame::NONE.fill(Color32::WHITE))
+            .show(root_ui, |ui| {
                 let page_bar_h = 24.0;
                 let total = ui.available_rect_before_wrap();
                 let canvas_area = egui::Rect::from_min_max(
@@ -124,7 +126,7 @@ impl SimModuleState {
     }
 
     fn handle_shortcuts(&mut self, ctx: &egui::Context) {
-        if ctx.wants_keyboard_input() {
+        if ctx.egui_wants_keyboard_input() {
             return;
         }
         ctx.input(|i| {
@@ -145,17 +147,17 @@ impl SimModuleState {
     }
 
     fn render_menu_bar(&mut self, ui: &mut egui::Ui) {
-        egui::menu::bar(ui, |ui| {
+        egui::MenuBar::new().ui(ui, |ui| {
             ui.menu_button(crate::i18n::text("common.001"), |ui| {
                 if ui.button(crate::i18n::text("review.190")).clicked() {
                     self.load_preset("Empty Flowsheet", SimulationUseCases::empty_project());
-                    ui.close_menu();
+                    ui.close_kind(egui::UiKind::Menu);
                 }
                 ui.menu_button("Open Reference Project...", |ui| {
                     for (label, proj) in SimulationUseCases::sim_presets() {
                         if ui.button(label).clicked() {
                             self.load_preset(label, proj);
-                            ui.close_menu();
+                            ui.close_kind(egui::UiKind::Menu);
                         }
                     }
                 });
@@ -164,26 +166,26 @@ impl SimModuleState {
                     self.export_kind = ExportModalKind::LoadProjectJson;
                     self.export_buffer.clear();
                     self.show_export_modal = true;
-                    ui.close_menu();
+                    ui.close_kind(egui::UiKind::Menu);
                 }
                 if ui.button("Save Project (.simjson)...").clicked() {
                     self.export_kind = ExportModalKind::ProjectJson;
                     self.export_buffer = serde_json::to_string_pretty(&self.project).unwrap_or_default();
                     self.show_export_modal = true;
-                    ui.close_menu();
+                    ui.close_kind(egui::UiKind::Menu);
                 }
                 if ui.button("Save as LCA JSON...").clicked() {
                     self.export_kind = ExportModalKind::LcaJson;
                     self.export_buffer = SimulationUseCases::sim_export_lca_json(&self.project)
                         .unwrap_or_else(|e| format!("Error: {e}"));
                     self.show_export_modal = true;
-                    ui.close_menu();
+                    ui.close_kind(egui::UiKind::Menu);
                 }
                 if ui.button("Export Flowsheet Image (.svg)...").clicked() {
                     self.export_kind = ExportModalKind::FlowsheetSvg;
                     self.export_buffer = SimulationUseCases::sim_export_svg(&self.project);
                     self.show_export_modal = true;
-                    ui.close_menu();
+                    ui.close_kind(egui::UiKind::Menu);
                 }
             });
 
@@ -219,162 +221,162 @@ impl SimModuleState {
                 if ui.button("Zoom 100%").clicked() {
                     self.zoom_pct = 100.0;
                     self.pan_mm = [-12.0, -4.0];
-                    ui.close_menu();
+                    ui.close_kind(egui::UiKind::Menu);
                 }
             });
 
             ui.menu_button("Select", |ui| {
                 if ui.button("Select All Units").clicked() {
                     self.multi_selected_units = self.project.units.iter().map(|u| u.id).collect();
-                    ui.close_menu();
+                    ui.close_kind(egui::UiKind::Menu);
                 }
                 if ui.button("Select All Streams").clicked() {
                     self.multi_selected_streams = self.project.streams.iter().map(|s| s.id).collect();
-                    ui.close_menu();
+                    ui.close_kind(egui::UiKind::Menu);
                 }
                 if ui.button("Clear Selection").clicked() {
                     self.selected = SelectedObject::None;
                     self.multi_selected_units.clear();
                     self.multi_selected_streams.clear();
-                    ui.close_menu();
+                    ui.close_kind(egui::UiKind::Menu);
                 }
             });
 
             ui.menu_button("Flowsheet", |ui| {
                 if ui.button(crate::i18n::text("review.184")).clicked() {
                     self.show_default_settings = true;
-                    ui.close_menu();
+                    ui.close_kind(egui::UiKind::Menu);
                 }
                 if ui.button("Stream Table Editor...").clicked() {
                     self.show_stream_table_editor = true;
-                    ui.close_menu();
+                    ui.close_kind(egui::UiKind::Menu);
                 }
                 ui.separator();
                 if ui.button("Lock Drawing (Green Frame)").clicked() {
                     self.project.lock_state = LockState::DrawingLocked;
                     self.active_tool = ActiveTool::Select;
-                    ui.close_menu();
+                    ui.close_kind(egui::UiKind::Menu);
                 }
                 if ui.button("Lock Entire Process (Red Frame)").clicked() {
                     self.project.lock_state = LockState::EntireProcessLocked;
                     self.dynamic_running = false;
                     self.active_tool = ActiveTool::Select;
-                    ui.close_menu();
+                    ui.close_kind(egui::UiKind::Menu);
                 }
                 if ui.button("Unlock").clicked() {
                     self.project.lock_state = LockState::Unlocked;
-                    ui.close_menu();
+                    ui.close_kind(egui::UiKind::Menu);
                 }
             });
 
             ui.menu_button(crate::i18n::text("common.018"), |ui| {
                 if ui.button("Select Unit Models...").clicked() {
                     self.show_select_unit_models = true;
-                    ui.close_menu();
+                    ui.close_kind(egui::UiKind::Menu);
                 }
                 if ui.button("Unit Editor...").clicked() {
                     if self.editing_unit_id.is_none() {
                         self.editing_unit_id = self.project.units.first().map(|u| u.id);
                     }
                     self.show_unit_editor = true;
-                    ui.close_menu();
+                    ui.close_kind(egui::UiKind::Menu);
                 }
                 if ui.button("Scenario Editor...").clicked() {
                     self.show_scenario_editor = true;
-                    ui.close_menu();
+                    ui.close_kind(egui::UiKind::Menu);
                 }
                 if ui.button("Reports...").clicked() {
                     self.reports_cache = Some(SimulationUseCases::sim_generate_reports(&self.project));
                     self.show_reports_window = true;
-                    ui.close_menu();
+                    ui.close_kind(egui::UiKind::Menu);
                 }
                 if ui.button("Control Monitor...").clicked() {
                     self.open_control_monitor(0);
-                    ui.close_menu();
+                    ui.close_kind(egui::UiKind::Menu);
                 }
                 if ui.button("Visualization Color Picker...").clicked() {
                     self.show_visualization_picker = true;
-                    ui.close_menu();
+                    ui.close_kind(egui::UiKind::Menu);
                 }
                 if ui.button("Process Information...").clicked() {
                     self.show_process_info = true;
-                    ui.close_menu();
+                    ui.close_kind(egui::UiKind::Menu);
                 }
                 if ui.button("Notes...").clicked() {
                     self.show_notes_window = true;
-                    ui.close_menu();
+                    ui.close_kind(egui::UiKind::Menu);
                 }
                 ui.separator();
                 if ui.button("Mass Balancing...").clicked() {
                     self.mb_state.sync_from_project(&self.project);
                     self.show_mb_window = true;
-                    ui.close_menu();
+                    ui.close_kind(egui::UiKind::Menu);
                 }
                 if ui.button("LCA Evaluation...").clicked() {
                     self.lca_state.ui_mode = crate::lca_ui::LcaUiMode::Classic;
                     self.lca_state.sync_from_project(&self.project);
                     self.show_lca_window = true;
-                    ui.close_menu();
+                    ui.close_kind(egui::UiKind::Menu);
                 }
                 if ui.button("LCA Evaluation (beta)...").clicked() {
                     self.lca_state.ui_mode = crate::lca_ui::LcaUiMode::Beta;
                     self.lca_state.sync_from_project(&self.project);
                     self.show_lca_window = true;
-                    ui.close_menu();
+                    ui.close_kind(egui::UiKind::Menu);
                 }
                 ui.separator();
-                if ui.button("HSC Sim 7 -> Sim 10 Model Converter...").clicked() {
+                if ui.button("Conversor de modelos de simulación heredados...").clicked() {
                     self.show_sim7_migrator = true;
-                    ui.close_menu();
+                    ui.close_kind(egui::UiKind::Menu);
                 }
             });
 
             ui.menu_button(crate::i18n::text("common.011"), |ui| {
                 if ui.button("Calculate Active Flowsheet (F5)").clicked() {
                     self.run_static(false);
-                    ui.close_menu();
+                    ui.close_kind(egui::UiKind::Menu);
                 }
                 if ui.button("Calculate Selected Units").clicked() {
                     self.run_static(true);
-                    ui.close_menu();
+                    ui.close_kind(egui::UiKind::Menu);
                 }
                 if ui.button("Run All Active Controls").clicked() {
                     self.run_controls(None);
-                    ui.close_menu();
+                    ui.close_kind(egui::UiKind::Menu);
                 }
                 if ui.button("Clear Internal Streams").clicked() {
                     self.push_undo();
                     SimulationUseCases::sim_clear_internal(&mut self.project);
-                    ui.close_menu();
+                    ui.close_kind(egui::UiKind::Menu);
                 }
                 ui.separator();
                 if ui.button("Start / Pause Dynamic Simulation").clicked() {
                     self.dynamic_running = !self.dynamic_running;
-                    ui.close_menu();
+                    ui.close_kind(egui::UiKind::Menu);
                 }
                 if ui.button("Step Dynamic +10s").clicked() {
                     SimulationUseCases::sim_step_dynamic(&mut self.project, 10);
-                    ui.close_menu();
+                    ui.close_kind(egui::UiKind::Menu);
                 }
                 if ui.button("Empty All Tanks").clicked() {
                     SimulationUseCases::sim_empty_tanks(&mut self.project);
-                    ui.close_menu();
+                    ui.close_kind(egui::UiKind::Menu);
                 }
                 ui.separator();
                 if ui.button("Convergence Monitor...").clicked() {
                     self.show_convergence_monitor = true;
-                    ui.close_menu();
+                    ui.close_kind(egui::UiKind::Menu);
                 }
                 if ui.button("Calculation Order...").clicked() {
                     self.show_calc_order_window = true;
-                    ui.close_menu();
+                    ui.close_kind(egui::UiKind::Menu);
                 }
             });
 
             ui.menu_button("Diagnostics", |ui| {
                 if ui.button("Open Log Tab").clicked() {
                     self.right_bottom_tab = RightBottomTab::Log;
-                    ui.close_menu();
+                    ui.close_kind(egui::UiKind::Menu);
                 }
                 if ui.button("Global Mass & Enthalpy Balance Check").clicked() {
                     let round = SimulationUseCases::sim_global_balances(&self.project);
@@ -382,18 +384,18 @@ impl SimModuleState {
                         "Global Balance Check: MB={:.4}%, EB={:.4}%",
                         round.mb_pct, round.eb_pct
                     );
-                    ui.close_menu();
+                    ui.close_kind(egui::UiKind::Menu);
                 }
             });
 
             ui.menu_button(crate::i18n::text("common.003"), |ui| {
                 if ui.button("Check for Updates...").clicked() {
                     self.show_updates_modal = true;
-                    ui.close_menu();
+                    ui.close_kind(egui::UiKind::Menu);
                 }
-                if ui.button("About HSC Sim...").clicked() {
+                if ui.button("About Sim...").clicked() {
                     self.show_about_modal = true;
-                    ui.close_menu();
+                    ui.close_kind(egui::UiKind::Menu);
                 }
             });
 
@@ -413,10 +415,10 @@ impl SimModuleState {
     }
 
     fn render_top_toolbars(&mut self, ui: &mut egui::Ui) {
-        egui::Frame::none()
+        egui::Frame::NONE
             .fill(SIM_TOOLBAR_BG)
             .stroke(Stroke::new(0.8, SIM_BORDER))
-            .inner_margin(egui::Margin::symmetric(5.0, 2.0))
+            .inner_margin(egui::Margin::symmetric(5, 2))
             .show(ui, |ui| {
                 ui.horizontal_wrapped(|ui| {
                     if self.top_tb.project {
@@ -554,7 +556,7 @@ impl SimModuleState {
                         ui.painter().rect_filled(rect, 2.0, Color32::from_rgb(208, 232, 198));
                         let fill_r = egui::Rect::from_min_size(rect.min, Vec2::new(rect.width() * frac, rect.height()));
                         ui.painter().rect_filled(fill_r, 2.0, Color32::from_rgb(138, 196, 114));
-                        ui.painter().rect_stroke(rect, 2.0, Stroke::new(0.8, SIM_BORDER));
+                        ui.painter().rect_stroke(rect, 2.0, Stroke::new(0.8, SIM_BORDER), egui::StrokeKind::Middle);
                         ui.painter().text(
                             rect.center(),
                             egui::Align2::CENTER_CENTER,
@@ -775,10 +777,10 @@ impl SimModuleState {
     }
 
     fn render_page_tabs(&mut self, ui: &mut egui::Ui) {
-        egui::Frame::none()
+        egui::Frame::NONE
             .fill(SIM_HEADER_BG)
             .stroke(Stroke::new(0.8, SIM_BORDER))
-            .inner_margin(egui::Margin::symmetric(4.0, 2.0))
+            .inner_margin(egui::Margin::symmetric(4, 2))
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
                     if ui.button("|<").clicked() {

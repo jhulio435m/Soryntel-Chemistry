@@ -68,7 +68,7 @@ pub fn render_right_docks(ui: &mut egui::Ui, state: &mut SimModuleState) {
     };
 
     if state.show_right_top_dock {
-        egui::Frame::none()
+        egui::Frame::NONE
             .fill(Color32::WHITE)
             .stroke(Stroke::new(1.0, SIM_BORDER))
             .inner_margin(4.0)
@@ -81,7 +81,7 @@ pub fn render_right_docks(ui: &mut egui::Ui, state: &mut SimModuleState) {
 
     if state.show_right_bottom_dock {
         ui.add_space(3.0);
-        egui::Frame::none()
+        egui::Frame::NONE
             .fill(Color32::WHITE)
             .stroke(Stroke::new(1.0, SIM_BORDER))
             .inner_margin(4.0)
@@ -393,7 +393,7 @@ fn draw_phase_band(
     stream: &SimStream,
     kind: StreamPhaseKind,
 ) {
-    egui::Frame::none()
+    egui::Frame::NONE
         .fill(bg)
         .stroke(Stroke::new(0.8, SIM_BORDER))
         .inner_margin(3.0)
@@ -505,6 +505,7 @@ fn render_icons_tab(ui: &mut egui::Ui, state: &mut SimModuleState) {
                         } else {
                             Stroke::new(0.8, SIM_BORDER)
                         },
+                        egui::StrokeKind::Middle,
                     );
                     draw_equipment_icon(ui.painter(), rect.shrink(3.0), meta.key);
 
@@ -753,7 +754,7 @@ fn render_controls_tab(ui: &mut egui::Ui, state: &mut SimModuleState) {
                 } else {
                     Color32::from_rgb(220, 240, 214) // mint green row (Fig. 62)
                 };
-                egui::Frame::none().fill(pill_bg).inner_margin(2.0).show(ui, |ui| {
+                egui::Frame::NONE.fill(pill_bg).inner_margin(2.0).show(ui, |ui| {
                     if ui.selectable_label(false, &c.control_name).clicked() {
                         open_idx = Some(idx);
                     }

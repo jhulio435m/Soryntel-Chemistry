@@ -9,6 +9,9 @@ import { Gallery } from "@/components/gallery";
 import { downloads, moduleGroups, RELEASES_REPO, SOURCE_REPO, VERSION } from "@/content/site";
 import { cn } from "@/lib/utils";
 
+const catalogVersion = "0.2.0";
+const includesCatalog = VERSION.localeCompare(catalogVersion, "en", { numeric: true }) >= 0;
+
 const wrap = "mx-auto w-[min(100%-2rem,72rem)] md:w-[min(100%-4rem,72rem)]";
 const h2 = "text-balance text-[clamp(1.85rem,3.6vw,2.75rem)] font-semibold leading-[1.08] tracking-[-0.028em]";
 const lede = "mt-4 max-w-[60ch] text-pretty text-[17px] leading-relaxed text-muted-foreground";
@@ -168,7 +171,12 @@ export default function Home() {
                 Instálalo en un minuto.
               </h2>
               <p className="mt-4 text-pretty text-[17px] leading-relaxed text-[oklch(0.95_0.006_160/0.7)]">
-                Un ejecutable nativo escrito en Rust, sin runtimes que instalar. Versión {VERSION} para x86‑64.
+                Soryntel Chemistry para Windows y Linux x86‑64. Versión disponible: {VERSION}.
+              </p>
+              <p className="mt-2 text-pretty text-sm text-[oklch(0.95_0.006_160/0.7)]">
+                {includesCatalog
+                  ? "Los paquetes incluyen SoryntelDB, el catálogo termoquímico de Soryntel Chemistry."
+                  : `SoryntelDB se incluirá en los paquetes de la versión ${catalogVersion} cuando se publiquen.`}
               </p>
             </div>
             <div className="mx-auto mt-12 grid max-w-3xl gap-5 md:grid-cols-2">

@@ -2,13 +2,14 @@
 name = "soryntel-desktop"
 version.workspace = true
 edition.workspace = true
+rust-version = "1.95"
 
 [dependencies]
 soryntel-core = { path = "../soryntel-core" }
 soryntel-application = { path = "../soryntel-application" }
 soryntel-db = { path = "../soryntel-db" }
-eframe = "0.29"
-egui_plot = "0.29"
+eframe = { version = "0.37", default-features = false, features = ["accesskit", "clipboard", "default_fonts", "glow", "links", "system_fonts", "wayland", "x11"] }
+egui_plot = "0.38"
 serde = { workspace = true }
 serde_json = { workspace = true }
 

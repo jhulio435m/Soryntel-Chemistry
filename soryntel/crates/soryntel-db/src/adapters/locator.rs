@@ -7,12 +7,19 @@ use std::path::PathBuf;
 pub const MAIN_DB_FILE: &str = "Maindb6.HSC";
 /// Default `OwnDB` file name (HSC 6).
 pub const OWN_DB_FILE: &str = "OWNDB6.HSC";
+/// Default SoryntelDB file name.
+pub const SORYNTEL_DB_FILE: &str = "soryntel.sdb";
+/// Environment variable with an explicit SoryntelDB path.
+pub const SORYNTEL_SDB_ENV: &str = "SORYNTEL_SDB";
 
-/// Looks for `Maindb6.HSC` / `OWNDB6.HSC` in an ordered list of directories and
-/// returns the first existing file.
+/// Looks for `Maindb6.HSC` / `OWNDB6.HSC` / `soryntel.sdb` in an ordered list of
+/// directories and returns the first existing file.
 #[derive(Debug, Clone, Default)]
 pub struct DatabaseDirLocator {
     dirs: Vec<PathBuf>,
+    /// Explicit SoryntelDB path (`SORYNTEL_SDB`), returned even if it does not exist so
+    /// that a wrong configuration is reported instead of silently falling back.
+    soryntel_override: Option<PathBuf>,
 }
 
 impl DatabaseDirLocator {
@@ -20,7 +27,14 @@ impl DatabaseDirLocator {
     pub fn new(dirs: impl IntoIterator<Item = PathBuf>) -> Self {
         Self {
             dirs: dirs.into_iter().collect(),
+            soryntel_override: None,
         }
+    }
+
+    /// Uses `path` as SoryntelDB instead of searching the directories.
+    pub fn with_soryntel_override(mut self, path: Option<PathBuf>) -> Self {
+        self.soryntel_override = path;
+        self
     }
 
     /// Searches `<directory of the executable>/Databases`.
@@ -29,6 +43,35 @@ impl DatabaseDirLocator {
             .ok()
             .and_then(|p| p.parent().map(|d| d.join("Databases")));
         Self::new(dir)
+    }
+
+    /// Directorios por defecto de ambos clientes (ADR 0003), en orden:
+    /// `<exe>/Databases` y la carpeta de datos del usuario ([`Self::user_data_dir`]).
+    /// SoryntelDB se toma antes de `SORYNTEL_SDB` si está definida (ADR 0007).
+    pub fn standard() -> Self {
+        Self::new(
+            Self::beside_executable()
+                .dirs
+                .into_iter()
+                .chain(Self::user_data_dir()),
+        )
+        .with_soryntel_override(std::env::var_os(SORYNTEL_SDB_ENV).map(PathBuf::from))
+    }
+
+    /// Carpeta de datos del usuario: `<Documentos>/Soryntel/Databases`, donde `<Documentos>`
+    /// es `~/Documents` o `~/Documentos` si existen y, si no, la carpeta personal (`HOME` o
+    /// `USERPROFILE`). `None` si no se puede determinar una ruta absoluta.
+    pub fn user_data_dir() -> Option<PathBuf> {
+        let home = std::env::var_os("HOME")
+            .or_else(|| std::env::var_os("USERPROFILE"))
+            .map(PathBuf::from)
+            .filter(|p| p.is_absolute())?;
+        let documents = ["Documents", "Documentos"]
+            .iter()
+            .map(|name| home.join(name))
+            .find(|dir| dir.is_dir())
+            .unwrap_or(home);
+        Some(documents.join("Soryntel").join("Databases"))
     }
 
     /// Directories searched, in order.
@@ -48,5 +91,51 @@ impl DatabaseLocatorPort for DatabaseDirLocator {
 
     fn default_own_db(&self) -> Option<PathBuf> {
         self.find(OWN_DB_FILE)
+    }
+
+    fn default_soryntel_db(&self) -> Option<PathBuf> {
+        self.soryntel_override
+            .clone()
+            .or_else(|| self.find(SORYNTEL_DB_FILE))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn standard_dirs_are_absolute_and_start_beside_the_executable() {
+        let locator = DatabaseDirLocator::standard();
+        let dirs = locator.dirs();
+        assert!(!dirs.is_empty());
+        assert!(dirs.iter().all(|d| d.is_absolute()), "{dirs:?}");
+        assert!(dirs[0].ends_with("Databases"));
+        if let Some(user) = DatabaseDirLocator::user_data_dir() {
+            assert!(user.ends_with("Soryntel/Databases"));
+            assert_eq!(dirs.last(), Some(&user));
+        }
+    }
+
+    #[test]
+    fn finds_first_existing_file_in_order() {
+        let base = std::env::temp_dir().join(format!("soryntel-locator-{}", std::process::id()));
+        let (a, b) = (base.join("a"), base.join("b"));
+        std::fs::create_dir_all(&a).unwrap();
+        std::fs::create_dir_all(&b).unwrap();
+        std::fs::write(b.join(MAIN_DB_FILE), b"x").unwrap();
+        std::fs::write(a.join(OWN_DB_FILE), b"x").unwrap();
+        let locator = DatabaseDirLocator::new([a.clone(), b.clone()]);
+        assert_eq!(locator.default_main_db(), Some(b.join(MAIN_DB_FILE)));
+        assert_eq!(locator.default_own_db(), Some(a.join(OWN_DB_FILE)));
+        assert_eq!(locator.default_soryntel_db(), None);
+        std::fs::write(b.join(SORYNTEL_DB_FILE), b"x").unwrap();
+        assert_eq!(locator.default_soryntel_db(), Some(b.join(SORYNTEL_DB_FILE)));
+        std::fs::write(a.join(SORYNTEL_DB_FILE), b"x").unwrap();
+        assert_eq!(locator.default_soryntel_db(), Some(a.join(SORYNTEL_DB_FILE)));
+        let explicit = base.join("no-existe.sdb");
+        let locator = locator.with_soryntel_override(Some(explicit.clone()));
+        assert_eq!(locator.default_soryntel_db(), Some(explicit), "la ruta explícita no recurre a los directorios");
+        let _ = std::fs::remove_dir_all(&base);
     }
 }

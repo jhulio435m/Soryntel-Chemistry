@@ -227,6 +227,15 @@ pub fn integrate_species_intervals(
         });
     }
 
+    if !intervals.iter().any(|interval| {
+        interval.t_min - 1e-8 <= temp_k && temp_k <= interval.t_max + 1e-8
+    }) {
+        return Err(ChemAddinError::InvalidTemperature {
+            temp_k,
+            detail: "temperature is outside the species data intervals".into(),
+        });
+    }
+
     // Identify reference interval covering 298.15 K (fallback to first interval if T_min > 298.15).
     let ref_idx = intervals
         .iter()

@@ -47,9 +47,13 @@ pub enum SweepParameter {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SweepPoint {
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub x: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub total_heat_flow_w: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub active_sheet_heat_flow_w: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub outer_surface_temp_k: f64,
 }
 
@@ -104,25 +108,36 @@ pub fn generate_parameter_sweep(
 pub struct OptimumInsulationSpec {
     pub sheet_index: usize,
     pub insulation_col_index: usize,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub min_thickness_m: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub max_thickness_m: f64,
     pub steps: usize,
     /// Annual operating hours (default 8760 h/yr).
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub operating_hours_per_year: f64,
     /// Energy cost in currency/kWh.
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub energy_cost_per_kwh: f64,
     /// Installed insulation cost in currency/m^3.
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub insulation_cost_per_m3: f64,
     /// Capital amortization period in years.
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub amortization_years: f64,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub struct OptimumInsulationPoint {
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub thickness_m: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub heat_loss_w: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub annual_energy_cost: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub annual_insulation_cost: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub total_annual_cost: f64,
 }
 

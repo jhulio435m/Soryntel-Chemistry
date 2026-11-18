@@ -18,8 +18,6 @@ use soryntel_application::models::balance::{
     TargetRow,
 };
 
-const DEFAULT_BAL8_PATH: &str = "/tmp/soryntel_balance.bal8";
-const DEFAULT_BAL_XLSX_PATH: &str = "/tmp/soryntel_balance_workbook.xlsx";
 
 #[derive(Clone, PartialEq, Eq)]
 pub enum ActiveSheetTab {
@@ -96,6 +94,14 @@ impl BalanceModuleState {
                 q_w / 1000.0
             );
             self.status_ok = true;
+        } else {
+            self.status_msg = format!(
+                "Heat Loss envió {:.3} kW al Area {}, pero este libro solo tiene {} área(s): no se importó.",
+                q_w / 1000.0,
+                area_idx + 1,
+                self.wb.areas.len()
+            );
+            self.status_ok = false;
         }
     }
 
@@ -136,7 +142,7 @@ impl BalanceModuleState {
             hf_t_room_c: 25.0,
             show_file_modal: false,
             file_modal_is_save: true,
-            file_path_buf: DEFAULT_BAL8_PATH.to_string(),
+            file_path_buf: String::new(),
             show_add_species: false,
             add_to_out: false,
             add_species_query: String::new(),
@@ -159,6 +165,15 @@ impl BalanceModuleState {
                 self.active_tab = ActiveSheetTab::In(0);
                 self.selected_stream_idx = Some(0);
                 self.selected_row_idx = Some(0);
+                // Estado derivado del libro anterior: diagramas, stream copiado y modales.
+                self.selected_user_cell = None;
+                self.copied_stream_ref = None;
+                self.temp_bal_modal = None;
+                self.diagram_result = None;
+                self.show_diagram_window = false;
+                self.diagram_apply_bounds = false;
+                self.diagram_auto_scale = true;
+                self.diagram_reset_counter = self.diagram_reset_counter.wrapping_add(1);
             }
             Err(e) => {
                 self.status_msg = format!("Error evaluando preset: {e}");
@@ -219,15 +234,35 @@ impl BalanceModuleState {
         match std::fs::read_to_string(path)
             .map_err(|e| soryntel_core::SoryntelError::DatabaseError(e.to_string()))
             .and_then(|raw| BalanceUseCases::deserialize_bal8_workbook(&raw))
+            .and_then(|wb| {
+                if wb.areas.is_empty() {
+                    Err(soryntel_core::SoryntelError::DatabaseError(
+                        "el libro no contiene áreas de balance".into(),
+                    ))
+                } else {
+                    Ok(wb)
+                }
+            })
         {
             Ok(wb) => {
                 self.load_preset(wb, db);
-                self.status_msg = format!("Workbook cargado desde {path}");
+                if self.status_ok {
+                    self.status_msg = format!("Workbook cargado desde {path}");
+                }
             }
             Err(e) => {
                 self.status_msg = format!("Error abriendo .bal8: {e}");
                 self.status_ok = false;
             }
+        }
+    }
+
+    /// Exporta a .xlsx en la ruta que elija el usuario.
+    fn choose_export_xlsx(&mut self) {
+        let current = std::path::PathBuf::from(&self.file_path_buf);
+        let suggested = crate::storage::suggested_file_name(&self.wb.title, "xlsx");
+        if let Some(path) = crate::storage::choose_file(true, "Exportar a Excel", "xlsx", &suggested, Some(&current)) {
+            self.export_xlsx(&path.to_string_lossy());
         }
     }
 
@@ -328,79 +363,78 @@ impl BalanceModuleState {
         self.status_ok = true;
     }
 
-    pub fn ui(&mut self, ctx: &egui::Context, db: &dyn SpeciesCatalogPort) {
+    pub fn ui(&mut self, root_ui: &mut egui::Ui, db: &dyn SpeciesCatalogPort) {
+        let ctx = &root_ui.ctx().clone();
         // F8 shortcut for Target Iteration (Ch. 11.7 Step 8)
         if ctx.input(|i| i.key_pressed(egui::Key::F8)) {
             self.run_selected_targets(db, false);
         }
 
         // 1. Classic HSC Menu Bar with Semantic Icons (File | Edit | View | Insert | Delete | Format | Units | Calculate | Target | Diagram | Help)
-        egui::TopBottomPanel::top("bal_menu_bar").show(ctx, |ui| {
-            egui::menu::bar(ui, |ui| {
+        egui::Panel::top("bal_menu_bar").show(root_ui, |ui| {
+            ui.horizontal_wrapped(|ui| {
                 ui.menu_button(crate::i18n::text("common.020"), |ui| {
                     if ui.button(crate::i18n::text("review.104")).clicked() {
                         self.file_modal_is_save = false;
-                        self.file_path_buf = DEFAULT_BAL8_PATH.to_string();
                         self.show_file_modal = true;
-                        ui.close_menu();
+                        ui.close_kind(egui::UiKind::Menu);
                     }
                     if ui.button(crate::i18n::text("review.105")).clicked() {
                         self.file_modal_is_save = true;
-                        self.file_path_buf = DEFAULT_BAL8_PATH.to_string();
                         self.show_file_modal = true;
-                        ui.close_menu();
+                        ui.close_kind(egui::UiKind::Menu);
                     }
                     if ui.button(crate::i18n::text("common.038")).clicked() {
-                        self.export_xlsx(DEFAULT_BAL_XLSX_PATH);
-                        ui.close_menu();
+                        self.choose_export_xlsx();
+                        ui.close_kind(egui::UiKind::Menu);
                     }
                     ui.separator();
-                    ui.label(egui::RichText::new("Built-in HSC Examples (Ch. 11.11):").strong());
+                    ui.label(egui::RichText::new("Built-in examples (Ch. 11.11):").strong());
                     if ui
                         .button("🔥 CH4_Cooling.bal8 (CH4 Burner + Cooling Water Diagram)")
                         .clicked()
                     {
                         self.load_ch4_cooling_preset(db);
-                        ui.close_menu();
+                        ui.close_kind(egui::UiKind::Menu);
                     }
                     if ui.button("📘 CUCONV1.bal8 (Copper Converter, Figs. 1–5)").clicked() {
                         self.load_preset(BalanceUseCases::balance_preset_cuconv1(), db);
-                        ui.close_menu();
+                        ui.close_kind(egui::UiKind::Menu);
                     }
                     if ui.button("🔥 BUTANE.bal8 (Adiabatic Flame, Fig. 2)").clicked() {
                         self.load_preset(BalanceUseCases::balance_preset_butane(), db);
-                        ui.close_menu();
+                        ui.close_kind(egui::UiKind::Menu);
                     }
                     if ui.button("🏭 CUSMELT.bal8 (Copper Smelting)").clicked() {
                         self.load_preset(BalanceUseCases::balance_preset_cusmelt(), db);
-                        ui.close_menu();
+                        ui.close_kind(egui::UiKind::Menu);
                     }
                     if ui.button("💧 H2O.bal8 (Steam Evaporator)").clicked() {
                         self.load_preset(BalanceUseCases::balance_preset_h2o(), db);
-                        ui.close_menu();
+                        ui.close_kind(egui::UiKind::Menu);
                     }
                     if ui.button("⛓ FSF_process.bal8 (5-Area Flash Smelting, Figs. 10–14)").clicked() {
                         self.load_preset(BalanceUseCases::balance_preset_fsf_process(), db);
-                        ui.close_menu();
+                        ui.close_kind(egui::UiKind::Menu);
                     }
                 });
 
                 ui.menu_button(crate::i18n::text("common.021"), |ui| {
                     if ui.button(crate::i18n::text("review.106")).clicked() {
                         self.recalculate(db);
-                        ui.close_menu();
+                        ui.close_kind(egui::UiKind::Menu);
                     }
                     ui.separator();
                     if ui.button("📋 Copy Stream (Ch. 11.9)").clicked() {
                         self.copy_selected_stream();
-                        ui.close_menu();
+                        ui.close_kind(egui::UiKind::Menu);
                     }
                     if ui
                         .button("📌 Paste Stream (Linked ='OUTx'!Dy)")
                         .clicked()
                     {
                         self.paste_linked_stream(db);
-                        ui.close_menu();
+                        ui.close_kind(egui::UiKind::Menu);
                     }
                     ui.separator();
                     ui.checkbox(&mut self.copy_mode_whole_row, "Copy Mode (Whole Row - Ch. 11.1)");
@@ -409,19 +443,19 @@ impl BalanceModuleState {
                 ui.menu_button(crate::i18n::text("common.039"), |ui| {
                     if ui.button("📊 BALANCE Sheet").clicked() {
                         self.active_tab = ActiveSheetTab::Balance;
-                        ui.close_menu();
+                        ui.close_kind(egui::UiKind::Menu);
                     }
                     if ui.button("📥 Active IN Sheet").clicked() {
                         self.active_tab = ActiveSheetTab::In(self.active_area);
-                        ui.close_menu();
+                        ui.close_kind(egui::UiKind::Menu);
                     }
                     if ui.button("📤 Active OUT Sheet").clicked() {
                         self.active_tab = ActiveSheetTab::Out(self.active_area);
-                        ui.close_menu();
+                        ui.close_kind(egui::UiKind::Menu);
                     }
                     if ui.button("🎯 Target Sheet").clicked() {
                         self.active_tab = ActiveSheetTab::Target;
-                        ui.close_menu();
+                        ui.close_kind(egui::UiKind::Menu);
                     }
                     ui.separator();
                     ui.checkbox(&mut self.show_tools_sidebar, "🔧 Show Right Tools Sidebar");
@@ -438,20 +472,20 @@ impl BalanceModuleState {
                             heat_losses: 0.0,
                         });
                         self.recalculate(db);
-                        ui.close_menu();
+                        ui.close_kind(egui::UiKind::Menu);
                     }
                     if ui.button("🌊 Stream (Substance Group)").clicked() {
                         self.insert_stream_in_active(db);
-                        ui.close_menu();
+                        ui.close_kind(egui::UiKind::Menu);
                     }
                     if ui.button("🔬 Row (Species from Database)").clicked() {
                         self.add_to_out = matches!(self.active_tab, ActiveSheetTab::Out(_));
                         self.show_add_species = true;
-                        ui.close_menu();
+                        ui.close_kind(egui::UiKind::Menu);
                     }
                     if ui.button("🔥 Heat Flow / Air-Cooled Loss (Eq. 1)...").clicked() {
                         self.show_heat_flow_modal = true;
-                        ui.close_menu();
+                        ui.close_kind(egui::UiKind::Menu);
                     }
                     if ui.button("📄 Sheet (Custom Excel Worksheet)").clicked() {
                         let idx = self.wb.user_sheets.len() + 1;
@@ -460,7 +494,7 @@ impl BalanceModuleState {
                             ..Default::default()
                         });
                         self.active_tab = ActiveSheetTab::User(self.wb.user_sheets.len() - 1);
-                        ui.close_menu();
+                        ui.close_kind(egui::UiKind::Menu);
                     }
                     ui.separator();
                     if ui
@@ -480,15 +514,15 @@ impl BalanceModuleState {
                         self.active_area = self.active_area.min(self.wb.areas.len() - 1);
                         self.active_tab = ActiveSheetTab::In(self.active_area);
                         self.recalculate(db);
-                        ui.close_menu();
+                        ui.close_kind(egui::UiKind::Menu);
                     }
                     if ui.button(crate::i18n::text("review.110")).clicked() {
                         self.delete_selected_stream(db);
-                        ui.close_menu();
+                        ui.close_kind(egui::UiKind::Menu);
                     }
                     if ui.button(crate::i18n::text("review.111")).clicked() {
                         self.delete_selected_row(db);
-                        ui.close_menu();
+                        ui.close_kind(egui::UiKind::Menu);
                     }
                     if let ActiveSheetTab::User(u_idx) = self.active_tab {
                         if ui.button(crate::i18n::text("review.112")).clicked()
@@ -496,7 +530,7 @@ impl BalanceModuleState {
                         {
                             self.wb.user_sheets.remove(u_idx);
                             self.active_tab = ActiveSheetTab::In(self.active_area);
-                            ui.close_menu();
+                            ui.close_kind(egui::UiKind::Menu);
                         }
                     }
                 });
@@ -515,7 +549,7 @@ impl BalanceModuleState {
                         if ui.radio(sel, u.label()).clicked() && !sel {
                             BalanceUseCases::convert_balance_temperature_unit(&mut self.wb, u);
                             self.recalculate(db);
-                            ui.close_menu();
+                            ui.close_kind(egui::UiKind::Menu);
                         }
                     }
                     ui.separator();
@@ -529,7 +563,7 @@ impl BalanceModuleState {
                         if ui.radio(sel, eu.label()).clicked() && !sel {
                             BalanceUseCases::convert_balance_energy_unit(&mut self.wb, eu);
                             self.recalculate(db);
-                            ui.close_menu();
+                            ui.close_kind(egui::UiKind::Menu);
                         }
                     }
                     ui.separator();
@@ -544,19 +578,19 @@ impl BalanceModuleState {
                 ui.menu_button(crate::i18n::text("common.008"), |ui| {
                     if ui.button(crate::i18n::text("review.114")).clicked() {
                         self.recalculate(db);
-                        ui.close_menu();
+                        ui.close_kind(egui::UiKind::Menu);
                     }
                     if ui.button("🔥 Temperature Balance (Adiabatic)...").clicked() {
                         self.trigger_temp_balance(db);
-                        ui.close_menu();
+                        ui.close_kind(egui::UiKind::Menu);
                     }
                     if ui.button("📊 Stream Compositions (In-% / Out-%)").clicked() {
                         self.active_tab = ActiveSheetTab::OutPct(self.active_area);
-                        ui.close_menu();
+                        ui.close_kind(egui::UiKind::Menu);
                     }
                     if ui.button(crate::i18n::text("review.115")).clicked() {
                         self.active_tab = ActiveSheetTab::Balance;
-                        ui.close_menu();
+                        ui.close_kind(egui::UiKind::Menu);
                     }
                 });
 
@@ -570,30 +604,35 @@ impl BalanceModuleState {
                     self.show_help_modal = true;
                 }
 
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                ui.menu_button(crate::i18n::text("common.045"), |ui| {
                     if ui
                         .small_button("🔥 CH4_Cooling")
                         .on_hover_text("Quemador CH4(g) + Agua de Enfriamiento (Diagram 1..12 Nm³)")
                         .clicked()
                     {
                         self.load_ch4_cooling_preset(db);
+                        ui.close_kind(egui::UiKind::Menu);
                     }
                     if ui.small_button("⛓ FSF_process").clicked() {
                         self.load_preset(BalanceUseCases::balance_preset_fsf_process(), db);
+                        ui.close_kind(egui::UiKind::Menu);
                     }
                     if ui.small_button("💧 H2O").clicked() {
                         self.load_preset(BalanceUseCases::balance_preset_h2o(), db);
+                        ui.close_kind(egui::UiKind::Menu);
                     }
                     if ui.small_button("🏭 CUSMELT").clicked() {
                         self.load_preset(BalanceUseCases::balance_preset_cusmelt(), db);
+                        ui.close_kind(egui::UiKind::Menu);
                     }
                     if ui.small_button("🔥 BUTANE").clicked() {
                         self.load_preset(BalanceUseCases::balance_preset_butane(), db);
+                        ui.close_kind(egui::UiKind::Menu);
                     }
                     if ui.small_button("📘 CUCONV1").clicked() {
                         self.load_preset(BalanceUseCases::balance_preset_cuconv1(), db);
+                        ui.close_kind(egui::UiKind::Menu);
                     }
-                    ui.label(egui::RichText::new(crate::i18n::text("common.045")).small());
                 });
             });
 
@@ -613,14 +652,15 @@ impl BalanceModuleState {
                     .on_hover_text("Guardar workbook en .bal8")
                     .clicked()
                 {
-                    self.save_bal8(DEFAULT_BAL8_PATH);
+                    self.file_modal_is_save = true;
+                    self.show_file_modal = true;
                 }
                 if ui
                     .small_button("📊 Excel .xlsx")
                     .on_hover_text("Exportar todas las hojas a MS Excel (.xlsx)")
                     .clicked()
                 {
-                    self.export_xlsx(DEFAULT_BAL_XLSX_PATH);
+                    self.choose_export_xlsx();
                 }
                 ui.separator();
                 if ui
@@ -691,10 +731,10 @@ impl BalanceModuleState {
 
             ui.separator();
             ui.horizontal(|ui| {
-                egui::Frame::none()
+                egui::Frame::NONE
                     .fill(egui::Color32::WHITE)
                     .stroke(egui::Stroke::new(1.0, egui::Color32::from_rgb(180, 186, 196)))
-                    .inner_margin(egui::Margin::symmetric(6.0, 2.0))
+                    .inner_margin(egui::Margin::symmetric(6, 2))
                     .show(ui, |ui| {
                         ui.set_min_width(86.0);
                         ui.monospace(&self.formula_bar_ref);
@@ -717,13 +757,13 @@ impl BalanceModuleState {
         });
 
         // 2. Bottom Status Bar (with Outotec/Soryntel badge matching Fig. 1)
-        egui::TopBottomPanel::bottom("bal_status_bar").show(ctx, |ui| {
+        egui::Panel::bottom("bal_status_bar").show(root_ui, |ui| {
             let color = if self.status_ok {
                 egui::Color32::from_rgb(21, 128, 61)
             } else {
                 egui::Color32::from_rgb(185, 28, 28)
             };
-            ui.horizontal(|ui| {
+            ui.horizontal_wrapped(|ui| {
                 ui.label(
                     egui::RichText::new("Soryntel")
                         .strong()
@@ -737,25 +777,27 @@ impl BalanceModuleState {
         });
 
         // 3. Right Tools Sidebar (Figs. 1, 3, 10-14 — Responsive & Collapsible)
-        let screen_w = ctx.screen_rect().width();
+        let screen_w = ctx.content_rect().width();
         if self.show_tools_sidebar && screen_w >= 680.0 {
-            egui::SidePanel::right("bal_tools_panel")
+            egui::Panel::right("bal_tools_panel")
                 .resizable(true)
-                .default_width(232.0)
-                .min_width(185.0)
-                .max_width(400.0)
-                .show(ctx, |ui| {
+                .default_size(232.0)
+                .min_size(185.0)
+                .max_size(400.0)
+                .show(root_ui, |ui| {
                     self.render_tools_sidebar(ui, db);
                 });
         }
 
         // 4. Bottom Docked Panels: Element Balance (left) | Total Balance (right)
-        egui::TopBottomPanel::bottom("bal_bottom_panels")
+        let summary_height = (ctx.content_rect().height() * 0.24).clamp(100.0, 172.0);
+        egui::Panel::bottom("bal_bottom_panels")
             .resizable(true)
-            .default_height(172.0)
-            .min_height(105.0)
-            .max_height(400.0)
-            .show(ctx, |ui| {
+            .default_size(summary_height)
+            .min_size(78.0)
+            .max_size((ctx.content_rect().height() * 0.33).clamp(110.0, 400.0))
+            .show(root_ui, |ui| {
+                ui.spacing_mut().scroll.floating = false;
                 if ui.available_width() >= 760.0 {
                     ui.columns(2, |cols| {
                         self.render_element_balance_panel(&mut cols[0]);
@@ -772,14 +814,25 @@ impl BalanceModuleState {
                 }
             });
 
+        // Aviso visible si alguna especie no está en las bases cargadas (C27).
+        if let Some(notice) = crate::ui_common::incomplete_calculation_notice(&unresolved_balance_species(&self.wb, db)) {
+            egui::Panel::top("bal_incomplete_notice")
+                .frame(egui::Frame::NONE.fill(egui::Color32::from_rgb(254, 226, 226)).inner_margin(egui::Margin::symmetric(10, 5)))
+                .show(root_ui, |ui| {
+                    ui.label(egui::RichText::new(notice).color(egui::Color32::from_rgb(153, 27, 27)));
+                });
+        }
+
         // 5. Central Panel: Active Sheet Grid + Excel Bottom Sheet Tabs (Figs. 1, 3-6, 10-14)
-        egui::CentralPanel::default().show(ctx, |ui| {
-            let tab_bar_h = 30.0;
-            let grid_h = (ui.available_height() - tab_bar_h - 6.0).max(110.0);
+        egui::CentralPanel::default().show(root_ui, |ui| {
+            ui.spacing_mut().scroll.floating = false;
+            let tab_bar_h = 52.0;
+            let grid_h = (ui.available_height() - tab_bar_h - 6.0).max(0.0);
 
             egui::ScrollArea::both()
                 .id_salt("bal_main_sheet_scroll")
                 .max_height(grid_h)
+                .min_scrolled_height(grid_h.min(64.0))
                 .show(ui, |ui| match self.active_tab.clone() {
                     ActiveSheetTab::Balance => self.render_balance_sheet(ui),
                     ActiveSheetTab::In(idx) => self.render_species_sheet(ui, idx, false, db),
@@ -791,7 +844,7 @@ impl BalanceModuleState {
                 });
 
             ui.separator();
-            self.render_bottom_sheet_tabs(ui, db);
+            self.render_bottom_sheet_tabs(ui);
         });
 
         // 6. Modals
@@ -1200,12 +1253,12 @@ impl BalanceModuleState {
         });
     }
 
-    fn render_bottom_sheet_tabs(&mut self, ui: &mut egui::Ui, _db: &dyn SpeciesCatalogPort) {
-        egui::Frame::none()
+    fn render_bottom_sheet_tabs(&mut self, ui: &mut egui::Ui) {
+        egui::Frame::NONE
             .fill(egui::Color32::from_rgb(232, 236, 242))
-            .inner_margin(egui::Margin::symmetric(4.0, 2.0))
+            .inner_margin(egui::Margin::symmetric(4, 2))
             .show(ui, |ui| {
-                ui.horizontal_wrapped(|ui| {
+                ui.horizontal(|ui| {
                     // Navigation arrows `|< < > >|` matching Figs. 1, 3–6, 10–14
                     if ui.small_button("|<").on_hover_text("Ir a BALANCE").clicked() {
                         self.active_tab = ActiveSheetTab::Balance;
@@ -1227,85 +1280,46 @@ impl BalanceModuleState {
                     }
                     ui.separator();
 
-                    let sheet_tab = |ui: &mut egui::Ui, active: bool, label: &str| -> bool {
-                        let fill = if active {
-                            egui::Color32::WHITE
-                        } else {
-                            egui::Color32::from_rgb(220, 226, 235)
-                        };
-                        let text_col = if active {
-                            egui::Color32::from_rgb(15, 23, 42)
-                        } else {
-                            egui::Color32::from_rgb(71, 85, 105)
-                        };
-                        let stroke = if active {
-                            egui::Stroke::new(1.2, egui::Color32::from_rgb(29, 78, 216))
-                        } else {
-                            egui::Stroke::new(1.0, egui::Color32::from_rgb(190, 198, 210))
-                        };
-                        ui.add(
-                            egui::Button::new(
-                                egui::RichText::new(label)
-                                    .size(11.5)
-                                    .strong()
-                                    .color(text_col),
-                            )
-                            .fill(fill)
-                            .stroke(stroke)
-                            .rounding(3.0),
-                        )
-                        .clicked()
-                    };
-
-                    if sheet_tab(ui, self.active_tab == ActiveSheetTab::Balance, "📊 BALANCE") {
-                        self.active_tab = ActiveSheetTab::Balance;
-                    }
+                    let mut tabs = vec![(ActiveSheetTab::Balance, "📊 BALANCE".to_owned())];
                     for i in 0..self.wb.areas.len() {
                         let n = i + 1;
-                        if sheet_tab(
-                            ui,
-                            self.active_tab == ActiveSheetTab::In(i),
-                            &format!("📥 IN{n}"),
-                        ) {
-                            self.active_area = i;
-                            self.active_tab = ActiveSheetTab::In(i);
-                        }
-                        if sheet_tab(
-                            ui,
-                            self.active_tab == ActiveSheetTab::Out(i),
-                            &format!("📤 OUT{n}"),
-                        ) {
-                            self.active_area = i;
-                            self.active_tab = ActiveSheetTab::Out(i);
-                        }
+                        tabs.push((ActiveSheetTab::In(i), format!("📥 IN{n}")));
+                        tabs.push((ActiveSheetTab::Out(i), format!("📤 OUT{n}")));
                     }
                     let n = self.active_area + 1;
-                    if sheet_tab(
-                        ui,
-                        self.active_tab == ActiveSheetTab::InPct(self.active_area),
-                        &format!("📈 In{n}-%"),
-                    ) {
-                        self.active_tab = ActiveSheetTab::InPct(self.active_area);
+                    tabs.push((ActiveSheetTab::InPct(self.active_area), format!("📈 In{n}-%")));
+                    tabs.push((ActiveSheetTab::OutPct(self.active_area), format!("📈 Out{n}-%")));
+                    for (index, sheet) in self.wb.user_sheets.iter().enumerate() {
+                        tabs.push((ActiveSheetTab::User(index), format!("📄 {}", sheet.name)));
                     }
-                    if sheet_tab(
-                        ui,
-                        self.active_tab == ActiveSheetTab::OutPct(self.active_area),
-                        &format!("📈 Out{n}-%"),
-                    ) {
-                        self.active_tab = ActiveSheetTab::OutPct(self.active_area);
-                    }
-                    for (u_idx, us) in self.wb.user_sheets.iter().enumerate() {
-                        if sheet_tab(
-                            ui,
-                            self.active_tab == ActiveSheetTab::User(u_idx),
-                            &format!("📄 {}", us.name),
-                        ) {
-                            self.active_tab = ActiveSheetTab::User(u_idx);
+                    tabs.push((ActiveSheetTab::Target, "🎯 Target".to_owned()));
+
+                    let tab_width = tabs.iter().map(|(_, label)| {
+                        ui.painter().layout_no_wrap(
+                            label.clone(), egui::TextStyle::Button.resolve(ui.style()), egui::Color32::WHITE,
+                        ).size().x + ui.spacing().button_padding.x * 2.0 + ui.spacing().item_spacing.x
+                    }).sum::<f32>();
+                    let mut selected = self.active_tab.clone();
+                    if tab_width > ui.available_width() {
+                        let current = tabs.iter()
+                            .find(|(tab, _)| *tab == selected)
+                            .map_or("Hoja", |(_, label)| label.as_str());
+                        egui::ComboBox::from_id_salt("balance_sheet")
+                            .selected_text(current)
+                            .show_ui(ui, |ui| {
+                                for (tab, label) in tabs {
+                                    ui.selectable_value(&mut selected, tab, label);
+                                }
+                            });
+                    } else {
+                        for (tab, label) in tabs {
+                            ui.selectable_value(&mut selected, tab, label);
                         }
                     }
-                    if sheet_tab(ui, self.active_tab == ActiveSheetTab::Target, "🎯 Target") {
-                        self.active_tab = ActiveSheetTab::Target;
+                    if let ActiveSheetTab::In(area) | ActiveSheetTab::Out(area) = selected {
+                        self.active_area = area;
                     }
+                    self.active_tab = selected;
                 });
             });
     }
@@ -1618,23 +1632,35 @@ impl BalanceModuleState {
                     for (r_idx, sp) in st.species.iter_mut().enumerate() {
                         let is_sel = self.selected_stream_idx == Some(s_idx)
                             && self.selected_row_idx == Some(r_idx);
-                        let sp_color = if sp.missing_in_db {
+                        let status = crate::ui_common::species_row_status(
+                            &sp.formula,
+                            sp.missing_in_db,
+                            db.get_species(&sp.formula).is_some(),
+                        );
+                        let missing = status == crate::ui_common::SpeciesRowStatus::NotFound;
+                        let sp_color = if missing {
                             egui::Color32::RED
                         } else {
                             dark
                         };
                         row_num_cell(ui, row_num, 32.0);
-                        if text_cell(
+                        let shown = if missing { format!("⚠ {}", sp.formula) } else { sp.formula.clone() };
+                        let name_resp = text_cell(
                             ui,
-                            &sp.formula,
+                            &shown,
                             w[0],
                             egui::Color32::WHITE,
                             sp_color,
                             false,
                             false,
                             is_sel,
-                        )
-                        .clicked()
+                        );
+                        let name_resp = if missing {
+                            name_resp.on_hover_text(crate::ui_common::SPECIES_NOT_FOUND_TOOLTIP)
+                        } else {
+                            name_resp
+                        };
+                        if name_resp.clicked()
                         {
                             let fx = sp
                                 .amount_formula
@@ -1718,6 +1744,13 @@ impl BalanceModuleState {
 
                         // Amount kg (Col E — interactive per Ch. 11.1 Steps 1–2 & Ch. 11.3)
                         let mut kg_val = sp.amount_kg;
+                        if missing {
+                            // Sin masa molar no hay kg ni Nm³: «—», no 0.000.
+                            for col in [4, 5] {
+                                text_cell(ui, crate::ui_common::MISSING_VALUE, w[col], EXCEL_READONLY_BG, sp_color, true, false, false)
+                                    .on_hover_text(crate::ui_common::SPECIES_NOT_FOUND_TOOLTIP);
+                            }
+                        } else {
                         widget_cell(ui, w[4], egui::Color32::WHITE, false, |ui| {
                             if ui
                                 .add(
@@ -1749,10 +1782,11 @@ impl BalanceModuleState {
                                 need_recalc = true;
                             }
                         });
+                        }
 
                         text_cell(
                             ui,
-                            &format!("{:.2}", sp.heat_content),
+                            &crate::ui_common::calculated_cell(status, sp.heat_content, 2),
                             w[6],
                             EXCEL_READONLY_BG,
                             dark,
@@ -1762,7 +1796,7 @@ impl BalanceModuleState {
                         );
                         text_cell(
                             ui,
-                            &format!("{:.2}", sp.total_h),
+                            &crate::ui_common::calculated_cell(status, sp.total_h, 2),
                             w[7],
                             EXCEL_READONLY_BG,
                             dark,
@@ -1772,7 +1806,7 @@ impl BalanceModuleState {
                         );
                         text_cell(
                             ui,
-                            &format!("{:.3}", sp.hc_per_kmol),
+                            &crate::ui_common::calculated_cell(status, sp.hc_per_kmol, 3),
                             w[8],
                             egui::Color32::WHITE,
                             dark,
@@ -1782,7 +1816,7 @@ impl BalanceModuleState {
                         );
                         text_cell(
                             ui,
-                            &format!("{:.3}", sp.tot_h_per_kmol),
+                            &crate::ui_common::calculated_cell(status, sp.tot_h_per_kmol, 3),
                             w[9],
                             egui::Color32::WHITE,
                             dark,
@@ -1792,7 +1826,7 @@ impl BalanceModuleState {
                         );
                         text_cell(
                             ui,
-                            &format!("{:.3}", sp.mw),
+                            &crate::ui_common::calculated_cell(status, sp.mw, 3),
                             w[10],
                             egui::Color32::WHITE,
                             dark,
@@ -2058,7 +2092,7 @@ impl BalanceModuleState {
                                 cw,
                                 egui::Color32::WHITE,
                                 col,
-                                val.parse::<f64>().is_ok(),
+                                crate::ui_common::parse_user_number(&val).is_ok(),
                                 bold,
                                 sel,
                             )
@@ -2527,14 +2561,14 @@ impl BalanceModuleState {
 
                         ui.horizontal(|ui| {
                             // Left vertical 5-icon strip (Save, Copy, Print, Clone, Redraw — Figs. 8 & 9)
-                            egui::Frame::none()
+                            egui::Frame::NONE
                                 .fill(egui::Color32::from_rgb(248, 250, 252))
                                 .stroke(egui::Stroke::new(
                                     1.0,
                                     egui::Color32::from_rgb(214, 220, 229),
                                 ))
-                                .rounding(4.0)
-                                .inner_margin(egui::Margin::symmetric(4.0, 6.0))
+                                .corner_radius(4)
+                                .inner_margin(egui::Margin::symmetric(4, 6))
                                 .show(ui, |ui| {
                                     ui.vertical(|ui| {
                                         if ui
@@ -2542,7 +2576,7 @@ impl BalanceModuleState {
                                             .on_hover_text("Exportar datos del diagrama")
                                             .clicked()
                                         {
-                                            self.export_xlsx(DEFAULT_BAL_XLSX_PATH);
+                                            self.choose_export_xlsx();
                                         }
                                         if ui
                                             .button("📋")
@@ -2624,29 +2658,29 @@ impl BalanceModuleState {
                                         .map(|(&x, &y)| [x, y])
                                         .collect();
                                     plot_ui.line(
-                                        Line::new(PlotPoints::from(raw.clone()))
-                                            .name(if units.is_empty() {
+                                        Line::new((if units.is_empty() {
                                                 lbl.clone()
                                             } else {
                                                 format!("{lbl} ({units})")
-                                            })
+                                            }).to_string(), PlotPoints::from(raw.clone()))
                                             .color(green_curve)
                                             .width(2.5),
                                     );
                                     plot_ui.points(
-                                        Points::new(PlotPoints::from(raw.clone()))
+                                        Points::new("", PlotPoints::from(raw.clone())).id(("series_points", lbl, units))
                                             .color(green_curve)
                                             .radius(3.0),
                                     );
                                     if let Some(&[x0, y0]) = raw.first() {
                                         plot_ui.text(
                                             PlotText::new(
+                                                "",
                                                 [x0, y0].into(),
                                                 egui::RichText::new(lbl)
                                                     .strong()
                                                     .size(12.0)
                                                     .color(green_curve),
-                                            )
+                                            ).id(("series_label", lbl, units))
                                             .anchor(egui::Align2::LEFT_BOTTOM),
                                         );
                                     }
@@ -2733,43 +2767,24 @@ impl BalanceModuleState {
             self.show_heat_flow_modal = open;
         }
 
-        // 6. File Save / Open Modal (.bal8)
+        // 6. File Save / Open (.bal8): diálogo nativo con confirmación al sobrescribir.
         if self.show_file_modal {
-            let mut open = self.show_file_modal;
-            let title = if self.file_modal_is_save {
-                "💾 Save Workbook As (.bal8)"
-            } else {
-                "📂 Open Workbook (.bal8)"
-            };
-            let mut do_save = false;
-            let mut do_open = false;
-            egui::Window::new(title)
-                .open(&mut open)
-                .collapsible(false)
-                .default_width(440.0)
-                .show(ctx, |ui| {
-                    ui.label(crate::i18n::text("review.138"));
-                    ui.text_edit_singleline(&mut self.file_path_buf);
-                    ui.add_space(6.0);
-                    if self.file_modal_is_save {
-                        if ui.button(crate::i18n::text("common.014")).clicked() {
-                            do_save = true;
-                        }
-                    } else if ui.button(crate::i18n::text("common.009")).clicked() {
-                        do_open = true;
-                    }
-                });
-            if do_save {
-                let p = self.file_path_buf.clone();
-                self.save_bal8(&p);
-                open = false;
+            self.show_file_modal = false;
+            let save = self.file_modal_is_save;
+            let title = if save { "Guardar libro (.bal8)" } else { "Abrir libro (.bal8)" };
+            let current = std::path::PathBuf::from(&self.file_path_buf);
+            let suggested = crate::storage::suggested_file_name(&self.wb.title, "bal8");
+            if let Some(path) = crate::storage::choose_file(save, title, "bal8", &suggested, Some(&current)) {
+                let p = path.to_string_lossy().into_owned();
+                if save {
+                    self.save_bal8(&p);
+                } else {
+                    self.load_bal8(&p, db);
+                }
+                if self.status_ok {
+                    self.file_path_buf = p;
+                }
             }
-            if do_open {
-                let p = self.file_path_buf.clone();
-                self.load_bal8(&p, db);
-                open = false;
-            }
-            self.show_file_modal = open;
         }
 
         // 7. Add Species to Stream Modal
@@ -2958,9 +2973,17 @@ impl BalanceModuleState {
                     let txt = self.formula_bar_text.trim().to_string();
                     if txt.starts_with('=') {
                         sp.amount_formula = Some(txt);
-                    } else if let Ok(v) = txt.parse::<f64>() {
-                        sp.amount_formula = None;
-                        sp.amount_kmol = v.max(0.0);
+                    } else {
+                        match crate::ui_common::parse_user_number(&txt) {
+                            Ok(v) => {
+                                sp.amount_formula = None;
+                                sp.amount_kmol = v.max(0.0);
+                            }
+                            Err(e) => {
+                                self.status_msg = format!("Cantidad no válida: {e}");
+                                self.status_ok = false;
+                            }
+                        }
                     }
                 }
             } else if let Some(st) = streams.get_mut(s_idx) {
@@ -2972,6 +2995,20 @@ impl BalanceModuleState {
         }
         self.recalculate(db);
     }
+}
+
+/// Fórmulas de las filas de especie de todas las áreas que no están en las bases cargadas.
+pub(crate) fn unresolved_balance_species(wb: &BalanceWorkbook, db: &dyn SpeciesCatalogPort) -> Vec<String> {
+    wb.areas
+        .iter()
+        .flat_map(|a| a.in_streams.iter().chain(a.out_streams.iter()))
+        .flat_map(|st| st.species.iter())
+        .filter(|sp| {
+            crate::ui_common::species_row_status(&sp.formula, sp.missing_in_db, db.get_species(&sp.formula).is_some())
+                == crate::ui_common::SpeciesRowStatus::NotFound
+        })
+        .map(|sp| sp.formula.clone())
+        .collect()
 }
 
 #[cfg(test)]
@@ -3001,8 +3038,8 @@ mod tests {
                 )),
                 ..Default::default()
             };
-            let _ = ctx.run(input, |ctx| {
-                state.ui(ctx, &db);
+            let _ = crate::ui_common::run_test_frame(&ctx, input, |root_ui| {
+                state.ui(root_ui, &db);
             });
         }
 
@@ -3021,5 +3058,69 @@ mod tests {
         assert!(state.status_ok);
         state.load_bal8(tmp_bal8, &db);
         assert!(state.status_ok);
+    }
+
+    #[test]
+    fn opening_bal8_resets_state_of_previous_workbook() {
+        let db = ThermoDatabase::with_open_defaults();
+        let mut state = BalanceModuleState::new(&db);
+        let path = std::env::temp_dir().join(format!("soryntel-c09-{}.bal8", std::process::id()));
+        state.save_bal8(path.to_str().unwrap()); // libro CUCONV1
+        state.load_ch4_cooling_preset(&db); // abre un diagrama del libro CH4
+        state.active_tab = ActiveSheetTab::Out(0);
+        state.selected_stream_idx = Some(0);
+        state.copy_selected_stream();
+        assert!(state.diagram_result.is_some() && state.copied_stream_ref.is_some());
+        state.load_bal8(path.to_str().unwrap(), &db);
+        let _ = std::fs::remove_file(&path);
+        assert!(
+            state.diagram_result.is_none() && !state.show_diagram_window && state.copied_stream_ref.is_none(),
+            "tras abrir CUCONV1 siguen: diagrama={} ventana={} stream copiado={:?}",
+            state.diagram_result.is_some(),
+            state.show_diagram_window,
+            state.copied_stream_ref
+        );
+
+        // Un libro sin áreas se rechaza y el abierto queda intacto.
+        let areas_before = state.wb.areas.len();
+        let mut empty = state.wb.clone();
+        empty.areas.clear();
+        let path = std::env::temp_dir().join(format!("soryntel-c09b-{}.bal8", std::process::id()));
+        std::fs::write(&path, BalanceUseCases::serialize_bal8_workbook(&empty).unwrap()).unwrap();
+        state.load_bal8(path.to_str().unwrap(), &db);
+        let _ = std::fs::remove_file(&path);
+        assert!(!state.status_ok);
+        assert_eq!(state.wb.areas.len(), areas_before);
+    }
+
+    #[test]
+    fn species_missing_from_catalog_is_listed_for_the_incomplete_notice() {
+        let db = ThermoDatabase::with_open_defaults();
+        let mut state = BalanceModuleState::new(&db);
+        let before = unresolved_balance_species(&state.wb, &db).len();
+        state.wb.areas[0].in_streams[0]
+            .species
+            .push(SpeciesRow::new("ZzUnknown9".to_string(), 25.0, 1.0));
+        state.recalculate(&db);
+        let missing = unresolved_balance_species(&state.wb, &db);
+        assert_eq!(missing.len(), before + 1);
+        assert!(missing.contains(&"ZzUnknown9".to_string()));
+        let ctx = egui::Context::default();
+        let _ = crate::ui_common::run_test_frame(&ctx, egui::RawInput::default(), |root_ui| state.ui(root_ui, &db));
+    }
+
+    #[test]
+    fn heat_loss_import_to_missing_area_is_reported() {
+        let db = ThermoDatabase::with_open_defaults();
+        let mut state = BalanceModuleState::new(&db);
+        let n = state.wb.areas.len();
+        // Heat Loss ofrece las áreas de SU propio libro por defecto, no las del Balance abierto.
+        let before = state.status_msg.clone();
+        state.set_area_heat_loss_w(n + 2, 1500.0, &db);
+        assert!(
+            !state.status_ok || state.status_msg != before,
+            "importación a «Area {}» con {n} área(s): sin mensaje ni error",
+            n + 3
+        );
     }
 }

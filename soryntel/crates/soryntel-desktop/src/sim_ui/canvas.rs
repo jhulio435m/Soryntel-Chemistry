@@ -396,7 +396,7 @@ pub fn render_flowsheet_canvas(ui: &mut egui::Ui, state: &mut SimModuleState) {
             };
             let pill = Rect::from_center_size(mid + Vec2::new(0.0, 9.0), Vec2::new(66.0, 15.0));
             cp.rect_filled(pill, 2.0, Color32::from_rgba_unmultiplied(255, 255, 232, 230));
-            cp.rect_stroke(pill, 2.0, Stroke::new(0.7, Color32::from_rgb(140, 150, 165)));
+            cp.rect_stroke(pill, 2.0, Stroke::new(0.7, Color32::from_rgb(140, 150, 165)), egui::StrokeKind::Middle);
             cp.text(
                 pill.center(),
                 egui::Align2::CENTER_CENTER,
@@ -422,7 +422,7 @@ pub fn render_flowsheet_canvas(ui: &mut egui::Ui, state: &mut SimModuleState) {
             let tbl_pos = mid + Vec2::new(-38.0, 14.0);
             let st_rect = Rect::from_min_size(tbl_pos, Vec2::new(98.0, 52.0));
             cp.rect_filled(st_rect, 1.0, Color32::from_rgba_unmultiplied(250, 252, 255, 240));
-            cp.rect_stroke(st_rect, 1.0, Stroke::new(0.9, SIM_BORDER));
+            cp.rect_stroke(st_rect, 1.0, Stroke::new(0.9, SIM_BORDER), egui::StrokeKind::Middle);
             cp.rect_filled(
                 Rect::from_min_size(tbl_pos, Vec2::new(98.0, 15.0)),
                 0.0,
@@ -463,9 +463,9 @@ pub fn render_flowsheet_canvas(ui: &mut egui::Ui, state: &mut SimModuleState) {
             let h1 = Rect::from_center_size(p0, Vec2::splat(8.0));
             let h2 = Rect::from_center_size(pn, Vec2::splat(8.0));
             cp.rect_filled(h1, 1.0, Color32::from_rgb(30, 120, 235));
-            cp.rect_stroke(h1, 1.0, Stroke::new(1.0, Color32::WHITE));
+            cp.rect_stroke(h1, 1.0, Stroke::new(1.0, Color32::WHITE), egui::StrokeKind::Middle);
             cp.rect_filled(h2, 1.0, Color32::from_rgb(30, 120, 235));
-            cp.rect_stroke(h2, 1.0, Stroke::new(1.0, Color32::WHITE));
+            cp.rect_stroke(h2, 1.0, Stroke::new(1.0, Color32::WHITE), egui::StrokeKind::Middle);
         }
     }
 
@@ -502,7 +502,7 @@ pub fn render_flowsheet_canvas(ui: &mut egui::Ui, state: &mut SimModuleState) {
         } else {
             Stroke::new((u.line_width * 3.5).clamp(0.9, 2.4), to_color32(u.line_color))
         };
-        cp.rect_stroke(urect, 1.5, border_stroke);
+        cp.rect_stroke(urect, 1.5, border_stroke, egui::StrokeKind::Middle);
 
         // Selection handles around selected unit
         if is_selected {
@@ -514,7 +514,7 @@ pub fn render_flowsheet_canvas(ui: &mut egui::Ui, state: &mut SimModuleState) {
             ] {
                 let hr = Rect::from_center_size(handle_pt, Vec2::splat(6.0));
                 cp.rect_filled(hr, 0.5, Color32::from_rgb(16, 108, 224));
-                cp.rect_stroke(hr, 0.5, Stroke::new(0.8, Color32::WHITE));
+                cp.rect_stroke(hr, 0.5, Stroke::new(0.8, Color32::WHITE), egui::StrokeKind::Middle);
             }
         }
 
@@ -605,13 +605,13 @@ pub fn render_flowsheet_canvas(ui: &mut egui::Ui, state: &mut SimModuleState) {
                     to_color32(ann.text_color),
                 );
                 if state.selected == SelectedObject::Annotation(ann.id) {
-                    cp.rect_stroke(arect, 1.0, sel_stroke);
+                    cp.rect_stroke(arect, 1.0, sel_stroke, egui::StrokeKind::Middle);
                 }
             }
             AnnotationKind::MultilineBox | AnnotationKind::Rectangle | AnnotationKind::RoundedRect => {
                 let r = if matches!(ann.kind, AnnotationKind::RoundedRect) { 6.0 } else { 1.0 };
                 cp.rect_filled(arect, r, to_color32(ann.fill_color));
-                cp.rect_stroke(arect, r, sel_stroke);
+                cp.rect_stroke(arect, r, sel_stroke, egui::StrokeKind::Middle);
                 if !ann.text.is_empty() {
                     cp.text(
                         arect.left_top() + Vec2::splat(4.0),
@@ -639,7 +639,7 @@ pub fn render_flowsheet_canvas(ui: &mut egui::Ui, state: &mut SimModuleState) {
             }
             AnnotationKind::PictureBox | AnnotationKind::Arc => {
                 cp.rect_filled(arect, 2.0, Color32::from_rgb(245, 248, 252));
-                cp.rect_stroke(arect, 2.0, sel_stroke);
+                cp.rect_stroke(arect, 2.0, sel_stroke, egui::StrokeKind::Middle);
                 cp.text(
                     arect.center(),
                     egui::Align2::CENTER_CENTER,
@@ -674,13 +674,14 @@ pub fn render_flowsheet_canvas(ui: &mut egui::Ui, state: &mut SimModuleState) {
             } else {
                 Stroke::new(1.1, Color32::from_rgb(56, 64, 76))
             },
+            egui::StrokeKind::Middle,
         );
 
         if tbl.is_title_table {
             // Official Title Table 4-row engineering header with red `Logo` box (Fig. 8)
             let logo_w = trect.width() * 0.25;
             let logo_rect = Rect::from_min_max(trect.min, Pos2::new(trect.left() + logo_w, trect.bottom()));
-            cp.rect_stroke(logo_rect, 0.0, Stroke::new(0.8, Color32::GRAY));
+            cp.rect_stroke(logo_rect, 0.0, Stroke::new(0.8, Color32::GRAY), egui::StrokeKind::Middle);
             cp.text(
                 logo_rect.center(),
                 egui::Align2::CENTER_CENTER,
@@ -699,7 +700,7 @@ pub fn render_flowsheet_canvas(ui: &mut egui::Ui, state: &mut SimModuleState) {
             ];
             for (idx, txt) in lines.iter().enumerate() {
                 let row_r = Rect::from_min_size(Pos2::new(right_x, trect.top() + idx as f32 * rh), Vec2::new(rw, rh));
-                cp.rect_stroke(row_r, 0.0, Stroke::new(0.6, Color32::from_rgb(160, 168, 178)));
+                cp.rect_stroke(row_r, 0.0, Stroke::new(0.6, Color32::from_rgb(160, 168, 178)), egui::StrokeKind::Middle);
                 cp.text(
                     Pos2::new(row_r.left() + 6.0, row_r.center().y),
                     egui::Align2::LEFT_CENTER,
@@ -723,7 +724,7 @@ pub fn render_flowsheet_canvas(ui: &mut egui::Ui, state: &mut SimModuleState) {
                     if r_idx == 0 {
                         cp.rect_filled(cr, 0.0, Color32::from_rgb(232, 238, 248));
                     }
-                    cp.rect_stroke(cr, 0.0, Stroke::new(0.6, Color32::from_rgb(175, 182, 192)));
+                    cp.rect_stroke(cr, 0.0, Stroke::new(0.6, Color32::from_rgb(175, 182, 192)), egui::StrokeKind::Middle);
                     cp.text(
                         cr.center(),
                         egui::Align2::CENTER_CENTER,
@@ -749,10 +750,10 @@ pub fn render_flowsheet_canvas(ui: &mut egui::Ui, state: &mut SimModuleState) {
     match state.project.lock_state {
         LockState::Unlocked => {}
         LockState::DrawingLocked => {
-            cp.rect_stroke(canvas_rect.shrink(1.5), 0.0, Stroke::new(3.0, Color32::from_rgb(0, 178, 112)));
+            cp.rect_stroke(canvas_rect.shrink(1.5), 0.0, Stroke::new(3.0, Color32::from_rgb(0, 178, 112)), egui::StrokeKind::Middle);
         }
         LockState::EntireProcessLocked => {
-            cp.rect_stroke(canvas_rect.shrink(1.5), 0.0, Stroke::new(3.0, Color32::from_rgb(212, 34, 34)));
+            cp.rect_stroke(canvas_rect.shrink(1.5), 0.0, Stroke::new(3.0, Color32::from_rgb(212, 34, 34)), egui::StrokeKind::Middle);
         }
     }
 
@@ -771,7 +772,7 @@ pub fn render_flowsheet_canvas(ui: &mut egui::Ui, state: &mut SimModuleState) {
         let corner_box = Rect::from_min_size(available.min, Vec2::new(ruler_w, ruler_h));
 
         painter.rect_filled(corner_box, 0.0, SIM_HEADER_BG);
-        painter.rect_stroke(corner_box, 0.0, Stroke::new(0.8, SIM_BORDER));
+        painter.rect_stroke(corner_box, 0.0, Stroke::new(0.8, SIM_BORDER), egui::StrokeKind::Middle);
         painter.circle_stroke(corner_box.center(), 4.5, Stroke::new(1.0, Color32::from_rgb(80, 120, 40)));
 
         painter.rect_filled(top_ruler, 0.0, SIM_RULER_BG);
@@ -1056,39 +1057,39 @@ pub fn render_flowsheet_canvas(ui: &mut egui::Ui, state: &mut SimModuleState) {
             SelectedObject::Unit(uid) => {
                 if ui.button(crate::i18n::text("review.182")).clicked() {
                     state.open_unit_editor(uid);
-                    ui.close_menu();
+                    ui.close_kind(egui::UiKind::Menu);
                 }
                 if ui.button("Select Unit Model...").clicked() {
                     state.show_select_unit_models = true;
-                    ui.close_menu();
+                    ui.close_kind(egui::UiKind::Menu);
                 }
                 if ui.button("Calculate Selected Unit (Ctrl+F9)").clicked() {
                     state.run_static(true);
-                    ui.close_menu();
+                    ui.close_kind(egui::UiKind::Menu);
                 }
                 if ui.button("Rename Unit").clicked() {
                     if let Some(u) = state.project.units.iter().find(|u| u.id == uid) {
                         state.inline_rename_target = Some(SelectedObject::Unit(uid));
                         state.inline_rename_buf = u.name_id.clone();
                     }
-                    ui.close_menu();
+                    ui.close_kind(egui::UiKind::Menu);
                 }
                 ui.separator();
                 if ui.button("Delete Unit (Del)").clicked() {
                     state.delete_selected();
-                    ui.close_menu();
+                    ui.close_kind(egui::UiKind::Menu);
                 }
             }
             SelectedObject::Stream(sid) => {
                 if ui.button(crate::i18n::text("review.183")).clicked() {
                     state.open_stream_src_dest(sid);
-                    ui.close_menu();
+                    ui.close_kind(egui::UiKind::Menu);
                 }
                 if ui.button("Toggle Attached Stream Table").clicked() {
                     if let Some(s) = state.project.streams.iter_mut().find(|s| s.id == sid) {
                         s.visible_stream_table = !s.visible_stream_table;
                     }
-                    ui.close_menu();
+                    ui.close_kind(egui::UiKind::Menu);
                 }
                 if ui.button("Add to Active Stream Table").clicked() {
                     if let Some(s_name) = state.project.streams.iter().find(|s| s.id == sid).map(|s| s.name_id.clone()) {
@@ -1099,30 +1100,30 @@ pub fn render_flowsheet_canvas(ui: &mut egui::Ui, state: &mut SimModuleState) {
                             }
                         }
                     }
-                    ui.close_menu();
+                    ui.close_kind(egui::UiKind::Menu);
                 }
                 if ui.button("Rename Stream").clicked() {
                     if let Some(s) = state.project.streams.iter().find(|s| s.id == sid) {
                         state.inline_rename_target = Some(SelectedObject::Stream(sid));
                         state.inline_rename_buf = s.name_id.clone();
                     }
-                    ui.close_menu();
+                    ui.close_kind(egui::UiKind::Menu);
                 }
                 ui.separator();
                 if ui.button("Delete Stream (Del)").clicked() {
                     state.delete_selected();
-                    ui.close_menu();
+                    ui.close_kind(egui::UiKind::Menu);
                 }
             }
             SelectedObject::Table(tid) => {
                 if ui.button("Edit Table (Table Editor)...").clicked() {
                     state.editing_table_id = Some(tid);
                     state.show_table_editor = true;
-                    ui.close_menu();
+                    ui.close_kind(egui::UiKind::Menu);
                 }
                 if ui.button("Delete Table").clicked() {
                     state.delete_selected();
-                    ui.close_menu();
+                    ui.close_kind(egui::UiKind::Menu);
                 }
             }
             _ => {
@@ -1132,16 +1133,16 @@ pub fn render_flowsheet_canvas(ui: &mut egui::Ui, state: &mut SimModuleState) {
                     state.push_undo();
                     state.project.units.push(SimUnit::new(id, name, UnitKind::Generic, state.cursor_mm, page));
                     state.selected = SelectedObject::Unit(id);
-                    ui.close_menu();
+                    ui.close_kind(egui::UiKind::Menu);
                 }
                 if ui.button(crate::i18n::text("review.184")).clicked() {
                     state.show_default_settings = true;
-                    ui.close_menu();
+                    ui.close_kind(egui::UiKind::Menu);
                 }
                 if ui.button("Reset Zoom & Pan (100%)").clicked() {
                     state.zoom_pct = 100.0;
                     state.pan_mm = [-12.0, -4.0];
-                    ui.close_menu();
+                    ui.close_kind(egui::UiKind::Menu);
                 }
             }
         }

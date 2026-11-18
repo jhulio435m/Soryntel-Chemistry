@@ -20,19 +20,17 @@ Público principal: académico. Docentes, investigadores y estudiantes de quími
 
 ## Capabilities and Constraints
 
-El repositorio incluye cálculos de equilibrio por minimización de Gibbs, propiedades de agua y vapor IF97, equilibrio acuoso con IPhreeqc y MINTEQ, procesamiento mineral, balances y diagramas de estabilidad. Las demostraciones de la web deben distinguirse de resultados ejecutados por el motor científico. No se debe afirmar equivalencia científica con HSC ni calibración industrial general.
+El repositorio incluye cálculos de equilibrio por minimización de Gibbs, propiedades de agua y vapor IF97, equilibrio acuoso con IPhreeqc y MINTEQ, procesamiento mineral, balances y diagramas de estabilidad. Las demostraciones de la web deben distinguirse de resultados ejecutados por el motor científico. No se debe afirmar equivalencia científica con otros programas ni calibración industrial general.
 
 ## Evidence on Hand
 
 - `README.md`: estructura y módulos actuales.
 - `docs/SCIENTIFIC_VALIDATION.md`: casos verificados y límites.
-- `docs/HSC_PARITY_ROADMAP.md`: alcance presente y pendientes.
 - Grabaciones reales de la app compilada (agua/vapor, reacciones, Benson 3D, tabla periódica) y capturas de módulos en `web/public/media/`, generadas por `web/scripts/capture/`.
-- La interfaz de la app aún muestra textos "Outotec" y "HSC" en algunos módulos y el icono de empaquetado dice "HSC": no deben aparecer en la web.
 
 ## Brand Commitments
 
-Nombre: Soryntel Chemistry. Idioma de la web: español. Sin marcas de terceros (HSC, Outotec, Metso) en la web.
+Nombre: Soryntel Chemistry. Idioma de la web: español. Sin marcas de terceros en la web.
 
 Dirección visual: estándar de la categoría (software técnico con video real del producto), elegido de forma explícita. Vara de calidad: Rerun.io.
 

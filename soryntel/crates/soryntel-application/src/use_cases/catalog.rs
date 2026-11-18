@@ -36,7 +36,7 @@ impl CatalogUseCases {
         admin.status()
     }
 
-    /// Abre MainDB con la precedencia de escritorio (`OwnDB > MainDB > OpenDefault`).
+    /// Abre MainDB con la precedencia de escritorio (`OwnDB > MainDB > SoryntelDB > OpenDefault`).
     /// Devuelve `(especies únicas, registros binarios)`.
     pub fn open_main_db(
         admin: &mut dyn SpeciesDatabaseAdminPort,
@@ -44,6 +44,17 @@ impl CatalogUseCases {
     ) -> Result<(usize, usize), String> {
         admin
             .load_main_db(path.as_ref(), MainDbPrecedence::OverrideOpenDefault)
+            .map_err(catalog_error_message)
+    }
+
+    /// Abre SoryntelDB (`.sdb`), la capa base bajo MainDB. Mientras está cargada no se usan
+    /// las especies abiertas incluidas. Devuelve `(especies, intervalos)`.
+    pub fn open_soryntel_db(
+        admin: &mut dyn SpeciesDatabaseAdminPort,
+        path: impl AsRef<Path>,
+    ) -> Result<(usize, usize), String> {
+        admin
+            .load_soryntel_db(path.as_ref())
             .map_err(catalog_error_message)
     }
 
@@ -322,7 +333,7 @@ impl CatalogUseCases {
     }
 
     /// Primer juego de datos de `formula` en la capa `source` (OwnDB o MainDB), sin aplicar
-    /// la precedencia OwnDB > MainDB > OpenDefault de `get_species`.
+    /// la precedencia OwnDB > MainDB > SoryntelDB > OpenDefault de `get_species`.
     pub fn species_in_layer(
         browser: &dyn soryntel_core::SpeciesBrowserPort,
         source: soryntel_core::catalog::DbSource,
