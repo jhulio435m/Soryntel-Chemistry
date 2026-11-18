@@ -125,7 +125,9 @@ pub fn run_bridge_blocking<C: SpeciesCatalogPort + Send + Sync + 'static>(
     port: u16,
 ) -> std::io::Result<()> {
     let addr = format!("127.0.0.1:{port}");
-    let listener = TcpListener::bind(&addr)?;
+    let listener = TcpListener::bind(&addr).map_err(|error| {
+        std::io::Error::new(error.kind(), format!("No se pudo abrir HTTP Bridge en {addr}: {error}"))
+    })?;
     let bound_port = listener.local_addr().map(|a| a.port()).unwrap_or(port);
     listener.set_nonblocking(true)?;
     let stop_flag = Arc::new(AtomicBool::new(false));
@@ -156,9 +158,11 @@ fn run_accept_loop<C: SpeciesCatalogPort + Send + Sync + 'static>(
                 let db_ref = Arc::clone(&db);
                 let units_ref = Arc::clone(&units);
                 let stats_ref = Arc::clone(&stats);
-                thread::spawn(move || {
+                if let Err(error) = thread::Builder::new().spawn(move || {
                     handle_client_stream(&mut stream, &db_ref, &units_ref, &stats_ref, port);
-                });
+                }) {
+                    stats.record_error(format!("Bridge {port}: no se pudo atender la conexión: {error}"));
+                }
             }
             Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
                 thread::sleep(Duration::from_millis(25));
@@ -188,7 +192,9 @@ fn handle_client_stream<C: SpeciesCatalogPort + Send + Sync + 'static>(
         Err(msg) => {
             stats.record_error(msg.clone());
             let resp = HttpResponse::json(400, json!({ "ok": false, "error": msg }));
-            let _ = write_http_response(stream, &resp);
+            if let Err(error) = write_http_response(stream, &resp) {
+                stats.record_error(format!("Bridge {port}: error de escritura: {error}"));
+            }
             return;
         }
     };
@@ -200,7 +206,9 @@ fn handle_client_stream<C: SpeciesCatalogPort + Send + Sync + 'static>(
     if !summary.is_empty() {
         stats.record_call(summary);
     }
-    let _ = write_http_response(stream, &resp);
+    if let Err(error) = write_http_response(stream, &resp) {
+        stats.record_error(format!("Bridge {port}: error de escritura: {error}"));
+    }
 }
 
 /// Minimal parsed HTTP/1.1 request.
@@ -1018,6 +1026,68 @@ mod tests {
         assert_eq!(sjson["ok"], true, "sjson={sjson}");
         let arr = sjson["outputs"].as_array().expect("outputs array");
         assert_eq!(arr.len(), 4);
+    }
+
+    #[test]
+    fn occupied_bridge_port_is_reported() {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let addr = listener.local_addr().unwrap();
+        let (db, units) = test_db_and_units();
+        let db = Arc::new(RwLock::new(db));
+        let error = BridgeHandle::start(Arc::clone(&db), Arc::clone(&units), addr.port())
+            .err()
+            .expect("bridge must report the occupied port");
+        assert!(error.contains(&addr.to_string()), "{error}");
+        let error = run_bridge_blocking(db, units, addr.port()).unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::AddrInUse);
+        assert!(error.to_string().contains(&addr.to_string()), "{error}");
+    }
+
+    #[test]
+    fn concurrent_requests_finish_after_catalog_writer_releases() {
+        use crate::composition::AppServices;
+        use std::sync::mpsc;
+
+        const CLIENTS: usize = 8;
+        let (db, units) = test_db_and_units();
+        let services = AppServices::from_catalog(db);
+        let bridge = BridgeHandle::start(services.shared_catalog(), units, 0).unwrap();
+        let address = std::net::SocketAddr::from(([127, 0, 0, 1], bridge.port()));
+        let writer = services.catalog_mut();
+        let (sent, ready) = mpsc::channel();
+        let (results, replies) = mpsc::channel();
+        let clients: Vec<_> = (0..CLIENTS)
+            .map(|_| {
+                let sent = sent.clone();
+                let results = results.clone();
+                thread::spawn(move || {
+                    let timeout = Duration::from_secs(3);
+                    let mut stream = TcpStream::connect_timeout(&address, timeout).unwrap();
+                    stream.set_read_timeout(Some(timeout)).unwrap();
+                    stream.set_write_timeout(Some(timeout)).unwrap();
+                    stream.write_all(b"GET /health HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n").unwrap();
+                    sent.send(()).unwrap();
+                    let mut response = String::new();
+                    let result = stream.read_to_string(&mut response).map(|_| response);
+                    results.send(result).unwrap();
+                })
+            })
+            .collect();
+        for _ in 0..CLIENTS {
+            ready.recv_timeout(Duration::from_secs(2)).unwrap();
+        }
+        assert!(matches!(
+            replies.recv_timeout(Duration::from_millis(30)),
+            Err(mpsc::RecvTimeoutError::Timeout)
+        ));
+        drop(writer);
+        for _ in 0..CLIENTS {
+            let response = replies.recv_timeout(Duration::from_secs(3)).unwrap().unwrap();
+            assert!(response.starts_with("HTTP/1.1 200"), "{response}");
+        }
+        for client in clients {
+            client.join().unwrap();
+        }
     }
 
     #[test]

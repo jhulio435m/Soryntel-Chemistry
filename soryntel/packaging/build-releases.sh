@@ -15,13 +15,18 @@
 # so it can run in an Arch container after the `linux` stage.
 set -euo pipefail
 
+TARGETS="${1:-all}"
+case "${TARGETS}" in
+    linux|windows|arch|all) ;;
+    *) echo "Destino no válido: ${TARGETS}. Use linux, windows, arch o all." >&2; exit 2 ;;
+esac
+
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 VERSION="$(awk '/^\[workspace.package\]/{f=1;next} /^\[/{f=0} f && /^version *=/{gsub(/[" ]/,"",$0); split($0,a,"="); print a[2]; exit}' "${ROOT_DIR}/Cargo.toml")"
 [[ -n "${VERSION}" ]] || { echo "No se pudo leer la versión de Cargo.toml" >&2; exit 1; }
 DIST_DIR="${DIST_DIR:-${ROOT_DIR}/dist}"
 STAGE_DIR="$(mktemp -d)"
 trap 'rm -rf "${STAGE_DIR}"' EXIT
-TARGETS="${1:-all}"
 
 mkdir -p "${DIST_DIR}"
 cd "${ROOT_DIR}"

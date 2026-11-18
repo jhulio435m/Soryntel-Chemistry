@@ -264,7 +264,8 @@
       if (Math.abs(maxY - minY) < 1e-12) { minY -= 1; maxY += 1; }
 
       const padL = 68, padR = 20, padT = 24, padB = 40, W = 640, H = 390;
-      const mapX = x => padL + ((x - minX) / (maxX - minX || 1)) * (W - padL - padR);
+      const singleTemperature = minX === maxX;
+      const mapX = x => padL + (singleTemperature ? 0.5 : (x - minX) / (maxX - minX)) * (W - padL - padR);
       const mapY = y => H - padB - ((y - minY) / (maxY - minY)) * (H - padT - padB);
 
       let pts = rows.map((r, i) => `${mapX(xs[i]).toFixed(1)},${mapY(ys[i]).toFixed(1)}`).join(' ');
@@ -274,16 +275,20 @@
         const yp = mapY(yv);
         grid += `<line x1="${padL}" y1="${yp}" x2="${W-padR}" y2="${yp}" stroke="#1e293b" stroke-width="1"/>`;
         grid += `<text x="${padL-6}" y="${yp+4}" fill="#94a3b8" font-size="11" text-anchor="end">${Math.abs(yv) > 1e4 || (Math.abs(yv) < 1e-2 && yv !== 0) ? yv.toExponential(2) : yv.toFixed(2)}</text>`;
+        if (singleTemperature && i !== 2) continue;
         const xv = minX + (i / 4) * (maxX - minX);
         const xp = mapX(xv);
         grid += `<line x1="${xp}" y1="${padT}" x2="${xp}" y2="${H-padB}" stroke="#1e293b" stroke-width="1"/>`;
         grid += `<text x="${xp}" y="${H-padB+16}" fill="#94a3b8" font-size="11" text-anchor="middle">${xv.toFixed(0)}</text>`;
       }
 
+      const dataMark = rows.length === 1
+        ? `<circle cx="${mapX(xs[0])}" cy="${mapY(ys[0])}" r="4" fill="#38bdf8"/>`
+        : `<polyline fill="none" stroke="#38bdf8" stroke-width="2.5" points="${pts}"/>`;
       svg.innerHTML = `
         ${grid}
         <rect x="${padL}" y="${padT}" width="${W-padL-padR}" height="${H-padT-padB}" fill="none" stroke="#475569"/>
-        <polyline fill="none" stroke="#38bdf8" stroke-width="2.5" points="${pts}"/>
+        ${dataMark}
         <text x="${W/2}" y="${H-8}" fill="#cbd5e1" font-size="12" text-anchor="middle">T (${lastData.temp_unit_label})</text>
       `;
     }

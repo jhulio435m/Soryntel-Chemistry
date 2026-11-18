@@ -10,6 +10,7 @@
 //! - Bottom Excel Sheet Tab Bar (`|< < > >| Convert / Units / Constants / Mesh / Air / H2O`) + `Outotec` footer
 //! - `WaterInAir 3D` interactive golden wireframe surface modal (`Fig. 3`).
 
+use crate::excel_grid::parse_decimal_input;
 use eframe::egui;
 use egui_plot::{Legend, Line, Plot, PlotPoints};
 use soryntel_application::use_cases::MiscUseCases;
@@ -1436,7 +1437,7 @@ impl UnitsModuleState {
                                             self.formula_buf = cell_txt;
                                         }
                                         if resp.changed() {
-                                            if let Ok(v) = edit_coef.trim().parse::<f64>() {
+                                            if let Some(v) = parse_decimal_input(&edit_coef) {
                                                 if v > 0.0 && v.is_finite() {
                                                     self.workbook.quantities[q_idx].units[ci]
                                                         .coef = v;
@@ -1614,12 +1615,14 @@ impl UnitsModuleState {
                         .add(egui::TextEdit::singleline(&mut self.mesh_in_buf).desired_width(68.0))
                         .changed()
                     {
-                        if let Ok(m) = self.mesh_in_buf.trim().parse::<f64>() {
+                        if let Some(m) = parse_decimal_input(&self.mesh_in_buf) {
                             if let Some(mm) = self.workbook.interpolate_mesh_to_mm(m) {
                                 self.mesh_mm_buf = format!("{mm:.4}");
                                 self.status_msg =
                                     format!("{m} mesh ≈ {mm:.4} mm ({:.1} µm)", mm * 1000.0);
                             }
+                        } else {
+                            ui.colored_label(egui::Color32::RED, "Número inválido");
                         }
                     }
                     ui.label("<->  Opening [mm]:");
@@ -1627,11 +1630,13 @@ impl UnitsModuleState {
                         .add(egui::TextEdit::singleline(&mut self.mesh_mm_buf).desired_width(76.0))
                         .changed()
                     {
-                        if let Ok(mm) = self.mesh_mm_buf.trim().parse::<f64>() {
+                        if let Some(mm) = parse_decimal_input(&self.mesh_mm_buf) {
                             if let Some(m) = self.workbook.interpolate_mm_to_mesh(mm) {
                                 self.mesh_in_buf = format!("{m:.1}");
                                 self.status_msg = format!("{mm:.4} mm ≈ {m:.1} mesh");
                             }
+                        } else {
+                            ui.colored_label(egui::Color32::RED, "Número inválido");
                         }
                     }
                 });
@@ -1767,10 +1772,10 @@ impl UnitsModuleState {
                         .add(egui::TextEdit::singleline(&mut self.air_calc_p_buf).desired_width(54.0))
                         .changed();
                     if changed {
-                        if let (Ok(t), Ok(rh), Ok(p)) = (
-                            self.air_calc_temp_buf.trim().parse::<f64>(),
-                            self.air_calc_rh_buf.trim().parse::<f64>(),
-                            self.air_calc_p_buf.trim().parse::<f64>(),
+                        if let (Some(t), Some(rh), Some(p)) = (
+                            parse_decimal_input(&self.air_calc_temp_buf),
+                            parse_decimal_input(&self.air_calc_rh_buf),
+                            parse_decimal_input(&self.air_calc_p_buf),
                         ) {
                             self.air_calc_res =
                                 MiscUseCases::compute_air_humidity_point(t, rh, p).ok();
@@ -2156,7 +2161,7 @@ impl UnitsModuleState {
                     });
                     ui.horizontal(|ui| {
                         if ui.button("Add Unit").clicked() {
-                            if let Ok(c) = self.new_unit_coef.trim().parse::<f64>() {
+                            if let Some(c) = parse_decimal_input(&self.new_unit_coef) {
                                 match self.workbook.add_unit_to_quantity(
                                     self.selected_qty,
                                     self.new_unit_name.clone(),
@@ -2596,20 +2601,6 @@ fn hsc_btn(ui: &mut egui::Ui, label: &str, w: f32) -> egui::Response {
         .stroke(egui::Stroke::new(1.0, egui::Color32::from_rgb(168, 175, 188)))
         .rounding(2.0),
     )
-}
-
-fn parse_decimal_input(raw: &str) -> Option<f64> {
-    let trimmed = raw.trim();
-    if trimmed.is_empty() {
-        return None;
-    }
-    let normalized = if trimmed.contains(',') && !trimmed.contains('.') {
-        trimmed.replace(',', ".")
-    } else {
-        trimmed.to_string()
-    };
-    let val = normalized.parse::<f64>().ok()?;
-    val.is_finite().then_some(val)
 }
 
 fn is_incomplete_numeric_prefix(raw: &str) -> bool {

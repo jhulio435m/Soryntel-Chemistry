@@ -1,3 +1,4 @@
+use crate::excel_grid::parse_decimal_input;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use eframe::egui;
@@ -180,19 +181,19 @@ impl CombinerDataset {
     }
 
     fn sync_from_buffers(&mut self) {
-        if let Ok(t) = self.temp_str.trim().parse::<f64>() {
+        if let Some(t) = parse_decimal_input(&self.temp_str) {
             self.temp_c = t;
         }
         for el in &mut self.elements {
             if let Some(s) = self.mol_bufs.get(&el.symbol) {
-                if let Ok(v) = s.trim().parse::<f64>() {
+                if let Some(v) = parse_decimal_input(&s) {
                     if v > 0.0 {
                         el.molality = v;
                     }
                 }
             }
             if let Some(s) = self.pres_bufs.get(&el.symbol) {
-                if let Ok(v) = s.trim().parse::<f64>() {
+                if let Some(v) = parse_decimal_input(&s) {
                     if v > 0.0 {
                         el.pressure_bar = v;
                     }
@@ -442,6 +443,23 @@ impl EhPhModuleState {
         }
     }
 
+    fn invalid_numeric_input(&self) -> Option<&'static str> {
+        [
+            ("Temperature", self.temp_str.as_str(), false),
+            ("Minimum pH", self.min_ph_str.as_str(), false),
+            ("Maximum pH", self.max_ph_str.as_str(), false),
+            ("Minimum Eh", self.min_eh_str.as_str(), false),
+            ("Maximum Eh", self.max_eh_str.as_str(), false),
+            ("Ionic strength", self.ionic_strength_str.as_str(), false),
+            ("Correction factor", self.correction_factor_str.as_str(), false),
+            ("Dielectric constant", self.dielectric_str.as_str(), true),
+            ("Water Gibbs energy", self.delta_g_h2o_str.as_str(), true),
+        ]
+        .into_iter()
+        .find(|(_, text, optional)| !(*optional && text.trim().is_empty()) && parse_decimal_input(text).is_none())
+        .map(|(name, _, _)| name)
+    }
+
     fn build_request(&self) -> EhPhRequest {
         let selected_species: Vec<ChemicalSpecies> = self
             .candidate_species
@@ -454,16 +472,16 @@ impl EhPhModuleState {
             main_element: self.main_element.clone(),
             species: selected_species,
             t_k: self.t_k(),
-            min_ph: self.min_ph_str.trim().parse().unwrap_or(0.0),
-            max_ph: self.max_ph_str.trim().parse().unwrap_or(14.0),
-            min_eh_v: self.min_eh_str.trim().parse().unwrap_or(-2.0),
-            max_eh_v: self.max_eh_str.trim().parse().unwrap_or(2.0),
+            min_ph: parse_decimal_input(&self.min_ph_str).unwrap_or(0.0),
+            max_ph: parse_decimal_input(&self.max_ph_str).unwrap_or(14.0),
+            min_eh_v: parse_decimal_input(&self.min_eh_str).unwrap_or(-2.0),
+            max_eh_v: parse_decimal_input(&self.max_eh_str).unwrap_or(2.0),
             potential_scale: self.potential_scale,
             criss_cobble: self.criss_cobble,
             use_davies: self.use_davies,
-            ionic_strength: self.ionic_strength_str.trim().parse().unwrap_or(0.0),
-            correction_factor: self.correction_factor_str.trim().parse().unwrap_or(1.0),
-            dielectric_constant: self.dielectric_str.trim().parse().ok(),
+            ionic_strength: parse_decimal_input(&self.ionic_strength_str).unwrap_or(0.0),
+            correction_factor: parse_decimal_input(&self.correction_factor_str).unwrap_or(1.0),
+            dielectric_constant: parse_decimal_input(&self.dielectric_str),
             delta_g_h2o_kcal: self.delta_g_h2o_str.trim().parse().ok(),
             delta_g_overrides_kcal: self.delta_g_overrides_kcal.clone(),
             show_predominance_ions: self.show_predominance_ions,
@@ -503,19 +521,23 @@ impl EhPhModuleState {
     fn draw_current(&mut self, db: &dyn SpeciesCatalogPort) {
         for el in &mut self.selected_elements {
             if let Some(m_buf) = self.elem_mol_bufs.get(&el.symbol) {
-                if let Ok(v) = m_buf.trim().parse::<f64>() {
+                if let Some(v) = parse_decimal_input(&m_buf) {
                     if v > 0.0 {
                         el.molality = v;
                     }
                 }
             }
             if let Some(p_buf) = self.elem_pres_bufs.get(&el.symbol) {
-                if let Ok(v) = p_buf.trim().parse::<f64>() {
+                if let Some(v) = parse_decimal_input(&p_buf) {
                     if v > 0.0 {
                         el.pressure_bar = v;
                     }
                 }
             }
+        }
+        if let Some(field) = self.invalid_numeric_input() {
+            self.status_error = Some(format!("Invalid number: {field}"));
+            return;
         }
         let req = self.build_request();
         match MiscUseCases::calculate_ehph(db, &req) {
@@ -564,6 +586,10 @@ impl EhPhModuleState {
     }
 
     fn draw_combiner(&mut self, db: &dyn SpeciesCatalogPort) {
+        if let Some(field) = self.invalid_numeric_input() {
+            self.status_error = Some(format!("Invalid number: {field}"));
+            return;
+        }
         let cur_syms: BTreeSet<&str> = self
             .selected_elements
             .iter()
@@ -574,12 +600,12 @@ impl EhPhModuleState {
         }
         let mut results: Vec<Result<EhPhResult, String>> =
             Vec::with_capacity(self.combiner_datasets.len());
-        let min_ph = self.min_ph_str.trim().parse().unwrap_or(0.0);
-        let max_ph = self.max_ph_str.trim().parse().unwrap_or(14.0);
-        let min_eh_v = self.min_eh_str.trim().parse().unwrap_or(-2.0);
-        let max_eh_v = self.max_eh_str.trim().parse().unwrap_or(2.0);
-        let ionic_strength = self.ionic_strength_str.trim().parse().unwrap_or(0.0);
-        let correction_factor = self.correction_factor_str.trim().parse().unwrap_or(1.0);
+        let min_ph = parse_decimal_input(&self.min_ph_str).unwrap_or(0.0);
+        let max_ph = parse_decimal_input(&self.max_ph_str).unwrap_or(14.0);
+        let min_eh_v = parse_decimal_input(&self.min_eh_str).unwrap_or(-2.0);
+        let max_eh_v = parse_decimal_input(&self.max_eh_str).unwrap_or(2.0);
+        let ionic_strength = parse_decimal_input(&self.ionic_strength_str).unwrap_or(0.0);
+        let correction_factor = parse_decimal_input(&self.correction_factor_str).unwrap_or(1.0);
 
         for ds in &self.combiner_datasets {
             let mut species = self.query_species_for_elements(db, &ds.elements);
@@ -1386,7 +1412,7 @@ impl EhPhModuleState {
                             egui::TextEdit::singleline(&mut self.temp_str),
                         );
                         if resp.changed() {
-                            if let Ok(v) = self.temp_str.trim().parse::<f64>() {
+                            if let Some(v) = parse_decimal_input(&self.temp_str) {
                                 self.temp_value = v;
                                 self.update_temp_derived(db);
                             }
@@ -1433,7 +1459,7 @@ impl EhPhModuleState {
                                     widget_cell(ui, 112.0, egui::Color32::WHITE, false, |ui| {
                                         let r = ui.text_edit_singleline(m_buf);
                                         if r.changed() || r.lost_focus() {
-                                            if let Ok(v) = m_buf.trim().parse::<f64>() {
+                                            if let Some(v) = parse_decimal_input(&m_buf) {
                                                 if v > 0.0 {
                                                     el.molality = v;
                                                 }
@@ -1447,7 +1473,7 @@ impl EhPhModuleState {
                                     widget_cell(ui, 104.0, egui::Color32::WHITE, false, |ui| {
                                         let r = ui.text_edit_singleline(p_buf);
                                         if r.changed() || r.lost_focus() {
-                                            if let Ok(v) = p_buf.trim().parse::<f64>() {
+                                            if let Some(v) = parse_decimal_input(&p_buf) {
                                                 if v > 0.0 {
                                                     el.pressure_bar = v;
                                                 }
@@ -1932,7 +1958,7 @@ impl EhPhModuleState {
             ui.separator();
             if ui.button("Recalculate Diagram with Table ΔG").clicked() {
                 for (formula, buf) in &self.table_dg_bufs {
-                    if let Ok(v) = buf.trim().parse::<f64>() {
+                    if let Some(v) = parse_decimal_input(&buf) {
                         if let Some(orig) = page
                             .result
                             .table_rows
@@ -2057,7 +2083,7 @@ impl EhPhModuleState {
                     widget_cell(ui, 95.0, dg_bg, false, |ui| {
                         let r = ui.text_edit_singleline(dg_buf);
                         if r.changed() || r.lost_focus() {
-                            if let Ok(v) = dg_buf.trim().parse::<f64>() {
+                            if let Some(v) = parse_decimal_input(&dg_buf) {
                                 if (v - orig_dg).abs() > 1e-3 {
                                     self.delta_g_overrides_kcal
                                         .insert(sp_row.formula.clone(), v);
@@ -2183,7 +2209,7 @@ impl EhPhModuleState {
                                         egui::TextEdit::singleline(&mut ds.temp_str),
                                     );
                                     if r.changed() || r.lost_focus() {
-                                        if let Ok(v) = ds.temp_str.trim().parse::<f64>() {
+                                        if let Some(v) = parse_decimal_input(&ds.temp_str) {
                                             ds.temp_c = v;
                                         }
                                     }
@@ -2208,7 +2234,7 @@ impl EhPhModuleState {
                                                 egui::TextEdit::singleline(m_buf),
                                             );
                                             if rm.changed() || rm.lost_focus() {
-                                                if let Ok(v) = m_buf.trim().parse::<f64>() {
+                                                if let Some(v) = parse_decimal_input(&m_buf) {
                                                     if v > 0.0 {
                                                         el.molality = v;
                                                     }
@@ -2225,7 +2251,7 @@ impl EhPhModuleState {
                                                 egui::TextEdit::singleline(p_buf),
                                             );
                                             if rp.changed() || rp.lost_focus() {
-                                                if let Ok(v) = p_buf.trim().parse::<f64>() {
+                                                if let Some(v) = parse_decimal_input(&p_buf) {
                                                     if v > 0.0 {
                                                         el.pressure_bar = v;
                                                     }
@@ -2332,11 +2358,15 @@ impl EhPhModuleState {
                     outer_rect.max - egui::vec2(margin_r, margin_b),
                 );
 
-                let min_ph: f64 = self.min_ph_str.trim().parse().unwrap_or(0.0);
-                let max_ph: f64 = self.max_ph_str.trim().parse().unwrap_or(14.0);
-                let min_eh: f64 = self.min_eh_str.trim().parse().unwrap_or(-2.0);
-                let max_eh: f64 = self.max_eh_str.trim().parse().unwrap_or(2.0);
+                let min_ph: f64 = parse_decimal_input(&self.min_ph_str).unwrap_or(0.0);
+                let max_ph: f64 = parse_decimal_input(&self.max_ph_str).unwrap_or(14.0);
+                let min_eh: f64 = parse_decimal_input(&self.min_eh_str).unwrap_or(-2.0);
+                let max_eh: f64 = parse_decimal_input(&self.max_eh_str).unwrap_or(2.0);
 
+                if self.invalid_numeric_input().is_some() || max_ph <= min_ph || max_eh <= min_eh {
+                    ui.colored_label(egui::Color32::RED, "Invalid plot limits");
+                    return;
+                }
                 let ph_to_x = |ph: f64| -> f32 {
                     plot_rect.left()
                         + (((ph - min_ph) / (max_ph - min_ph)) as f32) * plot_rect.width()

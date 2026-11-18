@@ -163,3 +163,33 @@ pub fn widget_cell(
     vis.active.rounding = egui::Rounding::ZERO;
     add_contents(&mut child_ui);
 }
+
+/// Parse a finite UI number with a point or a decimal comma.
+pub(crate) fn parse_decimal_input(raw: &str) -> Option<f64> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let normalized = if trimmed.contains(',') && !trimmed.contains('.') {
+        trimmed.replace(',', ".")
+    } else {
+        trimmed.to_string()
+    };
+    let val = normalized.parse::<f64>().ok()?;
+    val.is_finite().then_some(val)
+}
+
+#[cfg(test)]
+mod decimal_input_tests {
+    use super::parse_decimal_input;
+
+    #[test]
+    fn accepts_finite_decimal_inputs_without_grouping() {
+        for input in ["40.5", " 40,5 ", "4,05e1"] {
+            assert_eq!(parse_decimal_input(input), Some(40.5), "{input:?}");
+        }
+        for input in ["", "1,2.3", "1,000,000", "1 000", "NaN", "inf", "1e999", "-"] {
+            assert_eq!(parse_decimal_input(input), None, "{input:?}");
+        }
+    }
+}
