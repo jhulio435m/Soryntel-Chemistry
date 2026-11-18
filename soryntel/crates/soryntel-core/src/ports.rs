@@ -100,6 +100,11 @@ pub trait SpeciesDatabaseAdminPort {
         precedence: MainDbPrecedence,
     ) -> Result<(usize, usize), CatalogError>;
 
+    /// Loads SoryntelDB (`.sdb`) from `path`, replacing the previous SoryntelDB layer.
+    /// While it is loaded the built-in `OpenDefault` species are not used.
+    /// Returns `(unique species, temperature intervals)`.
+    fn load_soryntel_db(&mut self, path: &Path) -> Result<(usize, usize), CatalogError>;
+
     /// Loads `OwnDB` from `path`, replacing in-memory `OwnDB` edits.
     /// Returns `(unique species, binary records)`.
     fn load_own_db(&mut self, path: &Path) -> Result<(usize, usize), CatalogError>;
@@ -268,6 +273,9 @@ pub trait DatabaseLocatorPort {
 
     /// Default `OwnDB` file, if one is available.
     fn default_own_db(&self) -> Option<PathBuf>;
+
+    /// SoryntelDB (`soryntel.sdb`) file to load, if one is configured or available.
+    fn default_soryntel_db(&self) -> Option<PathBuf>;
 }
 
 /// Errors for future fallible catalog operations.

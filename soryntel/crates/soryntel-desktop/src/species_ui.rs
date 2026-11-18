@@ -686,7 +686,7 @@ impl SpeciesModuleState {
                     }
                 });
                 ui.menu_button("Databases", |ui| {
-                    if ui.button("Active Layer: OwnDB > MainDB").clicked() {
+                    if ui.button("Active Layer: OwnDB > MainDB > SoryntelDB").clicked() {
                         self.source_filter = None;
                         self.refresh_search(db);
                         ui.close_menu();
@@ -698,6 +698,11 @@ impl SpeciesModuleState {
                     }
                     if ui.button("Show MainDB Only").clicked() {
                         self.source_filter = Some(DbSource::Main);
+                        self.refresh_search(db);
+                        ui.close_menu();
+                    }
+                    if ui.button("Show SoryntelDB Only").clicked() {
+                        self.source_filter = Some(DbSource::Soryntel);
                         self.refresh_search(db);
                         ui.close_menu();
                     }
@@ -820,6 +825,10 @@ impl SpeciesModuleState {
                 }
                 if ui.selectable_label(self.source_filter == Some(DbSource::Main), "MainDB").clicked() {
                     self.source_filter = Some(DbSource::Main);
+                    changed = true;
+                }
+                if ui.selectable_label(self.source_filter == Some(DbSource::Soryntel), "SoryntelDB").clicked() {
+                    self.source_filter = Some(DbSource::Soryntel);
                     changed = true;
                 }
             });
@@ -974,6 +983,7 @@ impl SpeciesModuleState {
                         let badge = match entry.source {
                             DbSource::Own => "[Own]",
                             DbSource::Main => "[Main]",
+                            DbSource::Soryntel => "[Sdb]",
                             DbSource::OpenDefault => "[Def]",
                         };
                         let label = format!("{}  {}", entry.formula, badge);

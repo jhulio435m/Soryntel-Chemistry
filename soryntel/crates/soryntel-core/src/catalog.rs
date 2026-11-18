@@ -1,7 +1,7 @@
 //! Catalog support types shared by the species-database ports.
 //!
 //! Plain data types (and pure helpers) used by [`crate::ports`] to browse, edit
-//! and administer layered species databases (`OwnDB > MainDB > OpenDefault`).
+//! and administer layered species databases (`OwnDB > MainDB > SoryntelDB > OpenDefault`).
 //! They live in core so the ports do not depend on any adapter crate; the
 //! original paths (`soryntel_thermo::species::*`, `soryntel_db::*`) re-export
 //! them unchanged.
@@ -12,12 +12,18 @@ use std::path::PathBuf;
 
 use crate::species::{ChemicalSpecies, Phase, SpeciesMetadata};
 
-/// Originating database layer (`OwnDB` always takes calculation precedence over `MainDB`).
+/// Originating database layer.
+///
+/// Precedence: `OwnDB > MainDB > SoryntelDB > OpenDefault`; `OpenDefault` only takes part
+/// when no SoryntelDB is loaded. New variants are appended so the serde names of the
+/// existing ones (`"Main"`, `"Own"`, `"OpenDefault"`) stay unchanged.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum DbSource {
     Main,
     Own,
     OpenDefault,
+    /// SoryntelDB (`.sdb`), the base catalog shipped with Soryntel.
+    Soryntel,
 }
 
 impl DbSource {
@@ -26,6 +32,7 @@ impl DbSource {
             Self::Main => "MainDB",
             Self::Own => "OwnDB",
             Self::OpenDefault => "Built-in",
+            Self::Soryntel => "SoryntelDB",
         }
     }
 }
@@ -165,12 +172,17 @@ pub struct ReferenceEntry {
     pub flag: u8,
 }
 
-/// Summary statistics for the active databases (`OwnDB`, `MainDB`, `MainDB6.REF`).
+/// Summary statistics for the active databases (`OwnDB`, `MainDB`, SoryntelDB, `MainDB6.REF`).
 #[derive(Debug, Clone, Default)]
 pub struct DatabaseStatusSummary {
     pub main_path: Option<PathBuf>,
     pub own_path: Option<PathBuf>,
     pub ref_path: Option<PathBuf>,
+    /// Active SoryntelDB (`.sdb`) file.
+    pub soryntel_path: Option<PathBuf>,
+    pub soryntel_unique_species: usize,
+    /// Temperature intervals (equivalent `.HSC` records) held by SoryntelDB.
+    pub soryntel_binary_records: usize,
     pub main_unique_species: usize,
     pub main_binary_records: usize,
     pub own_unique_species: usize,
@@ -224,6 +236,14 @@ mod tests {
             serde_json::to_string(&DbSource::OpenDefault).unwrap(),
             "\"OpenDefault\""
         );
+        for (source, name) in [
+            (DbSource::Main, "\"Main\""),
+            (DbSource::Own, "\"Own\""),
+            (DbSource::Soryntel, "\"Soryntel\""),
+        ] {
+            assert_eq!(serde_json::to_string(&source).unwrap(), name);
+            assert_eq!(serde_json::from_str::<DbSource>(name).unwrap(), source);
+        }
         assert_eq!(
             serde_json::to_string(&KeywordSearchField::CasNumber).unwrap(),
             "\"CasNumber\""

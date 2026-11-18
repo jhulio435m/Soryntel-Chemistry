@@ -31,6 +31,10 @@ impl SpeciesDatabaseAdminPort for ThermoDatabase {
         }
     }
 
+    fn load_soryntel_db(&mut self, path: &Path) -> Result<(usize, usize), CatalogError> {
+        ThermoDatabase::load_soryntel_db(self, path)
+    }
+
     fn load_own_db(&mut self, path: &Path) -> Result<(usize, usize), CatalogError> {
         self.load_own_hsc(path).map_err(to_catalog_error)
     }
