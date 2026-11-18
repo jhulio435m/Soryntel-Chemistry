@@ -420,3 +420,26 @@ fn b10_evaluate_workbook_clears_stale_values_of_missing_species() {
     assert_eq!(sp.heat_content, 0.0, "heat_content obsoleto = {}", sp.heat_content);
     assert_eq!(wb.summaries[0].in_totals.kg, 0.0, "kg obsoletos en el total");
 }
+
+// ---------------------------------------------------------------------------
+// B15 — Heat Loss: calculation_grid sin límite superior (.htr8 o UI)
+// ---------------------------------------------------------------------------
+
+#[test]
+#[ignore = "BUG-B15: calculation_grid sin cota provoca 'capacity overflow' (o agota la memoria) en evaluate_solid_layer"]
+fn b15_heat_loss_rejects_unbounded_calculation_grid() {
+    use soryntel_thermo::heat_loss::{model::ColumnType, presets, solve_workbook};
+    let mut wb = presets::preset_simple_case();
+    let col = wb.sheets[0]
+        .columns
+        .iter_mut()
+        .find(|c| c.column_type == ColumnType::SolidLayer)
+        .expect("capa sólida en el preset");
+    col.calculation_grid = usize::MAX / 8;
+    let r = std::panic::catch_unwind(|| solve_workbook(&wb));
+    match r {
+        Ok(Err(_)) => {}
+        Ok(Ok(_)) => panic!("se esperaba un error de validación"),
+        Err(_) => panic!("solve_workbook entró en pánico (capacity overflow)"),
+    }
+}
