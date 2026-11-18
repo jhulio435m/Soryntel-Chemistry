@@ -174,6 +174,8 @@ pub struct SpeciesConverterModuleState {
     show_charts: bool,
     show_element_balance: bool,
     status_msg: Option<String>,
+    /// Archivo del libro abierto o guardado por última vez.
+    workbook_path: Option<std::path::PathBuf>,
 }
 
 impl SpeciesConverterModuleState {
@@ -194,6 +196,7 @@ impl SpeciesConverterModuleState {
             show_charts: true,
             show_element_balance: false,
             status_msg: None,
+            workbook_path: None,
         };
         s.solve_active(catalog);
         s
@@ -333,28 +336,58 @@ impl SpeciesConverterModuleState {
         self.solve_active(catalog);
     }
 
+    /// Guarda el libro donde elija el usuario (diálogo nativo, con confirmación al sobrescribir).
     fn save_workbook(&mut self) {
-        let path = "/home/nando/.gemini/antigravity/scratch/species_converter_workbook.json";
-        if let Some(parent) = std::path::Path::new(path).parent() {
-            let _ = std::fs::create_dir_all(parent);
+        let suggested = self
+            .workbook_path
+            .as_ref()
+            .and_then(|p| p.file_name())
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "species_converter.json".into());
+        if let Some(path) = crate::storage::choose_file(
+            true,
+            "Guardar libro de Species Converter",
+            "json",
+            &suggested,
+            self.workbook_path.as_deref(),
+        ) {
+            self.save_workbook_to(&path);
         }
+    }
+
+    fn open_workbook(&mut self) {
+        if let Some(path) = crate::storage::choose_file(
+            false,
+            "Abrir libro de Species Converter",
+            "json",
+            "",
+            self.workbook_path.as_deref(),
+        ) {
+            self.open_workbook_from(&path);
+        }
+    }
+
+    fn save_workbook_to(&mut self, path: &std::path::Path) {
         match serde_json::to_string_pretty(&self.sheets) {
             Ok(json) => match crate::storage::write_atomic(path, json) {
-                Ok(_) => self.status_msg = Some(format!("Saved workbook to {path}")),
+                Ok(_) => {
+                    self.workbook_path = Some(path.to_path_buf());
+                    self.status_msg = Some(format!("Saved workbook to {}", path.display()));
+                }
                 Err(e) => self.status_msg = Some(format!("Save error: {e}")),
             },
             Err(e) => self.status_msg = Some(format!("Serialize error: {e}")),
         }
     }
 
-    fn open_workbook(&mut self) {
-        let path = "/home/nando/.gemini/antigravity/scratch/species_converter_workbook.json";
+    fn open_workbook_from(&mut self, path: &std::path::Path) {
         match std::fs::read_to_string(path) {
             Ok(json) => match serde_json::from_str::<Vec<ConverterSheet>>(&json) {
                 Ok(loaded) if !loaded.is_empty() => {
                     self.sheets = loaded;
                     self.active_sheet = 0;
-                    self.status_msg = Some(format!("Loaded workbook from {path}"));
+                    self.workbook_path = Some(path.to_path_buf());
+                    self.status_msg = Some(format!("Loaded workbook from {}", path.display()));
                 }
                 Ok(_) => self.status_msg = Some("Workbook file is empty.".into()),
                 Err(e) => self.status_msg = Some(format!("Parse error: {e}")),
@@ -1111,5 +1144,23 @@ mod bug_repro_area_c {
         st.sheets[idx].outputs[0].weight_str = "x".into();
         st.sheets[idx].inputs[0].wt_pct_str = "12,5".into();
         assert!(st.build_request(&st.sheets[idx]).is_err());
+    }
+
+    #[test]
+    fn workbook_save_and_open_use_the_chosen_path() {
+        let db = ThermoDatabase::with_open_defaults();
+        let mut st = SpeciesConverterModuleState::new(&db);
+        let dir = std::env::temp_dir().join(format!("soryntel-c14-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("libro con espacios ñ.json");
+        st.save_workbook_to(&path);
+        assert!(path.is_file(), "{:?}", st.status_msg);
+        let n = st.sheets.len();
+        st.sheets.truncate(1);
+        st.open_workbook_from(&path);
+        assert_eq!(st.sheets.len(), n);
+        assert_eq!(st.workbook_path.as_deref(), Some(path.as_path()));
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(!include_str!("species_converter_ui.rs").contains(concat!("/home/", "nando")));
     }
 }

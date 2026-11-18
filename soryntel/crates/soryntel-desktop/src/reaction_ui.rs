@@ -17,7 +17,6 @@ use soryntel_application::models::reaction::{
     ReactionYAxis,
 };
 
-const DEFAULT_REA8_PATH: &str = "soryntel_reaction.rea8";
 const DEFAULT_SVG_PATH: &str = "soryntel_reaction_chart.svg";
 
 const SERIES_PALETTE: [egui::Color32; 6] = [
@@ -109,7 +108,7 @@ impl ReactionModuleState {
             show_help_modal: false,
             show_file_modal: false,
             file_modal_is_save: true,
-            file_path_buf: crate::ui_common::temp_file_path(DEFAULT_REA8_PATH),
+            file_path_buf: String::new(),
             request_open_browser: false,
             plot_reset_counter: 0,
             results_stale: false,
@@ -380,7 +379,7 @@ impl ReactionModuleState {
             t!("reaction.open")
         };
         if let Some(path) =
-            crate::reaction_actions::choose_file(save, &title, "rea8", "reacciones.rea8")
+            crate::reaction_actions::choose_file(save, &title, "rea8", "reacciones.rea8", Some(std::path::Path::new(&self.file_path_buf)))
         {
             self.file_path_buf = path.to_string_lossy().into_owned();
             let path = self.file_path_buf.clone();
@@ -404,6 +403,7 @@ impl ReactionModuleState {
             &title,
             extension,
             &format!("reacciones.{extension}"),
+            Some(std::path::Path::new(&self.file_path_buf)),
         ) else {
             return;
         };
@@ -599,13 +599,11 @@ impl ReactionModuleState {
                 ui.menu_button(t!("common.020"), |ui| {
                     if ui.button(t!("review.000")).clicked() {
                         self.file_modal_is_save = false;
-                        self.file_path_buf = crate::ui_common::temp_file_path(DEFAULT_REA8_PATH);
                         self.show_file_modal = true;
                         ui.close_menu();
                     }
                     if ui.button(t!("review.001")).clicked() {
                         self.file_modal_is_save = true;
-                        self.file_path_buf = crate::ui_common::temp_file_path(DEFAULT_REA8_PATH);
                         self.show_file_modal = true;
                         ui.close_menu();
                     }
@@ -846,7 +844,6 @@ impl ReactionModuleState {
                         .clicked()
                     {
                         self.file_modal_is_save = false;
-                        self.file_path_buf = crate::ui_common::temp_file_path(DEFAULT_REA8_PATH);
                         self.show_file_modal = true;
                     }
                     if ui
