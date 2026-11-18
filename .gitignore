@@ -1,7 +1,10 @@
 target/
 build/
 bin/
+!soryntel/crates/*/src/bin/
 *.db
+# SoryntelDB generada: los datos nunca entran en el repo.
+*.sdb
 01-*
 02-*
 03-*
