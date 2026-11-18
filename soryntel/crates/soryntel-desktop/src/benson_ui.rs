@@ -1176,7 +1176,11 @@ impl BensonModuleState {
     }
 
     fn export_csv_report(&mut self) {
-        let path = "/tmp/soryntel_benson_report.csv";
+        let Some(chosen) = crate::storage::choose_file(true, "Exportar informe Benson", "csv", "benson_report.csv", None) else {
+            return;
+        };
+        let path = chosen.to_string_lossy().into_owned();
+        let path = path.as_str();
         let content = self.format_clipboard_text();
         match crate::storage::write_atomic(path, content) {
             Ok(_) => {
@@ -1190,7 +1194,11 @@ impl BensonModuleState {
     }
 
     fn save_svg_snapshot(&mut self) {
-        let path = "/tmp/soryntel_benson_molecule.svg";
+        let Some(chosen) = crate::storage::choose_file(true, "Guardar imagen de la molécula", "svg", "benson_molecule.svg", None) else {
+            return;
+        };
+        let path = chosen.to_string_lossy().into_owned();
+        let path = path.as_str();
         let mut svg = String::from("<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"640\" height=\"480\" viewBox=\"-6 -4.5 12 9\">\n<rect x=\"-6\" y=\"-4.5\" width=\"12\" height=\"9\" fill=\"#181a1e\"/>\n");
         for b in &self.molecule.bonds {
             let p1 = rotate_point(self.molecule.atoms[b.a].pos, self.yaw, self.pitch);

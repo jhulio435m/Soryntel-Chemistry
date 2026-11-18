@@ -363,10 +363,20 @@ impl MassBalanceWindowState {
         self.text_modal_buf = content;
     }
 
-    fn export_xlsx_to_tmp(&mut self) {
+    fn export_xlsx_dialog(&mut self) {
         match SimulationUseCases::mb_export_xlsx(&self.workbook) {
             Ok(bytes) => {
-                let path = "/tmp/soryntel_mass_balance_results.xlsx";
+                let Some(chosen) = crate::storage::choose_file(
+                    true,
+                    "Exportar resultados de Mass Balance",
+                    "xlsx",
+                    "mass_balance_results.xlsx",
+                    None,
+                ) else {
+                    return;
+                };
+                let path = chosen.to_string_lossy().into_owned();
+                let path = path.as_str();
                 match crate::storage::write_atomic(path, &bytes) {
                     Ok(_) => {
                         self.status_banner = format!(
@@ -1343,7 +1353,7 @@ fn render_upper_ribbon(
                                         },
                                     );
                                     if rbtn(ui, "Export to\nExcel (.xlsx)", false).clicked() {
-                                        state.export_xlsx_to_tmp();
+                                        state.export_xlsx_dialog();
                                     }
                                     if rbtn(ui, "Save Stream\nAs...", false).clicked() {
                                         let tsv = state.workbook.export_summary_tsv();

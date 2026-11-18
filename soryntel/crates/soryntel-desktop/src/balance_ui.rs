@@ -18,8 +18,6 @@ use soryntel_application::models::balance::{
     TargetRow,
 };
 
-const DEFAULT_BAL8_PATH: &str = "/tmp/soryntel_balance.bal8";
-const DEFAULT_BAL_XLSX_PATH: &str = "/tmp/soryntel_balance_workbook.xlsx";
 
 #[derive(Clone, PartialEq, Eq)]
 pub enum ActiveSheetTab {
@@ -144,7 +142,7 @@ impl BalanceModuleState {
             hf_t_room_c: 25.0,
             show_file_modal: false,
             file_modal_is_save: true,
-            file_path_buf: DEFAULT_BAL8_PATH.to_string(),
+            file_path_buf: String::new(),
             show_add_species: false,
             add_to_out: false,
             add_species_query: String::new(),
@@ -259,6 +257,15 @@ impl BalanceModuleState {
         }
     }
 
+    /// Exporta a .xlsx en la ruta que elija el usuario.
+    fn choose_export_xlsx(&mut self) {
+        let current = std::path::PathBuf::from(&self.file_path_buf);
+        let suggested = crate::storage::suggested_file_name(&self.wb.title, "xlsx");
+        if let Some(path) = crate::storage::choose_file(true, "Exportar a Excel", "xlsx", &suggested, Some(&current)) {
+            self.export_xlsx(&path.to_string_lossy());
+        }
+    }
+
     pub fn export_xlsx(&mut self, path: &str) {
         let bytes = BalanceUseCases::export_balance_workbook_xlsx(&self.wb);
         match crate::storage::write_atomic(path, bytes) {
@@ -368,18 +375,16 @@ impl BalanceModuleState {
                 ui.menu_button(crate::i18n::text("common.020"), |ui| {
                     if ui.button(crate::i18n::text("review.104")).clicked() {
                         self.file_modal_is_save = false;
-                        self.file_path_buf = DEFAULT_BAL8_PATH.to_string();
                         self.show_file_modal = true;
                         ui.close_menu();
                     }
                     if ui.button(crate::i18n::text("review.105")).clicked() {
                         self.file_modal_is_save = true;
-                        self.file_path_buf = DEFAULT_BAL8_PATH.to_string();
                         self.show_file_modal = true;
                         ui.close_menu();
                     }
                     if ui.button(crate::i18n::text("common.038")).clicked() {
-                        self.export_xlsx(DEFAULT_BAL_XLSX_PATH);
+                        self.choose_export_xlsx();
                         ui.close_menu();
                     }
                     ui.separator();
@@ -641,14 +646,15 @@ impl BalanceModuleState {
                     .on_hover_text("Guardar workbook en .bal8")
                     .clicked()
                 {
-                    self.save_bal8(DEFAULT_BAL8_PATH);
+                    self.file_modal_is_save = true;
+                    self.show_file_modal = true;
                 }
                 if ui
                     .small_button("📊 Excel .xlsx")
                     .on_hover_text("Exportar todas las hojas a MS Excel (.xlsx)")
                     .clicked()
                 {
-                    self.export_xlsx(DEFAULT_BAL_XLSX_PATH);
+                    self.choose_export_xlsx();
                 }
                 ui.separator();
                 if ui
@@ -2570,7 +2576,7 @@ impl BalanceModuleState {
                                             .on_hover_text("Exportar datos del diagrama")
                                             .clicked()
                                         {
-                                            self.export_xlsx(DEFAULT_BAL_XLSX_PATH);
+                                            self.choose_export_xlsx();
                                         }
                                         if ui
                                             .button("📋")
@@ -2761,43 +2767,24 @@ impl BalanceModuleState {
             self.show_heat_flow_modal = open;
         }
 
-        // 6. File Save / Open Modal (.bal8)
+        // 6. File Save / Open (.bal8): diálogo nativo con confirmación al sobrescribir.
         if self.show_file_modal {
-            let mut open = self.show_file_modal;
-            let title = if self.file_modal_is_save {
-                "💾 Save Workbook As (.bal8)"
-            } else {
-                "📂 Open Workbook (.bal8)"
-            };
-            let mut do_save = false;
-            let mut do_open = false;
-            egui::Window::new(title)
-                .open(&mut open)
-                .collapsible(false)
-                .default_width(440.0)
-                .show(ctx, |ui| {
-                    ui.label(crate::i18n::text("review.138"));
-                    ui.text_edit_singleline(&mut self.file_path_buf);
-                    ui.add_space(6.0);
-                    if self.file_modal_is_save {
-                        if ui.button(crate::i18n::text("common.014")).clicked() {
-                            do_save = true;
-                        }
-                    } else if ui.button(crate::i18n::text("common.009")).clicked() {
-                        do_open = true;
-                    }
-                });
-            if do_save {
-                let p = self.file_path_buf.clone();
-                self.save_bal8(&p);
-                open = false;
+            self.show_file_modal = false;
+            let save = self.file_modal_is_save;
+            let title = if save { "Guardar libro (.bal8)" } else { "Abrir libro (.bal8)" };
+            let current = std::path::PathBuf::from(&self.file_path_buf);
+            let suggested = crate::storage::suggested_file_name(&self.wb.title, "bal8");
+            if let Some(path) = crate::storage::choose_file(save, title, "bal8", &suggested, Some(&current)) {
+                let p = path.to_string_lossy().into_owned();
+                if save {
+                    self.save_bal8(&p);
+                } else {
+                    self.load_bal8(&p, db);
+                }
+                if self.status_ok {
+                    self.file_path_buf = p;
+                }
             }
-            if do_open {
-                let p = self.file_path_buf.clone();
-                self.load_bal8(&p, db);
-                open = false;
-            }
-            self.show_file_modal = open;
         }
 
         // 7. Add Species to Stream Modal

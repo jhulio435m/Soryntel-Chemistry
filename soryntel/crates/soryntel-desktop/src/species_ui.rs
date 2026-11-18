@@ -219,17 +219,18 @@ impl SpeciesModuleState {
             .main_path
             .as_ref()
             .map(|p| p.display().to_string())
-            .unwrap_or_else(|| "/home/nando/Descargas/HSC6/Databases/Maindb6.HSC".into());
+            .unwrap_or_default();
         let default_own = summary
             .own_path
-            .as_ref()
+            .clone()
+            .or_else(crate::composition::default_own_db_path)
             .map(|p| p.display().to_string())
-            .unwrap_or_else(|| crate::ui_common::temp_file_path("soryntel_owndb6.HSC"));
+            .unwrap_or_default();
         let default_ref = summary
             .ref_path
             .as_ref()
             .map(|p| p.display().to_string())
-            .unwrap_or_else(|| "/home/nando/Descargas/HSC6/Databases/MainDB6.REF".into());
+            .unwrap_or_default();
 
         let mut st = Self {
             active_tab: SpeciesViewTab::Browser,
@@ -294,16 +295,16 @@ impl SpeciesModuleState {
             gibbs_normal_out: None,
 
             main_path_input: default_main,
-            own_path_input: default_own,
+            own_path_input: default_own.clone(),
             ref_path_input: default_ref,
-            merge_src_path: crate::ui_common::temp_file_path("hsc_src.HSC"),
-            merge_dst_path: crate::ui_common::temp_file_path("soryntel_owndb6.HSC"),
+            merge_src_path: String::new(),
+            merge_dst_path: default_own.clone(),
             merge_show_duplicates: true,
             merge_conflicts: Vec::new(),
             merge_decisions: BTreeMap::new(),
-            legacy_src_path: "/home/nando/Descargas/HSC6/Databases/MAINDB3.HSC".into(),
-            legacy_dst_path: crate::ui_common::temp_file_path("maindb3_upgraded.HSC"),
-            csv_io_path: crate::ui_common::temp_file_path("soryntel_species_export.csv"),
+            legacy_src_path: String::new(),
+            legacy_dst_path: String::new(),
+            csv_io_path: String::new(),
             ref_search_query: String::new(),
 
             status_msg: format!(
@@ -567,6 +568,21 @@ impl SpeciesModuleState {
         );
     }
 
+    fn choose_and_export_csv(&mut self, db: &dyn SpeciesWorkspacePort) {
+        let current = Some(std::path::PathBuf::from(&self.csv_io_path)).filter(|p| p.is_absolute());
+        let Some(path) = crate::storage::choose_file(true, "Exportar especies a CSV", "csv", "species.csv", current.as_deref()) else {
+            return;
+        };
+        let csv = CatalogUseCases::export_csv(db, self.source_filter);
+        match crate::storage::write_atomic(&path, csv) {
+            Ok(_) => {
+                self.csv_io_path = path.to_string_lossy().into_owned();
+                self.set_status(format!("Exported CSV -> {}", path.display()), false);
+            }
+            Err(e) => self.set_status(format!("CSV write failed: {e}"), true),
+        }
+    }
+
     /// Main UI entry point. Returns optional formula imported for Reaction Equations module.
     pub fn ui(&mut self, ctx: &egui::Context, db: &mut dyn SpeciesWorkspacePort) -> Option<String> {
         if self.results_dirty {
@@ -622,11 +638,7 @@ impl SpeciesModuleState {
                         ui.close_menu();
                     }
                     if ui.button("Export Resolved View -> CSV").clicked() {
-                        let csv = CatalogUseCases::export_csv(db, self.source_filter);
-                        match crate::storage::write_atomic(&self.csv_io_path, csv) {
-                            Ok(_) => self.set_status(format!("Exported CSV -> {}", self.csv_io_path), false),
-                            Err(e) => self.set_status(format!("CSV write failed: {e}"), true),
-                        }
+                        self.choose_and_export_csv(db);
                         ui.close_menu();
                     }
                 });
@@ -2026,16 +2038,19 @@ impl SpeciesModuleState {
                 ui.end_row();
 
                 ui.label("CSV Interchange:");
-                ui.add(egui::TextEdit::singleline(&mut self.csv_io_path).desired_width(300.0));
+                ui.label(&self.csv_io_path);
                 ui.horizontal(|ui| {
                     if ui.button(crate::i18n::text("common.031")).clicked() {
-                        let csv = CatalogUseCases::export_csv(db, self.source_filter);
-                        match crate::storage::write_atomic(&self.csv_io_path, csv) {
-                            Ok(_) => self.set_status(format!("CSV saved -> {}", self.csv_io_path), false),
-                            Err(e) => self.set_status(format!("{e}"), true),
-                        }
+                        self.choose_and_export_csv(db);
                     }
-                    if ui.button("Import CSV -> OwnDB").clicked() {
+                    let current = Some(std::path::PathBuf::from(&self.csv_io_path)).filter(|p| p.is_absolute());
+                    let picked = ui
+                        .button("Import CSV -> OwnDB")
+                        .clicked()
+                        .then(|| crate::storage::choose_file(false, "Importar CSV en OwnDB", "csv", "", current.as_deref()))
+                        .flatten();
+                    if let Some(path) = picked {
+                        self.csv_io_path = path.to_string_lossy().into_owned();
                         match CatalogUseCases::import_csv_file_into_own(db, &self.csv_io_path) {
                             Ok(n) => {
                                 self.refresh_search(db);

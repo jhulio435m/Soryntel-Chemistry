@@ -4,7 +4,6 @@ use crate::excel_grid::{
     col_letter, header_cell, row_num_cell, text_cell, widget_cell, EXCEL_GRID_BORDER,
     EXCEL_HEADER_BORDER, EXCEL_READONLY_BG,
 };
-use crate::ui_common::temp_file_path;
 use eframe::egui;
 use egui_plot::{Bar, BarChart, Legend, Line, Plot, PlotPoints, Points};
 use serde::{Deserialize, Serialize};
@@ -205,7 +204,7 @@ impl EstimateModuleState {
             cp_target_row: 0,
             db_review: DbReviewDraft::default(),
             own_db_path,
-            sheet_file_path: temp_file_path("soryntel_estimate_sheet.est8"),
+            sheet_file_path: String::new(),
             show_file_io_modal: false,
             file_io_save_mode: true,
             show_help_modal: false,
@@ -2750,50 +2749,36 @@ impl EstimateModuleState {
         }
     }
 
-    fn render_file_io_modal(&mut self, ctx: &egui::Context, db: &dyn SpeciesWorkspacePort) {
-        let mut open = self.show_file_io_modal;
-        let mut close_now = false;
-        let title = if self.file_io_save_mode {
-            "Save Estimate Sheet"
-        } else {
-            "Open Estimate Sheet"
+    /// Abrir o guardar la hoja con el diálogo nativo (confirma la sobrescritura al guardar).
+    fn render_file_io_modal(&mut self, _ctx: &egui::Context, db: &dyn SpeciesWorkspacePort) {
+        if !self.show_file_io_modal {
+            return;
+        }
+        self.show_file_io_modal = false;
+        let save = self.file_io_save_mode;
+        let title = if save { "Guardar hoja Estimate (.est8 / .tsv / .csv)" } else { "Abrir hoja Estimate" };
+        let current = Some(std::path::PathBuf::from(&self.sheet_file_path)).filter(|p| p.is_absolute());
+        let Some(path) = crate::storage::choose_file(save, title, "est8", "estimate.est8", current.as_deref()) else {
+            return;
         };
-        egui::Window::new(title)
-            .open(&mut open)
-            .collapsible(false)
-            .show(ctx, |ui| {
-                ui.horizontal(|ui| {
-                    ui.label("Path:");
-                    ui.add(egui::TextEdit::singleline(&mut self.sheet_file_path).desired_width(360.0));
-                });
-                ui.horizontal(|ui| {
-                    let action_lbl = if self.file_io_save_mode { "Save" } else { "Open" };
-                    if ui.button(action_lbl).clicked() {
-                        let p = self.sheet_file_path.clone();
-                        if self.file_io_save_mode {
-                            match self.save_sheet_to_path(&p) {
-                                Ok(n) => {
-                                    self.status_msg = format!("Hoja guardada ({n} especies) -> {p}");
-                                    close_now = true;
-                                }
-                                Err(e) => self.status_msg = format!("Error guardando hoja: {e}"),
-                            }
-                        } else {
-                            match self.load_sheet_from_path(&p, db) {
-                                Ok(n) => {
-                                    self.status_msg = format!("Hoja abierta ({n} especies) <- {p}");
-                                    close_now = true;
-                                }
-                                Err(e) => self.status_msg = format!("Error abriendo hoja: {e}"),
-                            }
-                        }
-                    }
-                    if ui.button(crate::i18n::text("common.000")).clicked() {
-                        close_now = true;
-                    }
-                });
-            });
-        self.show_file_io_modal = open && !close_now;
+        let p = path.to_string_lossy().into_owned();
+        if save {
+            match self.save_sheet_to_path(&p) {
+                Ok(n) => {
+                    self.status_msg = format!("Hoja guardada ({n} especies) -> {p}");
+                    self.sheet_file_path = p;
+                }
+                Err(e) => self.status_msg = format!("Error guardando hoja: {e}"),
+            }
+        } else {
+            match self.load_sheet_from_path(&p, db) {
+                Ok(n) => {
+                    self.status_msg = format!("Hoja abierta ({n} especies) <- {p}");
+                    self.sheet_file_path = p;
+                }
+                Err(e) => self.status_msg = format!("Error abriendo hoja: {e}"),
+            }
+        }
     }
 }
 
@@ -2840,6 +2825,7 @@ fn series_palette_color(idx: usize) -> egui::Color32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ui_common::temp_file_path;
     use soryntel_db::ThermoDatabase;
     use soryntel_core::SpeciesRepository;
     use soryntel_application::use_cases::MiscUseCases;

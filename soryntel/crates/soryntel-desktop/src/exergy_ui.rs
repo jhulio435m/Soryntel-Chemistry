@@ -124,6 +124,42 @@ impl ExergyModuleState {
         self.energy_unit.label()
     }
 
+    fn open_exe8(&mut self, path: &std::path::Path, db: &dyn SpeciesCatalogPort) {
+        match std::fs::read_to_string(path)
+            .map_err(|e| e.to_string())
+            .and_then(|raw| ExergyWorkbook::from_exe8_str(&raw))
+        {
+            Ok(mut wb) => {
+                MiscUseCases::calculate_exergy(db, &mut wb);
+                self.selected_stream = if wb.streams.is_empty() { None } else { Some(0) };
+                self.wb = wb;
+                self.selected_species = None;
+                self.sync_input_buffers();
+                self.file_path_input = path.to_string_lossy().into_owned();
+                self.status_msg = format!("Cargado '{}'", path.display());
+            }
+            Err(e) => {
+                self.status_msg = format!("Error al abrir: {e}");
+            }
+        }
+    }
+
+    fn save_exe8(&mut self, path: &std::path::Path) {
+        match self
+            .wb
+            .to_exe8_json()
+            .and_then(|j| crate::storage::write_atomic(path, j).map_err(|e| e.to_string()))
+        {
+            Ok(()) => {
+                self.file_path_input = path.to_string_lossy().into_owned();
+                self.status_msg = format!("Guardado '{}'", path.display());
+            }
+            Err(e) => {
+                self.status_msg = format!("Error al guardar: {e}");
+            }
+        }
+    }
+
     fn fmt_temp(&self, k: f64) -> f64 {
         match self.temp_unit {
             TemperatureUnit::Kelvin => k,
@@ -192,44 +228,24 @@ impl ExergyModuleState {
                             ui.close_menu();
                         }
                         ui.separator();
-                        ui.horizontal(|ui| {
-                            ui.label(crate::i18n::text("common.064"));
-                            ui.add(
-                                egui::TextEdit::singleline(&mut self.file_path_input)
-                                    .desired_width(140.0),
-                            );
-                        });
                         if ui.button("Open (.exe8)...").clicked() {
-                            match std::fs::read_to_string(&self.file_path_input)
-                                .map_err(|e| e.to_string())
-                                .and_then(|raw| ExergyWorkbook::from_exe8_str(&raw))
-                            {
-                                Ok(mut wb) => {
-                                    MiscUseCases::calculate_exergy(db, &mut wb);
-                                    self.wb = wb;
-                                    self.selected_stream = Some(0);
-                                    self.selected_species = None;
-                                    self.sync_input_buffers();
-                                    self.status_msg =
-                                        format!("Cargado '{}'", self.file_path_input);
-                                }
-                                Err(e) => {
-                                    self.status_msg = format!("Error al abrir: {e}");
-                                }
+                            let current = Some(std::path::PathBuf::from(&self.file_path_input))
+                                .filter(|p| p.is_absolute());
+                            if let Some(path) = crate::storage::choose_file(false, "Abrir libro (.exe8)", "exe8", "", current.as_deref()) {
+                                self.open_exe8(&path, db);
                             }
                             ui.close_menu();
                         }
                         if ui.button("Save (.exe8)...").clicked() {
-                            match self.wb.to_exe8_json().and_then(|j| {
-                                crate::storage::write_atomic(&self.file_path_input, j).map_err(|e| e.to_string())
-                            }) {
-                                Ok(()) => {
-                                    self.status_msg =
-                                        format!("Guardado '{}'", self.file_path_input);
-                                }
-                                Err(e) => {
-                                    self.status_msg = format!("Error al guardar: {e}");
-                                }
+                            let current = Some(std::path::PathBuf::from(&self.file_path_input))
+                                .filter(|p| p.is_absolute());
+                            let name = std::path::Path::new(&self.file_path_input)
+                                .file_name()
+                                .map(|n| n.to_string_lossy().into_owned())
+                                .unwrap_or_default();
+                            let suggested = crate::storage::suggested_file_name(&name, "exe8");
+                            if let Some(path) = crate::storage::choose_file(true, "Guardar libro (.exe8)", "exe8", &suggested, current.as_deref()) {
+                                self.save_exe8(&path);
                             }
                             ui.close_menu();
                         }
@@ -1271,5 +1287,31 @@ impl ExergyModuleState {
                 self.status_msg = format!("Insertado '{formula}' desde Maindb6");
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use soryntel_db::ThermoDatabase;
+
+    #[test]
+    fn exe8_save_and_open_use_the_chosen_absolute_path() {
+        let db = ThermoDatabase::with_open_defaults();
+        let mut st = ExergyModuleState::new(&db);
+        let dir = std::env::temp_dir().join(format!("soryntel-c23-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("exergía 1.exe8");
+        st.save_exe8(&path);
+        assert!(path.is_file(), "{}", st.status_msg);
+        assert_eq!(st.file_path_input, path.to_string_lossy());
+        let n = st.wb.streams.len();
+        st.open_exe8(&path, &db);
+        assert_eq!(st.wb.streams.len(), n);
+        std::fs::write(&path, "basura").unwrap();
+        st.open_exe8(&path, &db);
+        assert!(st.status_msg.starts_with("Error"));
+        assert_eq!(st.wb.streams.len(), n);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

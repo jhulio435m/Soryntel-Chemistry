@@ -144,6 +144,30 @@ mod tests {
         assert!(result.is_ok(), "{result:?}");
     }
 
+    /// C14/C21/C23: ningún módulo del área C escribe en rutas fijas (`/tmp`, `/home/...`).
+    #[test]
+    fn area_c_modules_have_no_hardcoded_output_paths() {
+        let sources = [
+            ("balance_ui.rs", include_str!("balance_ui.rs")),
+            ("benson_ui.rs", include_str!("benson_ui.rs")),
+            ("elements_ui.rs", include_str!("elements_ui.rs")),
+            ("equilibrium_ui.rs", include_str!("equilibrium_ui.rs")),
+            ("estimate_ui.rs", include_str!("estimate_ui.rs")),
+            ("exergy_ui.rs", include_str!("exergy_ui.rs")),
+            ("heat_loss_ui.rs", include_str!("heat_loss_ui.rs")),
+            ("mass_balance_ui.rs", include_str!("mass_balance_ui.rs")),
+            ("reaction_ui.rs", include_str!("reaction_ui.rs")),
+            ("species_converter_ui.rs", include_str!("species_converter_ui.rs")),
+            ("species_ui.rs", include_str!("species_ui.rs")),
+        ];
+        for (name, source) in sources {
+            let production = source.split("#[cfg(test)]").next().unwrap();
+            for needle in [concat!("\"/", "tmp/"), concat!("\"/home", "/")] {
+                assert!(!production.contains(needle), "{name} contiene la ruta fija {needle}");
+            }
+        }
+    }
+
     #[test]
     fn dialog_paths_are_absolute_and_never_temporary() {
         if let Some(dir) = user_documents_dir() {

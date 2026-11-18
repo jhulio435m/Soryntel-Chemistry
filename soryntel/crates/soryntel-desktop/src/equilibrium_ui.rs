@@ -1039,6 +1039,83 @@ impl EquilibriumUiState {
         self.file_status_msg = Some("Updated species records from database.".to_string());
     }
 
+    fn current_gem9_file(&self) -> Option<std::path::PathBuf> {
+        Some(std::path::PathBuf::from(&self.file_path_input)).filter(|p| p.is_absolute())
+    }
+
+    fn suggested_gem9_name(&self) -> String {
+        let name = std::path::Path::new(&self.file_path_input)
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        crate::storage::suggested_file_name(&name, "gem9")
+    }
+
+    fn choose_and_open_gem9(&mut self) {
+        let current = self.current_gem9_file();
+        if let Some(path) = crate::storage::choose_file(false, "Abrir libro (.gem9)", "gem9", "", current.as_deref()) {
+            self.open_gem9(&path);
+        }
+    }
+
+    /// Guardar como: diálogo nativo con confirmación al sobrescribir; nunca una ruta relativa.
+    fn choose_and_save_gem9(&mut self) {
+        let current = self.current_gem9_file();
+        let suggested = self.suggested_gem9_name();
+        if let Some(path) = crate::storage::choose_file(true, "Guardar libro (.gem9)", "gem9", &suggested, current.as_deref()) {
+            self.save_gem9(&path);
+        }
+    }
+
+    /// Abre un `.gem9`. Si falla, el libro abierto queda intacto; si va bien, se reinicia el
+    /// estado que dependía del libro anterior (resultados, especies ocultas, cachés y selección).
+    fn open_gem9(&mut self, path: &std::path::Path) {
+        match std::fs::read_to_string(path)
+            .map_err(|e| e.to_string())
+            .and_then(|s| EquilibriumWorkbookFile::from_gem9_str(&s))
+        {
+            Ok(wb) if wb.system.phases.is_empty() => {
+                self.last_error = Some("Open error: el libro no contiene fases.".into());
+            }
+            Ok(wb) => {
+                self.system = wb.system;
+                self.params = wb.params;
+                self.result = None;
+                self.last_error = None;
+                self.selected_phase_idx = 0;
+                self.chart_hidden_species.clear();
+                self.chart_is_3d = false;
+                self.chart_3d_cache = None;
+                self.active_sheet = EquilSheetTab::Species;
+                self.file_path_input = path.to_string_lossy().into_owned();
+                self.file_status_msg = Some(format!("Loaded {}", path.display()));
+            }
+            Err(e) => {
+                self.last_error = Some(format!("Open error: {}", e));
+            }
+        }
+    }
+
+    fn save_gem9(&mut self, path: &std::path::Path) {
+        let wb = EquilibriumWorkbookFile {
+            system: self.system.clone(),
+            params: self.params.clone(),
+        };
+        match wb
+            .to_gem9_json()
+            .and_then(|json| crate::storage::write_atomic(path, json).map_err(|e| e.to_string()))
+        {
+            Ok(()) => {
+                self.last_error = None;
+                self.file_path_input = path.to_string_lossy().into_owned();
+                self.file_status_msg = Some(format!("Saved {}", path.display()));
+            }
+            Err(e) => {
+                self.last_error = Some(format!("Save error: {}", e));
+            }
+        }
+    }
+
     pub fn ui(&mut self, ctx: &egui::Context, db: &dyn SpeciesCatalogPort) {
         // Los solvers de equilibrio son genéricos sobre `R: SpeciesRepository` (con `Sized`);
         // el adaptador permite pasarles un puerto `dyn`.
@@ -1058,41 +1135,11 @@ impl EquilibriumUiState {
                     }
                     ui.separator();
                     if ui.button(crate::i18n::text("review.048")).clicked() {
-                        match std::fs::read_to_string(&self.file_path_input)
-                            .map_err(|e| e.to_string())
-                            .and_then(|s| EquilibriumWorkbookFile::from_gem9_str(&s))
-                        {
-                            Ok(wb) => {
-                                self.system = wb.system;
-                                self.params = wb.params;
-                                self.result = None;
-                                self.last_error = None;
-                                self.file_status_msg =
-                                    Some(format!("Loaded {}", self.file_path_input));
-                            }
-                            Err(e) => {
-                                self.last_error = Some(format!("Open error: {}", e));
-                            }
-                        }
+                        self.choose_and_open_gem9();
                         ui.close_menu();
                     }
                     if ui.button(crate::i18n::text("review.049")).clicked() {
-                        let wb = EquilibriumWorkbookFile {
-                            system: self.system.clone(),
-                            params: self.params.clone(),
-                        };
-                        match wb
-                            .to_gem9_json()
-                            .and_then(|json| crate::storage::write_atomic(&self.file_path_input, json).map_err(|e| e.to_string()))
-                        {
-                            Ok(()) => {
-                                self.file_status_msg =
-                                    Some(format!("Saved {}", self.file_path_input));
-                            }
-                            Err(e) => {
-                                self.last_error = Some(format!("Save error: {}", e));
-                            }
-                        }
+                        self.choose_and_save_gem9();
                         ui.close_menu();
                     }
                     ui.separator();
@@ -1469,10 +1516,11 @@ impl EquilibriumUiState {
             }
             ui.separator();
             ui.label(crate::i18n::text("common.064"));
-            ui.add(
-                egui::TextEdit::singleline(&mut self.file_path_input)
-                    .desired_width(120.0),
-            );
+            let shown = std::path::Path::new(&self.file_path_input)
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            ui.label(shown).on_hover_text(&self.file_path_input);
             ui.separator();
             egui::ComboBox::from_id_salt("equil_presets")
                 .selected_text("Presets")
@@ -4474,6 +4522,39 @@ fn render_3d_surface_chart(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn opening_gem9_resets_state_and_saving_clears_old_error() {
+        let mut st = EquilibriumUiState::default();
+        let dir = std::env::temp_dir().join(format!("soryntel-c10-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("libro ñ.gem9");
+        st.last_error = Some("Save error: anterior".into());
+        st.save_gem9(&path);
+        assert!(st.last_error.is_none(), "un guardado correcto debe borrar el error anterior");
+        assert_eq!(st.file_path_input, path.to_string_lossy());
+
+        st.chart_hidden_species.insert("CO(g)".into());
+        st.selected_phase_idx = 5;
+        st.open_gem9(&path);
+        assert!(st.last_error.is_none(), "{:?}", st.last_error);
+        assert!(st.chart_hidden_species.is_empty());
+        assert_eq!(st.selected_phase_idx, 0);
+
+        // Un archivo dañado no toca el libro abierto.
+        let phases = st.system.phases.len();
+        std::fs::write(&path, "{ no es json").unwrap();
+        st.open_gem9(&path);
+        assert!(st.last_error.is_some());
+        assert_eq!(st.system.phases.len(), phases);
+        let _ = std::fs::remove_dir_all(&dir);
+
+        // Los ejemplos solo proponen un nombre; nunca se escribe en una ruta relativa.
+        assert!(st.current_gem9_file().is_some());
+        st.file_path_input = "NICO.gem9".into();
+        assert!(st.current_gem9_file().is_none());
+        assert_eq!(st.suggested_gem9_name(), "NICO.gem9");
+    }
     use soryntel_db::ThermoDatabase;
 
     #[test]
