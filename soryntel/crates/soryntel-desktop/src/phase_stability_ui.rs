@@ -65,6 +65,8 @@ pub struct PhaseStabilityModuleState {
     create_new_page: bool,
 
     charts: Vec<(String, PhaseStabilityDiagram)>,
+    /// Contador monotónico para que los nombres de gráfico no se repitan tras cerrar uno.
+    chart_counter: usize,
     active_tab: RightTab,
     last_error: Option<String>,
 }
@@ -92,6 +94,7 @@ impl PhaseStabilityModuleState {
             show_colors: true,
             create_new_page: true,
             charts: Vec::new(),
+            chart_counter: 0,
             active_tab: RightTab::Chart(0),
             last_error: None,
         };
@@ -328,7 +331,8 @@ impl PhaseStabilityModuleState {
                 }
                 if self.create_new_page || self.charts.is_empty() {
                     let idx = self.charts.len();
-                    let label = format!("Chart {}", idx + 1);
+                    self.chart_counter += 1;
+                    let label = format!("Chart {}", self.chart_counter);
                     self.charts.push((label, diagram));
                     self.active_tab = RightTab::Chart(idx);
                 } else {
@@ -651,6 +655,18 @@ impl PhaseStabilityModuleState {
         }
     }
 
+    /// Cierra la pestaña `i` manteniendo activo el mismo gráfico si no era el cerrado.
+    fn close_chart(&mut self, i: usize) {
+        if i >= self.charts.len() {
+            return;
+        }
+        self.charts.remove(i);
+        if let RightTab::Chart(active) = self.active_tab {
+            let new_active = if active > i { active - 1 } else { active };
+            self.active_tab = RightTab::Chart(new_active.min(self.charts.len().saturating_sub(1)));
+        }
+    }
+
     fn render_right_panel(&mut self, ui: &mut egui::Ui) {
         let names: Vec<&str> = self.charts.iter().map(|(n, _)| n.as_str()).collect();
         let active_chart = match self.active_tab {
@@ -659,10 +675,7 @@ impl PhaseStabilityModuleState {
         };
         match render_chart_tabs(ui, &names, active_chart, self.active_tab == RightTab::Table) {
             ChartTabAction::SelectChart(i) => self.active_tab = RightTab::Chart(i),
-            ChartTabAction::CloseChart(i) => {
-                self.charts.remove(i);
-                self.active_tab = RightTab::Chart(i.min(self.charts.len().saturating_sub(1)));
-            }
+            ChartTabAction::CloseChart(i) => self.close_chart(i),
             ChartTabAction::SelectTable => self.active_tab = RightTab::Table,
             ChartTabAction::None => {}
         }
@@ -1058,6 +1071,24 @@ mod bug_repro_area_c {
             return st;
         }
         panic!("preparación: ningún sistema abierto produjo diagrama: {:?}", st.last_error);
+    }
+
+    #[test]
+    fn closing_inactive_chart_keeps_active_chart_and_names_are_unique() {
+        let db = ThermoDatabase::with_open_defaults();
+        let mut st = prepared_state(&db);
+        st.create_new_page = true;
+        st.run_calculate(&db);
+        st.run_calculate(&db);
+        assert!(st.charts.len() >= 3);
+        st.active_tab = RightTab::Chart(2);
+        let active_name = st.charts[2].0.clone();
+        st.close_chart(0);
+        let RightTab::Chart(now) = st.active_tab else { panic!("pestaña de gráfico") };
+        assert_eq!(st.charts[now].0, active_name);
+        st.run_calculate(&db);
+        let names: std::collections::BTreeSet<_> = st.charts.iter().map(|c| c.0.clone()).collect();
+        assert_eq!(names.len(), st.charts.len(), "nombres repetidos: {names:?}");
     }
 
     #[test]
