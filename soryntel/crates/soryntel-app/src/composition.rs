@@ -8,7 +8,7 @@ use std::{
     sync::Arc,
 };
 
-/// Resuelve OwnDB > MainDB > OpenDefault, igual que el escritorio.
+/// Resuelve OwnDB > MainDB > SoryntelDB > OpenDefault, igual que el escritorio (ADR 0007).
 /// Antes OpenDefault tenía prioridad sobre MainDB en el CLI.
 pub(crate) fn catalog(custom_main: Option<&str>) -> Arc<dyn SpeciesCatalogPort + Send + Sync> {
     // Rutas (ADR 0003): `--hsc-db` > `SORYNTEL_MAIN_DB` > `<exe>/Databases` > carpeta de
@@ -24,9 +24,13 @@ pub(crate) fn catalog(custom_main: Option<&str>) -> Arc<dyn SpeciesCatalogPort +
     let own = std::env::var_os("SORYNTEL_OWN_DB")
         .map(PathBuf::from)
         .or_else(|| locator.default_own_db());
-    Arc::new(load_catalog(main.as_deref(), own.as_deref(), |line| {
-        eprintln!("{line}")
-    }))
+    let soryntel = locator.default_soryntel_db();
+    Arc::new(load_catalog_with_soryntel(
+        soryntel.as_deref(),
+        main.as_deref(),
+        own.as_deref(),
+        |line| eprintln!("{line}"),
+    ))
 }
 
 fn resolve_main_path(
@@ -40,13 +44,36 @@ fn resolve_main_path(
         .or_else(|| locator.default_main_db())
 }
 
-fn load_catalog(
+#[cfg(test)]
+fn load_catalog(main: Option<&Path>, own: Option<&Path>, log: impl FnMut(String)) -> ThermoDatabase {
+    load_catalog_with_soryntel(None, main, own, log)
+}
+
+fn load_catalog_with_soryntel(
+    soryntel: Option<&Path>,
     main: Option<&Path>,
     own: Option<&Path>,
     mut log: impl FnMut(String),
 ) -> ThermoDatabase {
     let mut catalog = ThermoDatabase::with_open_defaults();
     let admin: &mut dyn SpeciesDatabaseAdminPort = &mut catalog;
+    match soryntel {
+        Some(path) => match admin.load_soryntel_db(path) {
+            Ok((count, _)) => log(format!(
+                "[soryntel-db] Loaded {count} species from {} (SoryntelDB)",
+                path.display()
+            )),
+            Err(e) => log(format!(
+                "[soryntel-db] Warning: {}. SoryntelDB no encontrada; catálogo limitado",
+                catalog_error_message(e)
+            )),
+        },
+        None => log(
+            "[soryntel-db] Warning: SoryntelDB no encontrada; catálogo limitado \
+             (soryntel.sdb en Databases/ o SORYNTEL_SDB)"
+                .to_string(),
+        ),
+    }
     if let Some(path) = main {
         match admin.load_main_db(path, MainDbPrecedence::OverrideOpenDefault) {
             Ok((count, _)) => log(format!(
@@ -111,10 +138,12 @@ mod tests {
             assert_eq!(catalog.status().main_path.as_deref(), expected_path);
             let h = catalog.get_species("Al2O3").unwrap().intervals[0].h_or_delta_h_tr;
             assert!((h - h0 - expected_shift).abs() < 0.5);
+            // El primer aviso es siempre el de SoryntelDB ausente (ADR 0007).
+            assert!(messages[0].contains("SoryntelDB no encontrada; catálogo limitado"));
             if expected_path.is_none() {
-                assert_eq!(messages, [format!("[soryntel-db] Warning: {legacy_error}")]);
-                assert!(messages[0].contains(missing.to_str().unwrap()));
-                assert!(!messages[0].contains("catalog backend error:"));
+                assert_eq!(messages[1..], [format!("[soryntel-db] Warning: {legacy_error}")]);
+                assert!(messages[1].contains(missing.to_str().unwrap()));
+                assert!(!messages[1].contains("catalog backend error:"));
             }
         }
     }

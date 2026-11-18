@@ -47,6 +47,17 @@ impl CatalogUseCases {
             .map_err(catalog_error_message)
     }
 
+    /// Abre SoryntelDB (`.sdb`), la capa base bajo MainDB. Mientras está cargada no se usan
+    /// las especies abiertas incluidas. Devuelve `(especies, intervalos)`.
+    pub fn open_soryntel_db(
+        admin: &mut dyn SpeciesDatabaseAdminPort,
+        path: impl AsRef<Path>,
+    ) -> Result<(usize, usize), String> {
+        admin
+            .load_soryntel_db(path.as_ref())
+            .map_err(catalog_error_message)
+    }
+
     /// Abre OwnDB y descarta las ediciones en memoria. Devuelve `(especies, ranuras)`.
     pub fn open_own_db(
         admin: &mut dyn SpeciesDatabaseAdminPort,

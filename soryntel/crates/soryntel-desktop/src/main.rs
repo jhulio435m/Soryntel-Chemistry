@@ -848,7 +848,7 @@ impl eframe::App for SoryntelDesktopApp {
 }
 
 impl SoryntelDesktopApp {
-    /// Banner con los fallos de carga de MainDB/OwnDB (en Windows release no hay consola).
+    /// Banner con los avisos de carga de SoryntelDB/MainDB/OwnDB (en Windows release no hay consola).
     fn show_database_warnings(&mut self, ctx: &egui::Context) {
         if self.db_warnings_dismissed || self.services.load_warnings().is_empty() {
             return;
