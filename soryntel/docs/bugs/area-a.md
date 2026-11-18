@@ -93,7 +93,8 @@ No aparece ningún lint de la categoría `suspicious`.
 ### Otras comprobaciones
 
 - **`cargo test --workspace` (debug):** pasa. Los tests nuevos quedan ignorados: 24 en `soryntel-db/tests/bugs_area_a.rs` y 7 en `chem_addin_core/tests/bugs_area_a.rs`. Los arneses de fuzz pasan.
-- **`cargo test --workspace --release` y `RUSTFLAGS="-C overflow-checks=on" cargo test --workspace --release`:** ver la sección de resultados más abajo.
+- **`cargo test --workspace --release`:** pasa con los mismos recuentos que en debug. Ningún test depende de `debug_assertions`.
+- **`RUSTFLAGS="-C overflow-checks=on" cargo test --workspace --release`:** pasa y no aparece ningún desbordamiento aritmético. El fuzz largo (300 000 iteraciones, con `overflow-checks` y `debug-assertions`) tampoco detecta ninguno.
 - **shellcheck:** no está instalado en el entorno, así que no se ejecutó. `bash -n` pasa en `scripts/check_architecture.sh` y `packaging/build-releases.sh`.
 
 ## Tests añadidos
