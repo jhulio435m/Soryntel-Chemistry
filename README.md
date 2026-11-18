@@ -26,6 +26,10 @@ La aplicación `soryntel-app` sin subcomando abre un servidor local en el puerto
 - `soryntel-app`: CLI y servidor local de reacciones.
 - `chem_addin_core`: motor adicional para complementos de hojas de cálculo.
 
+## Licencias
+
+El código fuente se distribuye bajo la licencia MIT. Consulta la [licencia de los datos de SoryntelDB](LICENSE-DATA.md) para conocer las condiciones aplicables a la base termoquímica incluida en los instaladores.
+
 ## Documentación y validación
 
 El [plan](soryntel/PLAN_REVISION.md), la [especificación](.scratch/issues/001-revision-quimica-espanol.md) y el [registro de revisión](soryntel/docs/REVISION.md) describen alcance y estado. Las [referencias recuperadas](soryntel/docs/referencia/README.md) conservan las especificaciones históricas con hashes de procedencia.
