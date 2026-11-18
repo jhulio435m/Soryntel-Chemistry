@@ -305,10 +305,18 @@ impl ReactionModuleState {
     }
 
     pub fn load_rea8(&mut self, path: &str) {
-        match std::fs::read_to_string(path)
-            .map_err(|e| soryntel_core::SoryntelError::DatabaseError(e.to_string()))
-            .and_then(|raw| ReactionUseCases::deserialize_rea8_workbook(&raw))
-        {
+        // Carga atómica: se valida el libro completo antes de tocar el estado.
+        let loaded = std::fs::read_to_string(path)
+            .map_err(|e| e.to_string())
+            .and_then(|raw| ReactionUseCases::deserialize_rea8_workbook(&raw).map_err(|e| e.to_string()))
+            .and_then(|wb| {
+                if wb.sheets.is_empty() {
+                    Err("el libro no contiene hojas de resultados".to_string())
+                } else {
+                    Ok(wb)
+                }
+            });
+        match loaded {
             Ok(wb) => {
                 self.formula_input = wb.formula_input;
                 self.smallest_coeff = wb.smallest_coeff;
@@ -325,10 +333,12 @@ impl ReactionModuleState {
                 self.plot_all_data = wb.plot_all_data;
                 self.log_y_scale = wb.log_y_scale;
                 self.decimals = wb.decimals.clamp(1, 8);
-                if !wb.sheets.is_empty() {
-                    self.active_sheet_idx = wb.active_sheet_idx.min(wb.sheets.len() - 1);
-                    self.sheets = wb.sheets;
-                }
+                self.active_sheet_idx = wb.active_sheet_idx.min(wb.sheets.len() - 1);
+                self.sheets = wb.sheets;
+                // Estado derivado del libro anterior.
+                self.results_stale = false;
+                self.selected_cell = None;
+                self.plot_reset_counter = self.plot_reset_counter.wrapping_add(1);
                 self.status_msg = format!("Libro cargado desde {path}");
                 self.status_ok = true;
             }
@@ -2166,7 +2176,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "BUG-C07: abrir un .rea8 sin hojas conserva las hojas del libro anterior junto a la fórmula nueva"]
     fn loading_rea8_without_sheets_does_not_keep_previous_results() {
         let db = ThermoDatabase::with_open_defaults();
         let mut state = ReactionModuleState::new(&db); // hoja S1 con Al2O3
@@ -2194,11 +2203,13 @@ mod tests {
         std::fs::write(&path, ReactionUseCases::serialize_rea8_workbook(&wb).unwrap()).unwrap();
         state.load_rea8(path.to_str().unwrap());
         let _ = std::fs::remove_file(&path);
-        assert_eq!(state.formula_input, "Zn = Zn(g)");
+        // El libro se rechaza y el anterior queda intacto y coherente.
+        assert!(!state.status_ok, "{}", state.status_msg);
+        assert_eq!(state.formula_input, "Al2O3");
         let shown = state.active_response().map(|r| r.normalized_input.clone());
         assert!(
-            shown.is_none() || shown.as_deref().is_some_and(|s| s.contains("Zn")),
-            "la tabla muestra {shown:?} pero la fórmula del libro abierto es Zn = Zn(g)"
+            shown.as_deref().is_some_and(|s| s.contains("Al2O3")),
+            "la tabla muestra {shown:?} con la fórmula {}", state.formula_input
         );
     }
 }
