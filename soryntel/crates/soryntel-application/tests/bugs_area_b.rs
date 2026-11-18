@@ -43,7 +43,6 @@ fn b07_nacl_mean_activity_coefficient_one_molal() {
 /// que se dibuja G absoluto (-1690,9 kJ/mol a 298,15 K) como si fuera ΔfG
 /// (JANAF: -1582,3 kJ/mol) y sin ningún aviso.
 #[test]
-#[ignore = "BUG-B14: calculate_diagram dibuja G absoluto como ΔG si falta la referencia de un elemento, sin aviso"]
 fn b14_ellingham_diagram_warns_or_uses_formation_gibbs_energy() {
     use soryntel_thermo::diagrams::{
         calculate_diagram, DiagramEnergyUnit, DiagramRequest, DiagramSpeciesInput, DiagramType,
@@ -127,6 +126,16 @@ fn b01_mond_equilibrium_matches_reaction_k() {
         let kq = (nc / (co + nc)) / (co / (co + nc)).powi(4);
         assert!(((kq - k) / k).abs() < 1e-3, "T={t_k}: K_GEM={kq:e}, K={k:e}");
     }
+}
+
+/// B14 en Eh-pH: sin H2O en el catálogo, ΔfG(H2O) ya no se toma en silencio del valor
+/// a 25 °C; `try_delta_g_formation_h2o_kcal` informa del dato que falta.
+#[test]
+fn b14_ehph_water_formation_energy_reports_missing_data() {
+    let db = ThermoDatabase::with_open_defaults();
+    let err = soryntel_thermo::ehph::try_delta_g_formation_h2o_kcal(&db, 353.15, false)
+        .expect_err("OpenDefault no trae H2O");
+    assert!(err.contains("H2O"), "{err}");
 }
 
 /// `=Species(2, 1e20)` llega por el bridge de Add-ins: `pos as usize` satura a

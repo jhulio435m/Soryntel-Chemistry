@@ -250,14 +250,27 @@ pub fn calculate_diagram(
             item.coeff
         };
 
+        // Δ diagrams need every element reference; without one, G/H/S would be plotted as
+        // absolute values under a ΔG/ΔH/ΔS label (BUG-B14).
+        if need_ref {
+            if let Some(&tk0) = temps.first() {
+                if let Err(e) = sum_element_references(&term, tk0, false, repo) {
+                    warnings.push(format!("{f_trim}: no se puede calcular Δ: {e}"));
+                    continue;
+                }
+            }
+        }
+
         let mut points = Vec::with_capacity(temps.len());
         for &tk in &temps {
             let Ok((pt, _)) = evaluate_species_si(&sp, tk, false, false) else {
                 continue;
             };
             let (h_ref, s_ref, g_ref) = if need_ref {
-                let (h, s, g, _) = sum_element_references(&term, tk, false, repo)
-                    .unwrap_or((0.0, 0.0, 0.0, 0.0));
+                // A reference that fails at this T leaves the point out instead of using zeros.
+                let Ok((h, s, g, _)) = sum_element_references(&term, tk, false, repo) else {
+                    continue;
+                };
                 (h, s, g)
             } else {
                 (0.0, 0.0, 0.0)
