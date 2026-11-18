@@ -69,6 +69,7 @@ pub struct ClassicRowSelection {
 }
 
 pub struct LcaWindowState {
+    ipc_probe: Option<std::sync::mpsc::Receiver<(String, Result<(), String>)>>,
     pub ui_mode: LcaUiMode,
 
     // Classic state (49.3)
@@ -140,6 +141,7 @@ impl Default for LcaWindowState {
         expanded_folders.insert("recipe_midpoint_h".to_string());
 
         Self {
+            ipc_probe: None,
             ui_mode: LcaUiMode::Classic,
             classic: ClassicLcaState::default(),
             classic_tab: ClassicTab::Inputs,
@@ -188,6 +190,54 @@ impl Default for LcaWindowState {
 }
 
 impl LcaWindowState {
+    fn start_ipc_probe(&mut self, ctx: &egui::Context) {
+        let endpoint = self.beta.ipc_endpoint.trim().to_string();
+        let (sender, receiver) = std::sync::mpsc::channel();
+        let ctx = ctx.clone();
+        self.beta.ipc_live_connected = false;
+        match std::thread::Builder::new().name("openlca-probe".into()).spawn(move || {
+            let result = probe_openlca(&endpoint);
+            let _ = sender.send((endpoint, result));
+            ctx.request_repaint();
+        }) {
+            Ok(_) => {
+                self.ipc_probe = Some(receiver);
+                self.beta.ipc_status_note = "Checking openLCA IPC…".into();
+            }
+            Err(error) => {
+                self.ipc_probe = None;
+                self.beta.ipc_status_note = format!("Could not start openLCA IPC probe: {error}");
+            }
+        }
+        self.status_message.clone_from(&self.beta.ipc_status_note);
+    }
+
+    fn poll_ipc_probe(&mut self) {
+        let Some(receiver) = &self.ipc_probe else { return };
+        match receiver.try_recv() {
+            Ok((endpoint, result)) => {
+                self.ipc_probe = None;
+                if endpoint == self.beta.ipc_endpoint.trim() {
+                    self.beta.ipc_live_connected = result.is_ok();
+                    self.beta.ipc_status_note = match result {
+                        Ok(()) => format!("Connected to openLCA IPC ({endpoint})"),
+                        Err(error) => format!(
+                            "IPC {endpoint}: {error}. Using built-in {} catalog.",
+                            self.beta.active_db_name
+                        ),
+                    };
+                    self.status_message.clone_from(&self.beta.ipc_status_note);
+                }
+            }
+            Err(std::sync::mpsc::TryRecvError::Empty) => {}
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                self.ipc_probe = None;
+                self.beta.ipc_status_note = "openLCA IPC probe stopped.".into();
+                self.status_message.clone_from(&self.beta.ipc_status_note);
+            }
+        }
+    }
+
     pub fn with_preset_classic_zn() -> (SimProject, Self) {
         let (proj, classic) = SimulationUseCases::sim_lca_preset_classic_zn();
         let mut st = Self::default();
@@ -287,6 +337,54 @@ pub fn render_lca_floating_window(
         });
 }
 
+fn probe_openlca(endpoint: &str) -> Result<(), String> {
+    use std::io::{Read, Write};
+    use std::net::{SocketAddr, TcpStream};
+    use std::time::{Duration, Instant};
+
+    let address: SocketAddr = endpoint.parse().map_err(|_| "Invalid IP address or port")?;
+    let timeout = Duration::from_secs(1);
+    let deadline = Instant::now() + timeout;
+    let mut stream = TcpStream::connect_timeout(&address, timeout).map_err(|e| e.to_string())?;
+    stream.set_write_timeout(Some(timeout)).map_err(|e| e.to_string())?;
+    // GreenDelta openLCA IPC: data/get/descriptors returns a JSON-RPC array.
+    let body = r#"{"jsonrpc":"2.0","id":1,"method":"data/get/descriptors","params":{"@type":"FlowProperty"}}"#;
+    write!(
+        stream,
+        "POST / HTTP/1.0\r\nHost: {address}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        body.len()
+    ).map_err(|e| e.to_string())?;
+
+    let mut response = Vec::new();
+    let mut chunk = [0u8; 4096];
+    loop {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return Err("Probe timed out".into());
+        }
+        stream.set_read_timeout(Some(remaining)).map_err(|e| e.to_string())?;
+        let count = stream.read(&mut chunk).map_err(|e| e.to_string())?;
+        if count == 0 {
+            break;
+        }
+        response.extend_from_slice(&chunk[..count]);
+        if response.len() > 1024 * 1024 {
+            return Err("Probe response exceeded 1 MiB".into());
+        }
+    }
+    let response = std::str::from_utf8(&response).map_err(|e| e.to_string())?;
+    let (head, body) = response.split_once("\r\n\r\n").ok_or("Invalid HTTP response")?;
+    let code = head.lines().next().and_then(|line| line.split_whitespace().nth(1));
+    if code != Some("200") {
+        return Err(format!("Unexpected HTTP status {}", code.unwrap_or("unknown")));
+    }
+    let rpc: serde_json::Value = serde_json::from_str(body).map_err(|_| "Invalid JSON-RPC response")?;
+    if rpc["jsonrpc"] != "2.0" || rpc["id"] != 1 || !rpc["result"].is_array() || rpc.get("error").is_some() {
+        return Err("Missing successful openLCA descriptor response".into());
+    }
+    Ok(())
+}
+
 /// Shared inner canvas used by both standalone Launcher window and `HSC Sim -> Tools` floating window.
 pub fn render_lca_body(
     ui: &mut egui::Ui,
@@ -294,6 +392,7 @@ pub fn render_lca_body(
     project: &SimProject,
     state: &mut LcaWindowState,
 ) {
+    state.poll_ipc_probe();
     ui.colored_label(Color32::from_rgb(180, 90, 0), soryntel_application::models::lca::BUILTIN_LCA_NOTICE);
     match state.ui_mode {
         LcaUiMode::Classic => render_classic_lca(ui, ctx, project, state),
@@ -1172,7 +1271,7 @@ fn assign_classic_flow(state: &mut LcaWindowState, flow: &LcaCatalogFlow) {
 
 fn render_beta_lca(
     ui: &mut egui::Ui,
-    _ctx: &egui::Context,
+    ctx: &egui::Context,
     project: &SimProject,
     state: &mut LcaWindowState,
 ) {
@@ -1209,8 +1308,7 @@ fn render_beta_lca(
                         .clicked()
                     {
                         state.beta.mode = BetaLcaMode::UnitDatabase;
-                        let _ = SimulationUseCases::sim_lca_beta_probe_openlca_ipc(&mut state.beta);
-                        state.status_message = state.beta.ipc_status_note.clone();
+                        state.start_ipc_probe(ctx);
                         ui.close_menu();
                     }
                     if ui
@@ -1218,18 +1316,20 @@ fn render_beta_lca(
                         .clicked()
                     {
                         state.beta.mode = BetaLcaMode::LciDatabase;
-                        let _ = SimulationUseCases::sim_lca_beta_probe_openlca_ipc(&mut state.beta);
-                        state.status_message = state.beta.ipc_status_note.clone();
+                        state.start_ipc_probe(ctx);
                         ui.close_menu();
                     }
                     ui.separator();
                     ui.horizontal(|ui| {
                         ui.label("IPC:");
-                        ui.add(egui::TextEdit::singleline(&mut state.beta.ipc_endpoint).desired_width(110.0));
+                        if ui.add(egui::TextEdit::singleline(&mut state.beta.ipc_endpoint).desired_width(110.0)).changed() {
+                            state.ipc_probe = None;
+                            state.beta.ipc_live_connected = false;
+                            state.beta.ipc_status_note = "Connect / Probe to check the new endpoint.".into();
+                        }
                     });
                     if ui.button("Connect / Probe openLCA IPC").clicked() {
-                        let _ = SimulationUseCases::sim_lca_beta_probe_openlca_ipc(&mut state.beta);
-                        state.status_message = state.beta.ipc_status_note.clone();
+                        state.start_ipc_probe(ctx);
                         ui.close_menu();
                     }
                 },
@@ -2668,11 +2768,15 @@ mod area_d_regressions {
     use std::time::Duration;
 
     #[test]
-    #[ignore = "BUG-D08: un servidor HTTP ajeno a openLCA figura como IPC conectado"]
     fn ipc_probe_requires_an_openlca_response() {
+        assert!(probe_fixture("OK").is_err());
+        assert!(probe_fixture(r#"{"jsonrpc":"2.0","id":1,"result":[]}"#).is_ok());
+        assert!(probe_fixture(r#"{"jsonrpc":"2.0","id":2,"result":[]}"#).is_err());
+    }
+
+    fn probe_fixture(body: &'static str) -> Result<(), String> {
         let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
-        let mut state = LcaWindowState::default();
-        state.beta.ipc_endpoint = listener.local_addr().unwrap().to_string();
+        let endpoint = listener.local_addr().unwrap().to_string();
         let server = std::thread::spawn(move || {
             let (mut stream, _) = listener.accept().unwrap();
             stream.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
@@ -2689,16 +2793,14 @@ mod area_d_regressions {
                 }
             }
             request.read_exact(&mut vec![0; length]).unwrap();
-            stream
-                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nOK")
-                .unwrap();
+            write!(
+                stream,
+                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            ).unwrap();
         });
-        let _ = SimulationUseCases::sim_lca_beta_probe_openlca_ipc(&mut state.beta);
+        let result = probe_openlca(&endpoint);
         server.join().unwrap();
-        assert!(
-            !state.beta.ipc_live_connected,
-            "{}",
-            state.beta.ipc_status_note
-        );
+        result
     }
 }

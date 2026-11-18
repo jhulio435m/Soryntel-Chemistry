@@ -40,7 +40,6 @@ fn occupied_port_exits_without_panicking() {
 }
 
 #[test]
-#[ignore = "BUG-D04: sync-release --soft reemplaza las descargas con una lista vacía"]
 fn empty_release_preserves_download_manifest() {
     let fixture = Fixture::new("d04");
     let root = &fixture.0;
@@ -82,7 +81,6 @@ fn empty_release_preserves_download_manifest() {
 }
 
 #[test]
-#[ignore = "BUG-D05: la ejecución manual busca los paquetes en el directorio equivocado"]
 fn manual_release_upload_finds_staged_packages() {
     let fixture = Fixture::new("d05");
     let dist = fixture.0.join("dist");
@@ -136,7 +134,6 @@ fn manual_release_upload_finds_staged_packages() {
 }
 
 #[test]
-#[ignore = "BUG-D06: build-releases acepta un destino desconocido"]
 fn unsupported_packaging_target_is_rejected() {
     let fixture = Fixture::new("d06");
     let output = Command::new("bash")
@@ -153,7 +150,6 @@ fn unsupported_packaging_target_is_rejected() {
 }
 
 #[test]
-#[ignore = "BUG-D09: un cálculo de una temperatura no dibuja su único dato"]
 fn single_temperature_chart_draws_a_point() {
     let script = r#"
         import { readFileSync } from 'node:fs';

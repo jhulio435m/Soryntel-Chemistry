@@ -55,6 +55,11 @@ async function main() {
     console.error(`sync-release: faltan en ${tag}:\n  ${missing.join("\n  ")}`);
     process.exit(1);
   }
+  if (flag("--soft") && missing.length === EXPECTED.length) {
+    const kept = JSON.parse(await readFile(out, "utf8"));
+    console.warn(`sync-release: ${tag} aún no ofrece paquetes; se mantiene ${kept.tag}`);
+    return;
+  }
   if (missing.length) console.warn(`sync-release: aviso, faltan en ${tag}: ${missing.join(", ")}`);
 
   const data = { repo, tag, version, publishedAt: release.published_at, assets };

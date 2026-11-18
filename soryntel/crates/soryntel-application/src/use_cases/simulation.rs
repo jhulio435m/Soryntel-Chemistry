@@ -249,11 +249,6 @@ impl SimulationUseCases {
         soryntel_thermo::sim::mass_balance::search_minerals_catalog(query, limit)
     }
 
-    /// Sondea el endpoint IPC de openLCA configurado en el estado beta.
-    pub fn sim_lca_beta_probe_openlca_ipc(state: &mut BetaLcaState) -> Result<String, String> {
-        state.probe_openlca_ipc()
-    }
-
     /// Importa una hoja externa en el estado beta y devuelve el nombre final de la hoja.
     pub fn sim_lca_beta_import_external_sheet(
         state: &mut BetaLcaState,
