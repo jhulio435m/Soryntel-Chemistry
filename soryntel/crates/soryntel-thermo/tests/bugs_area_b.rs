@@ -112,7 +112,6 @@ fn gas_phase(species: Vec<EquilibriumSpeciesInput>) -> EquilibriumPhase {
 /// N2O4(g) = 2 NO2(g) con G°(T) = 0 para ambas especies: ΔG° = 0, así que
 /// Kp = x(NO2)²·P / x(N2O4) debe valer exactamente 1 a cualquier presión.
 #[test]
-#[ignore = "BUG-B01: el GEM converge a Kp = e^-Δn·K (fila de fase con +ȳ extra en el RHS)"]
 fn b01_gem_gas_only_equilibrium_constant_matches_delta_g() {
     let zero = |f: &str| species_cal(f, Phase::Gas, 0.0, 0.0, [0.0; 4], 46.0);
     let repo = Repo(BTreeMap::from([
@@ -127,7 +126,7 @@ fn b01_gem_gas_only_equilibrium_constant_matches_delta_g() {
         num_indep_vars: 0,
         ..Default::default()
     };
-    for p_bar in [0.1, 1.0, 10.0] {
+    for p_bar in [0.1, 1.0, 5.0, 10.0] {
         let pt = solve_single_point(&sys, &params, &repo, 500.0, p_bar, 0, 0.0, None, None, 0.0)
             .unwrap();
         assert!(pt.converged);
@@ -135,9 +134,86 @@ fn b01_gem_gas_only_equilibrium_constant_matches_delta_g() {
         let n_b = pt.species[1].equil_amount_mol;
         let tot = n_a + n_b;
         let kp = (n_b / tot).powi(2) / (n_a / tot) * p_bar;
-        // Hoy: Kp = e^-1 = 0.3679 para todas las presiones.
+        // Antes del fix: Kp = e^-1 = 0,3679 para todas las presiones.
         assert!((kp - 1.0).abs() < 1e-4, "P={p_bar} bar: Kp={kp}, esperado 1");
     }
+}
+
+/// N2O4(g) y NO2(g) con Cp constante (datos tipo NIST WebBook: ΔfH = 9,08 y 33,10 kJ/mol,
+/// S° = 304,38 y 240,04 J/(mol·K), Cp = 77,28 y 36,97 J/(mol·K)).
+fn n2o4_repo() -> Repo {
+    let sp = |f: &str, h_kj: f64, s: f64, cp: f64| ChemicalSpecies {
+        formula: f.into(),
+        name: f.into(),
+        phase: Phase::Gas,
+        molecular_weight: 46.0,
+        density_g_cm3: 0.0,
+        charge: 0,
+        intervals: vec![SpeciesThermoInterval {
+            t_min: 200.0,
+            t_max: 3000.0,
+            phase: Phase::Gas,
+            kelley: KelleyCoefficients { a: cp, b: 0.0, c: 0.0, d: 0.0 },
+            h_or_delta_h_tr: h_kj * 1000.0,
+            s_or_delta_s_tr: s,
+            reference: "test".into(),
+        }],
+    };
+    Repo(BTreeMap::from([
+        ("N2O4(g)".to_string(), sp("N2O4(g)", 9.08, 304.38, 77.28)),
+        ("NO2(g)".to_string(), sp("NO2(g)", 33.10, 240.04, 36.97)),
+    ]))
+}
+
+fn kp_analytic(repo: &Repo, t_k: f64) -> f64 {
+    let g = |f: &str| {
+        soryntel_thermo::evaluate_species_si(&repo.get_species(f).unwrap(), t_k, false, false)
+            .unwrap()
+            .0
+            .g
+    };
+    (-(2.0 * g("NO2(g)") - g("N2O4(g)")) / (R_JOULE * t_k)).exp()
+}
+
+/// GEM isotérmico frente a K = exp(-ΔG°/RT) con datos reales (Δn = +1).
+#[test]
+fn b01_gem_n2o4_dissociation_matches_analytic_k() {
+    let repo = n2o4_repo();
+    let sys = EquilibriumSystem {
+        title: "N2O4".into(),
+        phases: vec![gas_phase(vec![eq_input("N2O4(g)", 1.0), eq_input("NO2(g)", 0.0)])],
+    };
+    let params = EquilibriumParams { num_indep_vars: 0, ..Default::default() };
+    for (t_k, p_bar) in [(298.15, 1.0), (350.0, 5.0), (400.0, 10.0)] {
+        let pt = solve_single_point(&sys, &params, &repo, t_k, p_bar, 0, 0.0, None, None, 0.0).unwrap();
+        let (a, b) = (pt.species[0].equil_amount_mol, pt.species[1].equil_amount_mol);
+        let kp = (b / (a + b)).powi(2) / (a / (a + b)) * p_bar;
+        let k = kp_analytic(&repo, t_k);
+        assert!(((kp - k) / k).abs() < 1e-4, "T={t_k} P={p_bar}: Kp_GEM={kp}, K={k}");
+    }
+}
+
+/// Modo adiabático (N,H,P): la T de equilibrio cumple ΔH = objetivo y la composición
+/// cumple K(T_eq) = exp(-ΔG°/RT).
+#[test]
+fn b01_gem_adiabatic_mode_is_consistent_with_analytic_k() {
+    use soryntel_thermo::equilibrium::{solve_equilibrium_sweep, ThermodynamicMode};
+    let repo = n2o4_repo();
+    let sys = EquilibriumSystem {
+        title: "N2O4".into(),
+        phases: vec![gas_phase(vec![eq_input("N2O4(g)", 1.0), eq_input("NO2(g)", 0.0)])],
+    };
+    let mut params = EquilibriumParams { num_indep_vars: 0, ..Default::default() };
+    params.thermo_mode = ThermodynamicMode::Nhp;
+    params.pressure_range.initial = 1.0;
+    // Calor aportado: 30 kJ (0,03 MJ) sobre 1 mol de N2O4 a 25 °C.
+    params.enthalpy_range.initial = 0.03;
+    let pt = solve_equilibrium_sweep(&sys, &params, &repo).unwrap().points.remove(0);
+    assert!((pt.reaction_enthalpy_kj - 30.0).abs() < 0.01, "ΔH = {}", pt.reaction_enthalpy_kj);
+    let (a, b) = (pt.species[0].equil_amount_mol, pt.species[1].equil_amount_mol);
+    let kp = (b / (a + b)).powi(2) / (a / (a + b));
+    let k = kp_analytic(&repo, pt.temp_k);
+    assert!(((kp - k) / k).abs() < 1e-3, "T_eq={} Kp_GEM={kp}, K={k}", pt.temp_k);
 }
 
 // ---------------------------------------------------------------------------

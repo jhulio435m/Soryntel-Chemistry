@@ -70,6 +70,66 @@ fn b14_ellingham_diagram_warns_or_uses_formation_gibbs_energy() {
     assert!(ok, "ΔG(Al2O3, 298 K) = {y:?} kJ/mol sin avisos; JANAF ΔfG = -1582,3");
 }
 
+/// B01 con datos integrados: Ni(s) + 4CO(g) = Ni(CO)4(g) (fase pura + gas, Δn = -3).
+/// El GEM debe reproducir K = exp(-ΔG°/RT) del módulo de reacciones a varias T.
+#[test]
+fn b01_mond_equilibrium_matches_reaction_k() {
+    use soryntel_core::{EnergyUnit, ResultFormat, TemperatureUnit};
+    use soryntel_thermo::equilibrium::*;
+    use std::collections::BTreeMap;
+    let db = ThermoDatabase::with_open_defaults();
+    let inp = |f: &str, mol: f64| EquilibriumSpeciesInput {
+        formula: f.into(),
+        feed_temp_c: 25.0,
+        activity_coeff_expr: "1.0".into(),
+        fixed_activity: None,
+        discharge_coeff: 0.0,
+        amount_unit: EquilibriumAmountUnit::Mol,
+        initial_amount: mol,
+        add_x_amount: 0.0,
+        add_z_amount: 0.0,
+        remove_percent: 0.0,
+        excluded: false,
+        species_data: None,
+        stoichiometry: BTreeMap::new(),
+    };
+    let phase = |name: &str, model, species| EquilibriumPhase {
+        name: name.into(),
+        model,
+        is_gas_phase: name == "GAS",
+        species,
+        electrode_role: String::new(),
+        capacitance_farads: 0.0,
+    };
+    let sys = EquilibriumSystem {
+        title: "Mond".into(),
+        phases: vec![
+            phase("GAS", SolutionModel::IdealMixture, vec![inp("CO(g)", 4.0), inp("Ni(CO)4(g)", 0.0)]),
+            phase("Ni", SolutionModel::PureSubstance, vec![inp("Ni", 10.0)]),
+        ],
+    };
+    let params = EquilibriumParams { num_indep_vars: 0, ..Default::default() };
+    for t_k in [300.0, 350.0, 400.0, 450.0] {
+        let req = soryntel_thermo::CalculationRequest {
+            input: "Ni + 4CO(g) = Ni(CO)4(g)".into(),
+            t_from: t_k,
+            t_to: t_k,
+            t_step: 1.0,
+            temp_unit: TemperatureUnit::Kelvin,
+            energy_unit: EnergyUnit::Joules,
+            result_format: ResultFormat::Normal,
+            show_transitions: false,
+            criss_cobble: false,
+        };
+        let k = soryntel_thermo::calculate(&req, &db).unwrap().reaction_rows[0].k_eq;
+        let pt = solve_single_point(&sys, &params, &db, t_k, 1.0, 0, 0.0, None, None, 0.0).unwrap();
+        assert!(pt.converged);
+        let (co, nc) = (pt.species[0].equil_amount_mol, pt.species[1].equil_amount_mol);
+        let kq = (nc / (co + nc)) / (co / (co + nc)).powi(4);
+        assert!(((kq - k) / k).abs() < 1e-3, "T={t_k}: K_GEM={kq:e}, K={k:e}");
+    }
+}
+
 /// `=Species(2, 1e20)` llega por el bridge de Add-ins: `pos as usize` satura a
 /// `usize::MAX` y `pos + 8` desborda (pánico en debug).
 #[test]
