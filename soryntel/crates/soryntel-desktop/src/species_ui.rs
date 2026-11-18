@@ -2097,4 +2097,35 @@ mod tests {
     fn assert_relative_approx(actual: f64, expected: f64) {
         assert!((actual - expected).abs() < 1e-3, "actual={actual}, expected={expected}");
     }
+
+    #[test]
+    #[ignore = "BUG-C04: Fit Cp descarta en silencio los puntos con coma decimal y ajusta con menos datos"]
+    fn fit_cp_reports_points_it_cannot_parse() {
+        let db = ThermoDatabase::with_open_defaults();
+        let mut st = SpeciesModuleState::new(&db);
+        // El usuario corrige un punto con formato regional: 400,0 / 13,05
+        st.fit_points[1].t_str = "400,0".into();
+        st.fit_points[1].cp_str = "13,05".into();
+        st.run_fit_cp();
+        assert!(
+            st.status_is_err,
+            "el ajuste se informó como correcto ignorando un punto: {}",
+            st.status_msg
+        );
+    }
+
+    #[test]
+    #[ignore = "BUG-C05: un coeficiente bloqueado con coma decimal (\"11,166\") se bloquea en silencio a 0"]
+    fn fit_cp_locked_coefficient_with_comma_is_not_zeroed() {
+        let db = ThermoDatabase::with_open_defaults();
+        let mut st = SpeciesModuleState::new(&db);
+        st.fit_mask.fit_a = false;
+        st.lock_a = "11,166".into();
+        st.run_fit_cp();
+        let a = st.fit_result.as_ref().map(|r| r.kelley_si.a);
+        assert!(
+            st.status_is_err || a.is_some_and(|a| (a / CAL_TO_JOULE - 11.166).abs() < 1e-6),
+            "A bloqueado = {a:?} J (esperado 11.166 cal o un error)"
+        );
+    }
 }

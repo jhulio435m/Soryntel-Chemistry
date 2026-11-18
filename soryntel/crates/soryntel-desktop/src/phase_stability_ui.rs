@@ -1015,3 +1015,68 @@ fn pick_gas(gases: &[String], preferred: &str) -> String {
         .or_else(|| gases.first().cloned())
         .unwrap_or_else(|| preferred.to_string())
 }
+
+#[cfg(test)]
+mod bug_repro_area_c {
+    //! Reproducciones de hallazgos del área C (soryntel/docs/bugs/area-c.md). Fallan hoy.
+    use super::*;
+    use soryntel_db::ThermoDatabase;
+
+    /// Estado con un diagrama T–log p dibujado a partir de las especies abiertas incluidas.
+    fn prepared_state(db: &ThermoDatabase) -> PhaseStabilityModuleState {
+        let mut st = PhaseStabilityModuleState::new(db);
+        st.selected_elements = vec!["Ni".into(), "C".into(), "O".into()];
+        st.refresh_species_and_gases(db);
+        // Los datos abiertos no clasifican Ni como fase condensada; se selecciona a mano.
+        st.selected_species.insert("Ni".into());
+        st.selected_species.insert("Al2O3".into());
+        st.x_axis_choice = "Temperature".into();
+        st.y_axis_choice = "CO(g)".into();
+        st.run_calculate(db);
+        if st.last_error.is_none() && !st.charts.is_empty() {
+            return st;
+        }
+        panic!("preparación: ningún sistema abierto produjo diagrama: {:?}", st.last_error);
+    }
+
+    #[test]
+    #[ignore = "BUG-C03: un límite de eje con coma decimal (\"0,5\") se sustituye en silencio por -45"]
+    fn comma_decimal_axis_limit_is_not_replaced_silently() {
+        let db = ThermoDatabase::with_open_defaults();
+        let mut st = prepared_state(&db);
+        st.x_min_str = "0,5".into();
+        st.create_new_page = true;
+        let before = st.charts.len();
+        st.run_calculate(&db);
+        // Esperado: o se interpreta 0.5, o se informa un error y no se dibuja nada.
+        if st.charts.len() > before {
+            let x_min = st.charts.last().unwrap().1.x_min;
+            assert!((x_min - 0.5).abs() < 1e-9, "x_min usado = {x_min}; el usuario escribió 0,5");
+        } else {
+            assert!(st.last_error.is_some());
+        }
+    }
+
+    #[test]
+    #[ignore = "BUG-C02: 'inf' o '1e400' en un límite de eje llega al diagrama y nice_ticks no termina (cuelgue/OOM)"]
+    fn non_finite_axis_limit_is_rejected_before_drawing() {
+        let db = ThermoDatabase::with_open_defaults();
+        let mut st = prepared_state(&db);
+        st.x_max_str = "1e400".into(); // se parsea como +inf
+        st.create_new_page = true;
+        let before = st.charts.len();
+        st.run_calculate(&db);
+        if st.charts.len() > before {
+            let d = &st.charts.last().unwrap().1;
+            // render_chart llamaría a nice_ticks(d.x_min, d.x_max, 6): con x_max infinito el
+            // bucle `while v <= max` no termina y llena la memoria, así que aquí no se dibuja.
+            assert!(
+                d.x_min.is_finite() && d.x_max.is_finite() && d.y_min.is_finite() && d.y_max.is_finite(),
+                "diagrama con ejes no finitos: x=[{}, {}] y=[{}, {}]",
+                d.x_min, d.x_max, d.y_min, d.y_max
+            );
+        } else {
+            assert!(st.last_error.is_some());
+        }
+    }
+}
