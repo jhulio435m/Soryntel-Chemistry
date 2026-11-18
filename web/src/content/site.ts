@@ -10,6 +10,8 @@ export const SOURCE_REPO = "https://github.com/NnandoO/Soryntel-Chemistry";
 /** Public origin (Cloudflare Pages custom domain). Override with NEXT_PUBLIC_SITE_URL. */
 export const SITE_URL = process.env.NEXT_PUBLIC_SITE_URL ?? "https://chemistry.soryntel.com";
 
+export const HOME_URL = new URL("/", SITE_URL).href;
+
 export type Clip = {
   id: "water" | "reaction" | "benson" | "elements";
   title: string;

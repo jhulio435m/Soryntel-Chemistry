@@ -1,4 +1,4 @@
-//! HSC Chemistry® 10 style Launcher Canvas (Fig. 1):
+//! Soryntel Chemistry launcher.
 //! White branded header bar (Settings gear + centered title + metadata),
 //! Industrial atmospheric backdrop painted via `egui::Painter`, 4 left showcase cards,
 //! 6×4 translucent glass tile matrix with active green indicators, Sub Menu & footer bar.
@@ -31,6 +31,7 @@ pub struct TileSpec {
 }
 
 pub struct LauncherUiState {
+    logo: Option<egui::TextureHandle>,
     pub detailed_view: bool,
     pub selected_category: ShowcaseCategory,
     pub cards_category: ShowcaseCategory,
@@ -44,6 +45,7 @@ pub struct LauncherUiState {
 impl Default for LauncherUiState {
     fn default() -> Self {
         Self {
+            logo: None,
             detailed_view: false,
             selected_category: ShowcaseCategory::None,
             cards_category: ShowcaseCategory::None,
@@ -114,37 +116,27 @@ pub fn render_hsc10_header(
                 });
             });
 
-            // Centered "Soryntel Chemistry® 10" title across full width
-            let center = rect.center();
-            let p = ui.painter();
-            let main_gal = p.layout_no_wrap(
-                "Soryntel Chemistry".to_string(),
-                egui::FontId::proportional(24.0),
-                egui::Color32::from_rgb(55, 65, 81),
-            );
-            let ver_gal = p.layout_no_wrap(
-                format!(" {}", env!("CARGO_PKG_VERSION")),
-                egui::FontId::proportional(24.0),
-                egui::Color32::from_rgb(0, 149, 217),
-            );
-            let total_w = main_gal.size().x + ver_gal.size().x;
-            let start_x = center.x - total_w * 0.5;
-            p.galley(
-                egui::pos2(start_x, center.y - main_gal.size().y * 0.5),
-                main_gal.clone(),
-                egui::Color32::TRANSPARENT,
-            );
-            p.text(
-                egui::pos2(start_x + main_gal.size().x - 1.0, center.y - 8.0),
-                egui::Align2::LEFT_CENTER,
-                "",
-                egui::FontId::proportional(9.5),
-                egui::Color32::from_rgb(55, 65, 81),
-            );
-            p.galley(
-                egui::pos2(start_x + main_gal.size().x + 4.0, center.y - ver_gal.size().y * 0.5),
-                ver_gal,
-                egui::Color32::TRANSPARENT,
+            let logo = ui_state.logo.get_or_insert_with(|| {
+                let logo = eframe::icon_data::from_png_bytes(include_bytes!(
+                    "../../../packaging/soryntel-logo.png"
+                ))
+                .expect("el logotipo incluido debe ser un PNG válido");
+                ui.ctx().load_texture(
+                    "soryntel-logo",
+                    egui::ColorImage::from_rgba_unmultiplied(
+                        [logo.width as usize, logo.height as usize],
+                        &logo.rgba,
+                    ),
+                    egui::TextureOptions::LINEAR,
+                )
+            });
+            let logo_size = logo.size_vec2() * (36.0 / logo.size_vec2().y);
+            let logo_rect = egui::Rect::from_center_size(rect.center(), logo_size);
+            ui.painter().image(
+                logo.id(),
+                logo_rect,
+                egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1.0, 1.0)),
+                egui::Color32::WHITE,
             );
         });
 }

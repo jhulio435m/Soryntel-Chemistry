@@ -417,11 +417,16 @@ fn main() -> eframe::Result<()> {
         ),
     };
 
+    let icon = eframe::icon_data::from_png_bytes(include_bytes!(
+        "../../../packaging/soryntel-icon.png"
+    ))
+    .expect("el icono incluido debe ser un PNG válido");
     let options = eframe::NativeOptions {
         renderer: eframe::Renderer::Glow,
         viewport: egui::ViewportBuilder::default()
             .with_inner_size(size)
             .with_min_inner_size(min_size)
+            .with_icon(icon)
             .with_title(title),
         ..Default::default()
     };

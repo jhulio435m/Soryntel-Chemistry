@@ -3598,7 +3598,7 @@ dependencies = [
 
 [[package]]
 name = "soryntel-app"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "serde",
  "serde_json",
@@ -3609,7 +3609,7 @@ dependencies = [
 
 [[package]]
 name = "soryntel-application"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "soryntel-core",
  "soryntel-db",
@@ -3619,7 +3619,7 @@ dependencies = [
 
 [[package]]
 name = "soryntel-core"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "serde",
  "serde_json",
@@ -3628,7 +3628,7 @@ dependencies = [
 
 [[package]]
 name = "soryntel-db"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "approx",
  "serde",
@@ -3640,7 +3640,7 @@ dependencies = [
 
 [[package]]
 name = "soryntel-desktop"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "arboard",
  "eframe",
@@ -3657,7 +3657,7 @@ dependencies = [
 
 [[package]]
 name = "soryntel-solver"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "serde",
  "soryntel-core",
@@ -3666,7 +3666,7 @@ dependencies = [
 
 [[package]]
 name = "soryntel-thermo"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "approx",
  "serde",

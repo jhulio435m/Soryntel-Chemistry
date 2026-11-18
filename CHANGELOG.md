@@ -1,5 +1,9 @@
 # Cambios
 
+## 0.2.1 — Identidad visual
+
+- El launcher, las ventanas y los instaladores usan la identidad visual de la web de Soryntel Chemistry.
+
 ## 0.2.0 — SoryntelDB y mejoras de escritorio
 
 - Los paquetes de publicación incluyen SoryntelDB, el catálogo termoquímico de Soryntel Chemistry.
