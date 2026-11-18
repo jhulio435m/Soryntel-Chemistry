@@ -3022,4 +3022,27 @@ mod tests {
         state.load_bal8(tmp_bal8, &db);
         assert!(state.status_ok);
     }
+
+    #[test]
+    #[ignore = "BUG-C09: abrir otro .bal8 conserva el diagrama, el stream copiado y el modal de Temp. Balance del libro anterior"]
+    fn opening_bal8_resets_state_of_previous_workbook() {
+        let db = ThermoDatabase::with_open_defaults();
+        let mut state = BalanceModuleState::new(&db);
+        let path = std::env::temp_dir().join(format!("soryntel-c09-{}.bal8", std::process::id()));
+        state.save_bal8(path.to_str().unwrap()); // libro CUCONV1
+        state.load_ch4_cooling_preset(&db); // abre un diagrama del libro CH4
+        state.active_tab = ActiveSheetTab::Out(0);
+        state.selected_stream_idx = Some(0);
+        state.copy_selected_stream();
+        assert!(state.diagram_result.is_some() && state.copied_stream_ref.is_some());
+        state.load_bal8(path.to_str().unwrap(), &db);
+        let _ = std::fs::remove_file(&path);
+        assert!(
+            state.diagram_result.is_none() && !state.show_diagram_window && state.copied_stream_ref.is_none(),
+            "tras abrir CUCONV1 siguen: diagrama={} ventana={} stream copiado={:?}",
+            state.diagram_result.is_some(),
+            state.show_diagram_window,
+            state.copied_stream_ref
+        );
+    }
 }
