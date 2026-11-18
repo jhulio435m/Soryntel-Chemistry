@@ -363,10 +363,20 @@ impl MassBalanceWindowState {
         self.text_modal_buf = content;
     }
 
-    fn export_xlsx_to_tmp(&mut self) {
+    fn export_xlsx_dialog(&mut self) {
         match SimulationUseCases::mb_export_xlsx(&self.workbook) {
             Ok(bytes) => {
-                let path = "/tmp/soryntel_mass_balance_results.xlsx";
+                let Some(chosen) = crate::storage::choose_file(
+                    true,
+                    "Exportar resultados de Mass Balance",
+                    "xlsx",
+                    "mass_balance_results.xlsx",
+                    None,
+                ) else {
+                    return;
+                };
+                let path = chosen.to_string_lossy().into_owned();
+                let path = path.as_str();
                 match crate::storage::write_atomic(path, &bytes) {
                     Ok(_) => {
                         self.status_banner = format!(
@@ -1343,7 +1353,7 @@ fn render_upper_ribbon(
                                         },
                                     );
                                     if rbtn(ui, "Export to\nExcel (.xlsx)", false).clicked() {
-                                        state.export_xlsx_to_tmp();
+                                        state.export_xlsx_dialog();
                                     }
                                     if rbtn(ui, "Save Stream\nAs...", false).clicked() {
                                         let tsv = state.workbook.export_summary_tsv();
@@ -2125,7 +2135,7 @@ fn render_measurement_data_page(ui: &mut egui::Ui, state: &mut MassBalanceWindow
                                 if let Some(map) = target_map {
                                     if val_str.trim().is_empty() {
                                         map.remove(&k);
-                                    } else if let Ok(vnum) = val_str.trim().replace(',', ".").parse::<f64>() {
+                                    } else if let Ok(vnum) = crate::ui_common::parse_user_number(&val_str) {
                                         map.insert(k, vnum);
                                         ds.estimated_cells.remove(&k);
                                     }
@@ -2495,7 +2505,7 @@ fn render_edit_sd_page(ui: &mut egui::Ui, state: &mut MassBalanceWindowState, h:
                             if let Some(ds) = state.workbook.datasets.get_mut(ds_idx) {
                                 if edit_str.trim().is_empty() {
                                     ds.sd_override.remove(&k);
-                                } else if let Ok(vnum) = edit_str.trim().replace(',', ".").parse::<f64>() {
+                                } else if let Ok(vnum) = crate::ui_common::parse_user_number(&edit_str) {
                                     ds.sd_override.insert(k, vnum.max(1e-6));
                                 }
                             }
@@ -4257,7 +4267,7 @@ fn paste_sd_tsv(wb: &mut MassBalanceWorkbook, text: &str, frac_idx: usize) -> us
         for (ci, c) in r.iter().enumerate().skip(1) {
             if let (Some(vid), Ok(val)) = (
                 col_vids.get(ci).copied().flatten(),
-                c.replace(',', ".").parse::<f64>(),
+                crate::ui_common::parse_user_number(c),
             ) {
                 ds.sd_override.insert(
                     CellKey {

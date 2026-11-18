@@ -15,6 +15,7 @@
 //! 6. **DB Tools & Refs**: Active `.HSC`/`.REF` paths, `.CAT` refresh, `Sort`, `Merge HSC1 -> HSC2`
 //!    with duplicate inspection, legacy `HSC 2.0-5.0 -> 6.0`, CSV/JSON import/export, and `MainDB6.REF` explorer.
 
+use crate::ui_common::{parse_user_number, NumberFields};
 use eframe::egui;
 use egui_plot::{Line, Plot, PlotPoints, Points};
 use soryntel_application::use_cases::CatalogUseCases;
@@ -218,17 +219,18 @@ impl SpeciesModuleState {
             .main_path
             .as_ref()
             .map(|p| p.display().to_string())
-            .unwrap_or_else(|| "/home/nando/Descargas/HSC6/Databases/Maindb6.HSC".into());
+            .unwrap_or_default();
         let default_own = summary
             .own_path
-            .as_ref()
+            .clone()
+            .or_else(crate::composition::default_own_db_path)
             .map(|p| p.display().to_string())
-            .unwrap_or_else(|| crate::ui_common::temp_file_path("soryntel_owndb6.HSC"));
+            .unwrap_or_default();
         let default_ref = summary
             .ref_path
             .as_ref()
             .map(|p| p.display().to_string())
-            .unwrap_or_else(|| "/home/nando/Descargas/HSC6/Databases/MainDB6.REF".into());
+            .unwrap_or_default();
 
         let mut st = Self {
             active_tab: SpeciesViewTab::Browser,
@@ -293,16 +295,16 @@ impl SpeciesModuleState {
             gibbs_normal_out: None,
 
             main_path_input: default_main,
-            own_path_input: default_own,
+            own_path_input: default_own.clone(),
             ref_path_input: default_ref,
-            merge_src_path: crate::ui_common::temp_file_path("hsc_src.HSC"),
-            merge_dst_path: crate::ui_common::temp_file_path("soryntel_owndb6.HSC"),
+            merge_src_path: String::new(),
+            merge_dst_path: default_own.clone(),
             merge_show_duplicates: true,
             merge_conflicts: Vec::new(),
             merge_decisions: BTreeMap::new(),
-            legacy_src_path: "/home/nando/Descargas/HSC6/Databases/MAINDB3.HSC".into(),
-            legacy_dst_path: crate::ui_common::temp_file_path("maindb3_upgraded.HSC"),
-            csv_io_path: crate::ui_common::temp_file_path("soryntel_species_export.csv"),
+            legacy_src_path: String::new(),
+            legacy_dst_path: String::new(),
+            csv_io_path: String::new(),
             ref_search_query: String::new(),
 
             status_msg: format!(
@@ -476,7 +478,8 @@ impl SpeciesModuleState {
             return;
         }
         let inv_scale = if self.use_calories { CAL_TO_JOULE } else { 1.0 };
-        let parse_f = |s: &str| s.trim().parse::<f64>().unwrap_or(0.0);
+        let fields = NumberFields::default();
+        let parse_f = |s: &str| fields.or(s, 0.0);
 
         let mut mw = parse_f(&self.editor.mw_str);
         let mut charge = 0;
@@ -495,6 +498,10 @@ impl SpeciesModuleState {
             if !self.use_kelvin {
                 t1 += 273.15;
                 t2 += 273.15;
+            }
+            if let Err(e) = fields.check() {
+                self.set_status(e, true);
+                return;
             }
             if t2 <= t1 {
                 self.set_status(
@@ -546,6 +553,10 @@ impl SpeciesModuleState {
             },
             reliability_class: self.editor.reliability_class.clamp(1, 10),
         };
+        if let Err(e) = fields.check() {
+            self.set_status(e, true);
+            return;
+        }
         let raw_ph = self.editor.raw_phase_code.clone();
         CatalogUseCases::save_own_species(db, sp, meta, raw_ph);
         self.selected_formula = Some(formula.clone());
@@ -555,6 +566,21 @@ impl SpeciesModuleState {
             format!("Saved '{formula}' to active OwnDB (OwnDB > MainDB precedence active across all modules)."),
             false,
         );
+    }
+
+    fn choose_and_export_csv(&mut self, db: &dyn SpeciesWorkspacePort) {
+        let current = Some(std::path::PathBuf::from(&self.csv_io_path)).filter(|p| p.is_absolute());
+        let Some(path) = crate::storage::choose_file(true, "Exportar especies a CSV", "csv", "species.csv", current.as_deref()) else {
+            return;
+        };
+        let csv = CatalogUseCases::export_csv(db, self.source_filter);
+        match crate::storage::write_atomic(&path, csv) {
+            Ok(_) => {
+                self.csv_io_path = path.to_string_lossy().into_owned();
+                self.set_status(format!("Exported CSV -> {}", path.display()), false);
+            }
+            Err(e) => self.set_status(format!("CSV write failed: {e}"), true),
+        }
     }
 
     /// Main UI entry point. Returns optional formula imported for Reaction Equations module.
@@ -612,11 +638,7 @@ impl SpeciesModuleState {
                         ui.close_menu();
                     }
                     if ui.button("Export Resolved View -> CSV").clicked() {
-                        let csv = CatalogUseCases::export_csv(db, self.source_filter);
-                        match crate::storage::write_atomic(&self.csv_io_path, csv) {
-                            Ok(_) => self.set_status(format!("Exported CSV -> {}", self.csv_io_path), false),
-                            Err(e) => self.set_status(format!("CSV write failed: {e}"), true),
-                        }
+                        self.choose_and_export_csv(db);
                         ui.close_menu();
                     }
                 });
@@ -987,10 +1009,6 @@ impl SpeciesModuleState {
                             .clicked()
                         {
                             self.import_to_reaction_formula = Some(sel.formula.clone());
-                            let _ = crate::storage::write_atomic(
-                                crate::ui_common::temp_file_path("soryntel_import_formula.txt"),
-                                &sel.formula,
-                            );
                         }
                         if ui.button("Edit Copy in OwnDB").clicked() {
                             self.load_into_editor(&sel.species, &sel.metadata, &sel.raw_phase_code);
@@ -1304,9 +1322,11 @@ impl SpeciesModuleState {
             if ui.button("Auto dS = dH / Ttr (Rows >= 1)").clicked() {
                 let is_cal = self.use_calories;
                 for row in self.editor.intervals.iter_mut().skip(1) {
-                    let t1 = row.t1.trim().parse::<f64>().unwrap_or(0.0);
+                    // Filas con texto no numérico se dejan sin tocar.
+                    let (Ok(t1), Ok(dh)) = (parse_user_number(&row.t1), parse_user_number(&row.h_disp)) else {
+                        continue;
+                    };
                     let t1_k = if self.use_kelvin { t1 } else { t1 + 273.15 };
-                    let dh = row.h_disp.trim().parse::<f64>().unwrap_or(0.0);
                     if t1_k > 0.0 {
                         let ds = (dh * 1000.0) / t1_k;
                         let _ = is_cal;
@@ -1382,7 +1402,8 @@ impl SpeciesModuleState {
             return;
         }
         let inv_scale = if self.use_calories { CAL_TO_JOULE } else { 1.0 };
-        let parse_f = |s: &str| s.trim().parse::<f64>().unwrap_or(0.0);
+        let fields = NumberFields::default();
+        let parse_f = |s: &str| fields.or(s, 0.0);
         let solids: Vec<SpeciesThermoInterval> = self.editor.intervals[..li]
             .iter()
             .map(|r| {
@@ -1420,6 +1441,10 @@ impl SpeciesModuleState {
             c: parse_f(&liq_row.c_disp) * inv_scale,
             d: parse_f(&liq_row.d_disp) * inv_scale,
         };
+        if let Err(e) = fields.check() {
+            self.set_status(e, true);
+            return;
+        }
         match CatalogUseCases::species_extrapolate_liquid_298(&solids, t_melt_k, dh_fus_j, liq_k) {
             Ok((h_l_298, s_l_298)) => {
                 let e_scale = self.energy_scale_to_display();
@@ -1547,9 +1572,9 @@ impl SpeciesModuleState {
                     .fit_points
                     .iter()
                     .filter_map(|p| {
-                        let t = p.t_str.trim().parse::<f64>().ok()?;
+                        let t = parse_user_number(&p.t_str).ok()?;
                         let t_k = if self.use_kelvin { t } else { t + 273.15 };
-                        let cp_j = p.cp_str.trim().parse::<f64>().ok()? * inv_scale;
+                        let cp_j = parse_user_number(&p.cp_str).ok()? * inv_scale;
                         Some([t_k, cp_j * s_scale])
                     })
                     .collect();
@@ -1576,22 +1601,31 @@ impl SpeciesModuleState {
 
     fn run_fit_cp(&mut self) {
         let inv_scale = if self.use_calories { CAL_TO_JOULE } else { 1.0 };
+        let fields = NumberFields::default();
         let pts: Vec<CpDataPoint> = self
             .fit_points
             .iter()
-            .filter_map(|p| {
-                let t = p.t_str.trim().parse::<f64>().ok()?;
+            // Una fila completamente vacía no es un dato; cualquier otra debe ser numérica.
+            .filter(|p| !(p.t_str.trim().is_empty() && p.cp_str.trim().is_empty()))
+            .map(|p| {
+                let t = fields.req(&p.t_str);
                 let t_k = if self.use_kelvin { t } else { t + 273.15 };
-                let cp_j = p.cp_str.trim().parse::<f64>().ok()? * inv_scale;
-                Some(CpDataPoint { t_k, cp_j })
+                let cp_j = fields.req(&p.cp_str) * inv_scale;
+                CpDataPoint { t_k, cp_j }
             })
             .collect();
+        // Solo se leen los coeficientes bloqueados (los que no se ajustan).
+        let lock = |fit: bool, text: &str| if fit { 0.0 } else { fields.or(text, 0.0) * inv_scale };
         let locked = KelleyCoefficients {
-            a: self.lock_a.trim().parse::<f64>().unwrap_or(0.0) * inv_scale,
-            b: self.lock_b.trim().parse::<f64>().unwrap_or(0.0) * inv_scale,
-            c: self.lock_c.trim().parse::<f64>().unwrap_or(0.0) * inv_scale,
-            d: self.lock_d.trim().parse::<f64>().unwrap_or(0.0) * inv_scale,
+            a: lock(self.fit_mask.fit_a, &self.lock_a),
+            b: lock(self.fit_mask.fit_b, &self.lock_b),
+            c: lock(self.fit_mask.fit_c, &self.lock_c),
+            d: lock(self.fit_mask.fit_d, &self.lock_d),
         };
+        if let Err(e) = fields.check() {
+            self.set_status(format!("Fit Cp: {e}"), true);
+            return;
+        }
         match CatalogUseCases::species_fit_cp(&pts, self.fit_mask, locked) {
             Ok(res) => {
                 self.set_status(
@@ -1709,11 +1743,16 @@ impl SpeciesModuleState {
     }
 
     fn run_convert_cp(&mut self) {
-        let t1 = self.ext_t1.trim().parse::<f64>().unwrap_or(298.15);
-        let t2 = self.ext_t2.trim().parse::<f64>().unwrap_or(1500.0);
+        let fields = NumberFields::default();
+        let t1 = fields.or(&self.ext_t1, 298.15);
+        let t2 = fields.or(&self.ext_t2, 1500.0);
         let mut params = [0.0_f64; 6];
         for (i, s) in self.ext_params.iter().enumerate() {
-            params[i] = s.trim().parse::<f64>().unwrap_or(0.0);
+            params[i] = fields.or(s, 0.0);
+        }
+        if let Err(e) = fields.check() {
+            self.set_status(format!("Convert Cp: {e}"), true);
+            return;
         }
         match CatalogUseCases::species_convert_cp_function(
             &self.ext_expr,
@@ -1864,7 +1903,8 @@ impl SpeciesModuleState {
     }
 
     fn run_convert_gibbs(&mut self) {
-        let parse = |s: &str| s.trim().parse::<f64>().unwrap_or(0.0);
+        let fields = NumberFields::default();
+        let parse = |s: &str| fields.or(s, 0.0);
         let inp = GibbsCoeffsInput {
             h: parse(&self.gibbs_h),
             s: parse(&self.gibbs_s),
@@ -1875,6 +1915,10 @@ impl SpeciesModuleState {
             is_calories: self.use_calories,
             t_ref_k: T_REF_K,
         };
+        if let Err(e) = fields.check() {
+            self.set_status(format!("Convert G(T): {e}"), true);
+            return;
+        }
         match CatalogUseCases::species_convert_gibbs(&inp) {
             Ok(out) => {
                 self.gibbs_delta_out = Some(out);
@@ -1990,16 +2034,19 @@ impl SpeciesModuleState {
                 ui.end_row();
 
                 ui.label("CSV Interchange:");
-                ui.add(egui::TextEdit::singleline(&mut self.csv_io_path).desired_width(300.0));
+                ui.label(&self.csv_io_path);
                 ui.horizontal(|ui| {
                     if ui.button(crate::i18n::text("common.031")).clicked() {
-                        let csv = CatalogUseCases::export_csv(db, self.source_filter);
-                        match crate::storage::write_atomic(&self.csv_io_path, csv) {
-                            Ok(_) => self.set_status(format!("CSV saved -> {}", self.csv_io_path), false),
-                            Err(e) => self.set_status(format!("{e}"), true),
-                        }
+                        self.choose_and_export_csv(db);
                     }
-                    if ui.button("Import CSV -> OwnDB").clicked() {
+                    let current = Some(std::path::PathBuf::from(&self.csv_io_path)).filter(|p| p.is_absolute());
+                    let picked = ui
+                        .button("Import CSV -> OwnDB")
+                        .clicked()
+                        .then(|| crate::storage::choose_file(false, "Importar CSV en OwnDB", "csv", "", current.as_deref()))
+                        .flatten();
+                    if let Some(path) = picked {
+                        self.csv_io_path = path.to_string_lossy().into_owned();
                         match CatalogUseCases::import_csv_file_into_own(db, &self.csv_io_path) {
                             Ok(n) => {
                                 self.refresh_search(db);
@@ -2096,5 +2143,38 @@ mod tests {
 
     fn assert_relative_approx(actual: f64, expected: f64) {
         assert!((actual - expected).abs() < 1e-3, "actual={actual}, expected={expected}");
+    }
+
+    #[test]
+    fn fit_cp_reports_points_it_cannot_parse() {
+        let db = ThermoDatabase::with_open_defaults();
+        let mut st = SpeciesModuleState::new(&db);
+        // Formato regional: la coma decimal se acepta y el punto se usa (no se descarta).
+        let exact = st.fit_points[1].cp_str.clone();
+        st.fit_points[1].t_str = "400,0".into();
+        st.fit_points[1].cp_str = exact.replace('.', ",");
+        st.run_fit_cp();
+        assert!(!st.status_is_err, "{}", st.status_msg);
+        assert!(st.fit_result.as_ref().unwrap().max_abs_error_pct < 0.01);
+        // Un texto no numérico detiene el ajuste con un error, sin resultado nuevo.
+        st.fit_result = None;
+        st.fit_points[2].cp_str = "abc".into();
+        st.run_fit_cp();
+        assert!(st.status_is_err, "el ajuste se informó como correcto ignorando un punto: {}", st.status_msg);
+        assert!(st.fit_result.is_none());
+    }
+
+    #[test]
+    fn fit_cp_locked_coefficient_with_comma_is_not_zeroed() {
+        let db = ThermoDatabase::with_open_defaults();
+        let mut st = SpeciesModuleState::new(&db);
+        st.fit_mask.fit_a = false;
+        st.lock_a = "11,166".into();
+        st.run_fit_cp();
+        let a = st.fit_result.as_ref().map(|r| r.kelley_si.a);
+        assert!(
+            st.status_is_err || a.is_some_and(|a| (a / CAL_TO_JOULE - 11.166).abs() < 1e-6),
+            "A bloqueado = {a:?} J (esperado 11.166 cal o un error)"
+        );
     }
 }

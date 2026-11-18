@@ -18,8 +18,6 @@ use soryntel_application::models::balance::{
     TargetRow,
 };
 
-const DEFAULT_BAL8_PATH: &str = "/tmp/soryntel_balance.bal8";
-const DEFAULT_BAL_XLSX_PATH: &str = "/tmp/soryntel_balance_workbook.xlsx";
 
 #[derive(Clone, PartialEq, Eq)]
 pub enum ActiveSheetTab {
@@ -96,6 +94,14 @@ impl BalanceModuleState {
                 q_w / 1000.0
             );
             self.status_ok = true;
+        } else {
+            self.status_msg = format!(
+                "Heat Loss envió {:.3} kW al Area {}, pero este libro solo tiene {} área(s): no se importó.",
+                q_w / 1000.0,
+                area_idx + 1,
+                self.wb.areas.len()
+            );
+            self.status_ok = false;
         }
     }
 
@@ -136,7 +142,7 @@ impl BalanceModuleState {
             hf_t_room_c: 25.0,
             show_file_modal: false,
             file_modal_is_save: true,
-            file_path_buf: DEFAULT_BAL8_PATH.to_string(),
+            file_path_buf: String::new(),
             show_add_species: false,
             add_to_out: false,
             add_species_query: String::new(),
@@ -159,6 +165,15 @@ impl BalanceModuleState {
                 self.active_tab = ActiveSheetTab::In(0);
                 self.selected_stream_idx = Some(0);
                 self.selected_row_idx = Some(0);
+                // Estado derivado del libro anterior: diagramas, stream copiado y modales.
+                self.selected_user_cell = None;
+                self.copied_stream_ref = None;
+                self.temp_bal_modal = None;
+                self.diagram_result = None;
+                self.show_diagram_window = false;
+                self.diagram_apply_bounds = false;
+                self.diagram_auto_scale = true;
+                self.diagram_reset_counter = self.diagram_reset_counter.wrapping_add(1);
             }
             Err(e) => {
                 self.status_msg = format!("Error evaluando preset: {e}");
@@ -219,15 +234,35 @@ impl BalanceModuleState {
         match std::fs::read_to_string(path)
             .map_err(|e| soryntel_core::SoryntelError::DatabaseError(e.to_string()))
             .and_then(|raw| BalanceUseCases::deserialize_bal8_workbook(&raw))
+            .and_then(|wb| {
+                if wb.areas.is_empty() {
+                    Err(soryntel_core::SoryntelError::DatabaseError(
+                        "el libro no contiene áreas de balance".into(),
+                    ))
+                } else {
+                    Ok(wb)
+                }
+            })
         {
             Ok(wb) => {
                 self.load_preset(wb, db);
-                self.status_msg = format!("Workbook cargado desde {path}");
+                if self.status_ok {
+                    self.status_msg = format!("Workbook cargado desde {path}");
+                }
             }
             Err(e) => {
                 self.status_msg = format!("Error abriendo .bal8: {e}");
                 self.status_ok = false;
             }
+        }
+    }
+
+    /// Exporta a .xlsx en la ruta que elija el usuario.
+    fn choose_export_xlsx(&mut self) {
+        let current = std::path::PathBuf::from(&self.file_path_buf);
+        let suggested = crate::storage::suggested_file_name(&self.wb.title, "xlsx");
+        if let Some(path) = crate::storage::choose_file(true, "Exportar a Excel", "xlsx", &suggested, Some(&current)) {
+            self.export_xlsx(&path.to_string_lossy());
         }
     }
 
@@ -340,18 +375,16 @@ impl BalanceModuleState {
                 ui.menu_button(crate::i18n::text("common.020"), |ui| {
                     if ui.button(crate::i18n::text("review.104")).clicked() {
                         self.file_modal_is_save = false;
-                        self.file_path_buf = DEFAULT_BAL8_PATH.to_string();
                         self.show_file_modal = true;
                         ui.close_menu();
                     }
                     if ui.button(crate::i18n::text("review.105")).clicked() {
                         self.file_modal_is_save = true;
-                        self.file_path_buf = DEFAULT_BAL8_PATH.to_string();
                         self.show_file_modal = true;
                         ui.close_menu();
                     }
                     if ui.button(crate::i18n::text("common.038")).clicked() {
-                        self.export_xlsx(DEFAULT_BAL_XLSX_PATH);
+                        self.choose_export_xlsx();
                         ui.close_menu();
                     }
                     ui.separator();
@@ -613,14 +646,15 @@ impl BalanceModuleState {
                     .on_hover_text("Guardar workbook en .bal8")
                     .clicked()
                 {
-                    self.save_bal8(DEFAULT_BAL8_PATH);
+                    self.file_modal_is_save = true;
+                    self.show_file_modal = true;
                 }
                 if ui
                     .small_button("📊 Excel .xlsx")
                     .on_hover_text("Exportar todas las hojas a MS Excel (.xlsx)")
                     .clicked()
                 {
-                    self.export_xlsx(DEFAULT_BAL_XLSX_PATH);
+                    self.choose_export_xlsx();
                 }
                 ui.separator();
                 if ui
@@ -771,6 +805,15 @@ impl BalanceModuleState {
                         });
                 }
             });
+
+        // Aviso visible si alguna especie no está en las bases cargadas (C27).
+        if let Some(notice) = crate::ui_common::incomplete_calculation_notice(&unresolved_balance_species(&self.wb, db)) {
+            egui::TopBottomPanel::top("bal_incomplete_notice")
+                .frame(egui::Frame::none().fill(egui::Color32::from_rgb(254, 226, 226)).inner_margin(egui::Margin::symmetric(10.0, 5.0)))
+                .show(ctx, |ui| {
+                    ui.label(egui::RichText::new(notice).color(egui::Color32::from_rgb(153, 27, 27)));
+                });
+        }
 
         // 5. Central Panel: Active Sheet Grid + Excel Bottom Sheet Tabs (Figs. 1, 3-6, 10-14)
         egui::CentralPanel::default().show(ctx, |ui| {
@@ -1618,23 +1661,35 @@ impl BalanceModuleState {
                     for (r_idx, sp) in st.species.iter_mut().enumerate() {
                         let is_sel = self.selected_stream_idx == Some(s_idx)
                             && self.selected_row_idx == Some(r_idx);
-                        let sp_color = if sp.missing_in_db {
+                        let status = crate::ui_common::species_row_status(
+                            &sp.formula,
+                            sp.missing_in_db,
+                            db.get_species(&sp.formula).is_some(),
+                        );
+                        let missing = status == crate::ui_common::SpeciesRowStatus::NotFound;
+                        let sp_color = if missing {
                             egui::Color32::RED
                         } else {
                             dark
                         };
                         row_num_cell(ui, row_num, 32.0);
-                        if text_cell(
+                        let shown = if missing { format!("⚠ {}", sp.formula) } else { sp.formula.clone() };
+                        let name_resp = text_cell(
                             ui,
-                            &sp.formula,
+                            &shown,
                             w[0],
                             egui::Color32::WHITE,
                             sp_color,
                             false,
                             false,
                             is_sel,
-                        )
-                        .clicked()
+                        );
+                        let name_resp = if missing {
+                            name_resp.on_hover_text(crate::ui_common::SPECIES_NOT_FOUND_TOOLTIP)
+                        } else {
+                            name_resp
+                        };
+                        if name_resp.clicked()
                         {
                             let fx = sp
                                 .amount_formula
@@ -1718,6 +1773,13 @@ impl BalanceModuleState {
 
                         // Amount kg (Col E — interactive per Ch. 11.1 Steps 1–2 & Ch. 11.3)
                         let mut kg_val = sp.amount_kg;
+                        if missing {
+                            // Sin masa molar no hay kg ni Nm³: «—», no 0.000.
+                            for col in [4, 5] {
+                                text_cell(ui, crate::ui_common::MISSING_VALUE, w[col], EXCEL_READONLY_BG, sp_color, true, false, false)
+                                    .on_hover_text(crate::ui_common::SPECIES_NOT_FOUND_TOOLTIP);
+                            }
+                        } else {
                         widget_cell(ui, w[4], egui::Color32::WHITE, false, |ui| {
                             if ui
                                 .add(
@@ -1749,10 +1811,11 @@ impl BalanceModuleState {
                                 need_recalc = true;
                             }
                         });
+                        }
 
                         text_cell(
                             ui,
-                            &format!("{:.2}", sp.heat_content),
+                            &crate::ui_common::calculated_cell(status, sp.heat_content, 2),
                             w[6],
                             EXCEL_READONLY_BG,
                             dark,
@@ -1762,7 +1825,7 @@ impl BalanceModuleState {
                         );
                         text_cell(
                             ui,
-                            &format!("{:.2}", sp.total_h),
+                            &crate::ui_common::calculated_cell(status, sp.total_h, 2),
                             w[7],
                             EXCEL_READONLY_BG,
                             dark,
@@ -1772,7 +1835,7 @@ impl BalanceModuleState {
                         );
                         text_cell(
                             ui,
-                            &format!("{:.3}", sp.hc_per_kmol),
+                            &crate::ui_common::calculated_cell(status, sp.hc_per_kmol, 3),
                             w[8],
                             egui::Color32::WHITE,
                             dark,
@@ -1782,7 +1845,7 @@ impl BalanceModuleState {
                         );
                         text_cell(
                             ui,
-                            &format!("{:.3}", sp.tot_h_per_kmol),
+                            &crate::ui_common::calculated_cell(status, sp.tot_h_per_kmol, 3),
                             w[9],
                             egui::Color32::WHITE,
                             dark,
@@ -1792,7 +1855,7 @@ impl BalanceModuleState {
                         );
                         text_cell(
                             ui,
-                            &format!("{:.3}", sp.mw),
+                            &crate::ui_common::calculated_cell(status, sp.mw, 3),
                             w[10],
                             egui::Color32::WHITE,
                             dark,
@@ -2058,7 +2121,7 @@ impl BalanceModuleState {
                                 cw,
                                 egui::Color32::WHITE,
                                 col,
-                                val.parse::<f64>().is_ok(),
+                                crate::ui_common::parse_user_number(&val).is_ok(),
                                 bold,
                                 sel,
                             )
@@ -2542,7 +2605,7 @@ impl BalanceModuleState {
                                             .on_hover_text("Exportar datos del diagrama")
                                             .clicked()
                                         {
-                                            self.export_xlsx(DEFAULT_BAL_XLSX_PATH);
+                                            self.choose_export_xlsx();
                                         }
                                         if ui
                                             .button("📋")
@@ -2733,43 +2796,24 @@ impl BalanceModuleState {
             self.show_heat_flow_modal = open;
         }
 
-        // 6. File Save / Open Modal (.bal8)
+        // 6. File Save / Open (.bal8): diálogo nativo con confirmación al sobrescribir.
         if self.show_file_modal {
-            let mut open = self.show_file_modal;
-            let title = if self.file_modal_is_save {
-                "💾 Save Workbook As (.bal8)"
-            } else {
-                "📂 Open Workbook (.bal8)"
-            };
-            let mut do_save = false;
-            let mut do_open = false;
-            egui::Window::new(title)
-                .open(&mut open)
-                .collapsible(false)
-                .default_width(440.0)
-                .show(ctx, |ui| {
-                    ui.label(crate::i18n::text("review.138"));
-                    ui.text_edit_singleline(&mut self.file_path_buf);
-                    ui.add_space(6.0);
-                    if self.file_modal_is_save {
-                        if ui.button(crate::i18n::text("common.014")).clicked() {
-                            do_save = true;
-                        }
-                    } else if ui.button(crate::i18n::text("common.009")).clicked() {
-                        do_open = true;
-                    }
-                });
-            if do_save {
-                let p = self.file_path_buf.clone();
-                self.save_bal8(&p);
-                open = false;
+            self.show_file_modal = false;
+            let save = self.file_modal_is_save;
+            let title = if save { "Guardar libro (.bal8)" } else { "Abrir libro (.bal8)" };
+            let current = std::path::PathBuf::from(&self.file_path_buf);
+            let suggested = crate::storage::suggested_file_name(&self.wb.title, "bal8");
+            if let Some(path) = crate::storage::choose_file(save, title, "bal8", &suggested, Some(&current)) {
+                let p = path.to_string_lossy().into_owned();
+                if save {
+                    self.save_bal8(&p);
+                } else {
+                    self.load_bal8(&p, db);
+                }
+                if self.status_ok {
+                    self.file_path_buf = p;
+                }
             }
-            if do_open {
-                let p = self.file_path_buf.clone();
-                self.load_bal8(&p, db);
-                open = false;
-            }
-            self.show_file_modal = open;
         }
 
         // 7. Add Species to Stream Modal
@@ -2958,9 +3002,17 @@ impl BalanceModuleState {
                     let txt = self.formula_bar_text.trim().to_string();
                     if txt.starts_with('=') {
                         sp.amount_formula = Some(txt);
-                    } else if let Ok(v) = txt.parse::<f64>() {
-                        sp.amount_formula = None;
-                        sp.amount_kmol = v.max(0.0);
+                    } else {
+                        match crate::ui_common::parse_user_number(&txt) {
+                            Ok(v) => {
+                                sp.amount_formula = None;
+                                sp.amount_kmol = v.max(0.0);
+                            }
+                            Err(e) => {
+                                self.status_msg = format!("Cantidad no válida: {e}");
+                                self.status_ok = false;
+                            }
+                        }
                     }
                 }
             } else if let Some(st) = streams.get_mut(s_idx) {
@@ -2972,6 +3024,20 @@ impl BalanceModuleState {
         }
         self.recalculate(db);
     }
+}
+
+/// Fórmulas de las filas de especie de todas las áreas que no están en las bases cargadas.
+pub(crate) fn unresolved_balance_species(wb: &BalanceWorkbook, db: &dyn SpeciesCatalogPort) -> Vec<String> {
+    wb.areas
+        .iter()
+        .flat_map(|a| a.in_streams.iter().chain(a.out_streams.iter()))
+        .flat_map(|st| st.species.iter())
+        .filter(|sp| {
+            crate::ui_common::species_row_status(&sp.formula, sp.missing_in_db, db.get_species(&sp.formula).is_some())
+                == crate::ui_common::SpeciesRowStatus::NotFound
+        })
+        .map(|sp| sp.formula.clone())
+        .collect()
 }
 
 #[cfg(test)]
@@ -3021,5 +3087,69 @@ mod tests {
         assert!(state.status_ok);
         state.load_bal8(tmp_bal8, &db);
         assert!(state.status_ok);
+    }
+
+    #[test]
+    fn opening_bal8_resets_state_of_previous_workbook() {
+        let db = ThermoDatabase::with_open_defaults();
+        let mut state = BalanceModuleState::new(&db);
+        let path = std::env::temp_dir().join(format!("soryntel-c09-{}.bal8", std::process::id()));
+        state.save_bal8(path.to_str().unwrap()); // libro CUCONV1
+        state.load_ch4_cooling_preset(&db); // abre un diagrama del libro CH4
+        state.active_tab = ActiveSheetTab::Out(0);
+        state.selected_stream_idx = Some(0);
+        state.copy_selected_stream();
+        assert!(state.diagram_result.is_some() && state.copied_stream_ref.is_some());
+        state.load_bal8(path.to_str().unwrap(), &db);
+        let _ = std::fs::remove_file(&path);
+        assert!(
+            state.diagram_result.is_none() && !state.show_diagram_window && state.copied_stream_ref.is_none(),
+            "tras abrir CUCONV1 siguen: diagrama={} ventana={} stream copiado={:?}",
+            state.diagram_result.is_some(),
+            state.show_diagram_window,
+            state.copied_stream_ref
+        );
+
+        // Un libro sin áreas se rechaza y el abierto queda intacto.
+        let areas_before = state.wb.areas.len();
+        let mut empty = state.wb.clone();
+        empty.areas.clear();
+        let path = std::env::temp_dir().join(format!("soryntel-c09b-{}.bal8", std::process::id()));
+        std::fs::write(&path, BalanceUseCases::serialize_bal8_workbook(&empty).unwrap()).unwrap();
+        state.load_bal8(path.to_str().unwrap(), &db);
+        let _ = std::fs::remove_file(&path);
+        assert!(!state.status_ok);
+        assert_eq!(state.wb.areas.len(), areas_before);
+    }
+
+    #[test]
+    fn species_missing_from_catalog_is_listed_for_the_incomplete_notice() {
+        let db = ThermoDatabase::with_open_defaults();
+        let mut state = BalanceModuleState::new(&db);
+        let before = unresolved_balance_species(&state.wb, &db).len();
+        state.wb.areas[0].in_streams[0]
+            .species
+            .push(SpeciesRow::new("ZzUnknown9".to_string(), 25.0, 1.0));
+        state.recalculate(&db);
+        let missing = unresolved_balance_species(&state.wb, &db);
+        assert_eq!(missing.len(), before + 1);
+        assert!(missing.contains(&"ZzUnknown9".to_string()));
+        let ctx = egui::Context::default();
+        let _ = ctx.run(egui::RawInput::default(), |ctx| state.ui(ctx, &db));
+    }
+
+    #[test]
+    fn heat_loss_import_to_missing_area_is_reported() {
+        let db = ThermoDatabase::with_open_defaults();
+        let mut state = BalanceModuleState::new(&db);
+        let n = state.wb.areas.len();
+        // Heat Loss ofrece las áreas de SU propio libro por defecto, no las del Balance abierto.
+        let before = state.status_msg.clone();
+        state.set_area_heat_loss_w(n + 2, 1500.0, &db);
+        assert!(
+            !state.status_ok || state.status_msg != before,
+            "importación a «Area {}» con {n} área(s): sin mensaje ni error",
+            n + 3
+        );
     }
 }

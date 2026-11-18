@@ -10,6 +10,7 @@ mod i18n;
 mod storage;
 mod addins_bridge;
 mod aqua_ui;
+mod module_link;
 mod balance_ui;
 mod benson_ui;
 mod composition;
@@ -88,6 +89,56 @@ fn is_child_running(slot: &mut Option<std::process::Child>) -> bool {
     false
 }
 
+/// Envía (si procede) una pérdida de calor de Heat Loss a Balance y devuelve el mensaje para
+/// el usuario. Si el Balance abierto no tiene el área elegida, no se envía nada.
+fn heat_loss_send_outcome(
+    send: impl FnOnce() -> Result<(), String>,
+    open_balance_areas: Option<usize>,
+    target_area: usize,
+) -> (String, bool) {
+    if let Some(n) = open_balance_areas {
+        if target_area >= n {
+            return (
+                format!(
+                    "El Balance abierto tiene {n} área(s); el Area {} no existe. Elija otra área.",
+                    target_area + 1
+                ),
+                false,
+            );
+        }
+    }
+    if let Err(e) = send() {
+        return (format!("No se pudo enviar la pérdida de calor a Balance: {e}"), false);
+    }
+    match open_balance_areas {
+        Some(_) => (
+            format!("Enviado al Balance abierto (Area {}); esperando confirmación…", target_area + 1),
+            true,
+        ),
+        None => (
+            format!(
+                "No había ningún Balance abierto: se abre uno con el libro por defecto y la pérdida se importará en su Area {}.",
+                target_area + 1
+            ),
+            true,
+        ),
+    }
+}
+
+/// Lanza un módulo en su ranura solo si no hay ya un proceso vivo en ella: así nunca se
+/// pierde el `Child` de una ventana abierta (que «Cerrar todo» no podría cerrar).
+/// Devuelve `true` si se lanzó un proceso nuevo.
+fn launch_into_slot(
+    slot: &mut Option<std::process::Child>,
+    spawn: impl FnOnce() -> Option<std::process::Child>,
+) -> bool {
+    if is_child_running(slot) {
+        return false;
+    }
+    *slot = spawn();
+    slot.is_some()
+}
+
 fn kill_child(slot: &mut Option<std::process::Child>) {
     if let Some(mut child) = slot.take() {
         let _ = child.kill();
@@ -95,74 +146,115 @@ fn kill_child(slot: &mut Option<std::process::Child>) {
     }
 }
 
-fn main() -> eframe::Result<()> {
-    rust_i18n::set_locale("es");
+/// Módulos aceptados por `--module` (y sus alias).
+const MODULE_ARGS: &[(&str, WindowMode)] = &[
+    ("launcher", WindowMode::Launcher),
+    ("reaction", WindowMode::Reaction),
+    ("balance", WindowMode::Balance),
+    ("heatloss", WindowMode::HeatLoss),
+    ("equilibrium", WindowMode::Equilibrium),
+    ("exergy", WindowMode::Exergy),
+    ("estimate", WindowMode::Estimate),
+    ("ehph", WindowMode::EhPh),
+    ("diagrams", WindowMode::Diagrams),
+    ("phase_stability", WindowMode::PhaseStability),
+    ("species_converter", WindowMode::SpeciesConverter),
+    ("benson", WindowMode::Benson),
+    ("elements", WindowMode::Elements),
+    ("water", WindowMode::Water),
+    ("units", WindowMode::Units),
+    ("excel_addins", WindowMode::ExcelAddIns),
+    ("addins", WindowMode::ExcelAddIns),
+    ("geo", WindowMode::ExcelAddIns),
+    ("aqua", WindowMode::Aqua),
+    ("sim", WindowMode::Sim),
+    ("flowsheet", WindowMode::Sim),
+    ("lca", WindowMode::Lca),
+    ("sim_lca", WindowMode::Lca),
+    ("mass_balance", WindowMode::MassBalance),
+    ("mas", WindowMode::MassBalance),
+    ("species", WindowMode::Species),
+    ("databases", WindowMode::Species),
+    ("browser", WindowMode::Species),
+];
 
-    // Load external user-supplied HSC database in read-only mode if provided via --hsc-db or default path
-    let args: Vec<String> = std::env::args().collect();
-    let mut custom_db = None;
-    let mut window_mode = WindowMode::Launcher;
-    let mut bridge_port: Option<u16> = None;
-    let mut eval_cli: Option<Vec<String>> = None;
-    let mut i = 1;
+struct CliOptions {
+    custom_db: Option<String>,
+    window_mode: WindowMode,
+    bridge_port: Option<u16>,
+    eval_cli: Option<Vec<String>>,
+}
+
+/// Interpreta los argumentos (sin el nombre del programa). Un `--module` desconocido o un
+/// `--hsc-db`/`--module` sin valor es un error, en lugar de abrir el launcher en silencio.
+fn parse_cli_args(args: &[String]) -> Result<CliOptions, String> {
+    let mut options = CliOptions {
+        custom_db: None,
+        window_mode: WindowMode::Launcher,
+        bridge_port: None,
+        eval_cli: None,
+    };
+    let mut i = 0;
     while i < args.len() {
         let a = args[i].as_str();
-        if a == "--hsc-db" && i + 1 < args.len() {
-            custom_db = Some(args[i + 1].clone());
+        if a == "--hsc-db" {
+            let value = args.get(i + 1).filter(|v| !v.starts_with("--"));
+            let Some(value) = value else {
+                return Err("--hsc-db necesita la ruta de MainDB".into());
+            };
+            options.custom_db = Some(value.clone());
             i += 2;
         } else if let Some(val) = a.strip_prefix("--hsc-db=") {
-            custom_db = Some(val.to_string());
+            if val.is_empty() {
+                return Err("--hsc-db necesita la ruta de MainDB".into());
+            }
+            options.custom_db = Some(val.to_string());
             i += 1;
         } else if a == "--addin-bridge" {
-            let p = args
-                .get(i + 1)
-                .and_then(|s| s.parse::<u16>().ok())
-                .unwrap_or(8765);
-            bridge_port = Some(p);
-            if args
-                .get(i + 1)
-                .and_then(|s| s.parse::<u16>().ok())
-                .is_some()
-            {
-                i += 2;
-            } else {
-                i += 1;
-            }
+            let port = args.get(i + 1).and_then(|s| s.parse::<u16>().ok());
+            options.bridge_port = Some(port.unwrap_or(8765));
+            i += if port.is_some() { 2 } else { 1 };
         } else if let Some(val) = a.strip_prefix("--addin-bridge=") {
-            bridge_port = Some(val.parse::<u16>().unwrap_or(8765));
+            options.bridge_port = Some(val.parse::<u16>().unwrap_or(8765));
             i += 1;
         } else if a == "--addin-eval" && i + 1 < args.len() {
-            eval_cli = Some(args[i + 1..].to_vec());
+            options.eval_cli = Some(args[i + 1..].to_vec());
             break;
-        } else if a == "--module" && i + 1 < args.len() {
-            window_mode = match args[i + 1].as_str() {
-                "reaction" => WindowMode::Reaction,
-                "balance" => WindowMode::Balance,
-                "heatloss" => WindowMode::HeatLoss,
-                "equilibrium" => WindowMode::Equilibrium,
-                "exergy" => WindowMode::Exergy,
-                "estimate" => WindowMode::Estimate,
-                "ehph" => WindowMode::EhPh,
-                "diagrams" => WindowMode::Diagrams,
-                "phase_stability" => WindowMode::PhaseStability,
-                "species_converter" => WindowMode::SpeciesConverter,
-                "benson" => WindowMode::Benson,
-                "elements" => WindowMode::Elements,
-                "water" => WindowMode::Water,
-                "units" => WindowMode::Units,
-                "excel_addins" | "addins" => WindowMode::ExcelAddIns,
-                "aqua" => WindowMode::Aqua,
-                "sim" | "flowsheet" => WindowMode::Sim,
-                "lca" | "sim_lca" => WindowMode::Lca,
-                "mass_balance" | "mas" => WindowMode::MassBalance,
-                "species" | "databases" | "browser" => WindowMode::Species,
-                _ => WindowMode::Launcher,
+        } else if a == "--module" || a.starts_with("--module=") {
+            let (value, step) = match a.strip_prefix("--module=") {
+                Some(v) => (Some(v), 1),
+                None => (args.get(i + 1).map(String::as_str), 2),
             };
-            i += 2;
+            let Some(value) = value.filter(|v| !v.is_empty()) else {
+                return Err("--module necesita el nombre de un módulo".into());
+            };
+            options.window_mode = MODULE_ARGS
+                .iter()
+                .find(|(name, _)| *name == value)
+                .map(|(_, mode)| *mode)
+                .ok_or_else(|| {
+                    let valid: Vec<&str> = MODULE_ARGS.iter().map(|(name, _)| *name).collect();
+                    format!("módulo desconocido «{value}». Valores válidos: {}", valid.join(", "))
+                })?;
+            i += step;
         } else {
             i += 1;
         }
     }
+    Ok(options)
+}
+
+fn main() -> eframe::Result<()> {
+    rust_i18n::set_locale("es");
+
+    let args: Vec<String> = std::env::args().collect();
+    let CliOptions { custom_db, window_mode, bridge_port, eval_cli } = match parse_cli_args(&args[1..]) {
+        Ok(options) => options,
+        Err(message) => {
+            eprintln!("soryntel-desktop: {message}");
+            std::process::exit(2);
+        }
+    };
     let services = AppServices::load(custom_db.as_deref());
 
     if let Some(port) = bridge_port {
@@ -476,6 +568,10 @@ struct SoryntelDesktopApp {
     mb_state: mass_balance_ui::MassBalanceWindowState,
     species_state: species_ui::SpeciesModuleState,
     launcher_ui_state: launcher_ui::LauncherUiState,
+    /// Último número de áreas publicado para Heat Loss (solo en la ventana Balance).
+    published_balance_areas: Option<usize>,
+    db_warnings_dismissed: bool,
+    last_formula_poll: Option<std::time::Instant>,
 }
 
 impl SoryntelDesktopApp {
@@ -555,22 +651,35 @@ impl SoryntelDesktopApp {
             mb_state,
             species_state,
             launcher_ui_state: launcher_ui::LauncherUiState::default(),
+            published_balance_areas: None,
+            db_warnings_dismissed: false,
+            last_formula_poll: None,
         }
     }
 }
 
 impl eframe::App for SoryntelDesktopApp {
+    fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
+        if self.window_mode == WindowMode::Balance {
+            module_link::ModuleLink::in_temp_dir().clear_presence();
+        }
+    }
+
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        self.show_database_warnings(ctx);
         match self.window_mode {
             WindowMode::Reaction => {
-                let import_path = crate::ui_common::temp_file_path("soryntel_import_formula.txt");
-                if let Ok(imported) = std::fs::read_to_string(&import_path) {
-                    let f = imported.trim().to_string();
-                    if !f.is_empty() {
-                        self.reaction_state.formula_input = f;
+                // Fórmulas enviadas desde Species: sondeo cada 500 ms, no en cada frame.
+                ctx.request_repaint_after(std::time::Duration::from_millis(500));
+                let due = self
+                    .last_formula_poll
+                    .is_none_or(|t| t.elapsed() >= std::time::Duration::from_millis(500));
+                if due {
+                    self.last_formula_poll = Some(std::time::Instant::now());
+                    if let Some(formula) = module_link::ModuleLink::in_temp_dir().take_formula() {
+                        self.reaction_state.formula_input = formula;
                         self.reaction_state.run_calculate(&*self.services.catalog());
                     }
-                    let _ = std::fs::remove_file(&import_path);
                 }
                 self.reaction_state.ui(ctx, &*self.services.catalog());
                 if self.reaction_state.request_open_browser {
@@ -583,37 +692,52 @@ impl eframe::App for SoryntelDesktopApp {
                 return;
             }
             WindowMode::Balance => {
-                let export_path = crate::ui_common::temp_file_path("soryntel_heat_loss_export.txt");
-                if let Ok(content) = std::fs::read_to_string(&export_path) {
-                    let parts: Vec<&str> = content.split_whitespace().collect();
-                    if parts.len() == 2 {
-                        if let (Ok(area), Ok(q_w)) =
-                            (parts[0].parse::<usize>(), parts[1].parse::<f64>())
-                        {
-                            self.services.with_catalog(|catalog| {
-                                self.balance_state.set_area_heat_loss_w(area, q_w, catalog)
-                            });
+                // Sondeo periódico del envío de Heat Loss aunque no haya eventos de entrada.
+                ctx.request_repaint_after(std::time::Duration::from_millis(500));
+                let link = module_link::ModuleLink::in_temp_dir();
+                if let Some(received) = link.take_heat_loss() {
+                    match received {
+                        Ok((area, q_w)) => self.services.with_catalog(|catalog| {
+                            self.balance_state.set_area_heat_loss_w(area, q_w, catalog)
+                        }),
+                        Err(e) => {
+                            self.balance_state.status_msg = e;
+                            self.balance_state.status_ok = false;
                         }
                     }
-                    let _ = std::fs::remove_file(&export_path);
+                    let _ = link.write_ack(self.balance_state.status_ok, &self.balance_state.status_msg);
                 }
                 self.services
                     .with_catalog(|catalog| self.balance_state.ui(ctx, catalog));
+                let areas = self.balance_state.wb.areas.len();
+                if self.published_balance_areas != Some(areas) && link.publish_presence(areas).is_ok() {
+                    self.published_balance_areas = Some(areas);
+                }
                 return;
             }
             WindowMode::HeatLoss => {
-                let area_count = self.balance_state.wb.areas.len();
-                self.heat_loss_state.ui(ctx, area_count);
+                ctx.request_repaint_after(std::time::Duration::from_millis(500));
+                let link = module_link::ModuleLink::in_temp_dir();
+                // Áreas del Balance abierto (otro proceso); 0 si no hay ninguno.
+                let open_balance_areas = link.balance_area_count();
+                self.heat_loss_state.ui(ctx, open_balance_areas.unwrap_or(0));
                 if let Some(q_w) = self.heat_loss_state.pending_export_w.take() {
                     let target_area = self.heat_loss_state.export_target_area;
-                    let _ = crate::storage::write_atomic(
-                        crate::ui_common::temp_file_path("soryntel_heat_loss_export.txt"),
-                        format!("{target_area} {q_w}"),
+                    let (msg, ok) = heat_loss_send_outcome(
+                        || link.send_heat_loss(target_area, q_w).map_err(|e| e.to_string()),
+                        open_balance_areas,
+                        target_area,
                     );
-                    if !is_child_running(&mut self.child_balance) {
+                    if ok && open_balance_areas.is_none() && !is_child_running(&mut self.child_balance) {
                         self.child_balance =
                             spawn_module_window("balance", self.custom_db_arg.as_deref());
                     }
+                    self.heat_loss_state.status_msg = msg;
+                    self.heat_loss_state.status_ok = ok;
+                }
+                if let Some((ok, msg)) = link.take_ack() {
+                    self.heat_loss_state.status_msg = format!("Balance: {msg}");
+                    self.heat_loss_state.status_ok = ok;
                 }
                 return;
             }
@@ -698,12 +822,19 @@ impl eframe::App for SoryntelDesktopApp {
                 // tomar el de lectura para recalcular la reacción.
                 let selected = self.species_state.ui(ctx, &mut *self.services.catalog_mut());
                 if let Some(f) = selected {
-                    let _ = crate::storage::write_atomic(
-                        crate::ui_common::temp_file_path("soryntel_import_formula.txt"),
-                        &f,
-                    );
-                    self.reaction_state.formula_input = f;
-                    self.reaction_state.run_calculate(&*self.services.catalog());
+                    match module_link::ModuleLink::in_temp_dir().send_formula(&f) {
+                        Ok(()) => {
+                            self.species_state.status_msg = format!(
+                                "«{f}» enviada a Reaction: se cargará si hay una ventana de Reaction abierta en los próximos {} s.",
+                                module_link::FORMULA_MAX_AGE_SECS
+                            );
+                            self.species_state.status_is_err = false;
+                        }
+                        Err(e) => {
+                            self.species_state.status_msg = format!("No se pudo enviar «{f}» a Reaction: {e}");
+                            self.species_state.status_is_err = true;
+                        }
+                    }
                 }
                 return;
             }
@@ -715,6 +846,30 @@ impl eframe::App for SoryntelDesktopApp {
 }
 
 impl SoryntelDesktopApp {
+    /// Banner con los fallos de carga de MainDB/OwnDB (en Windows release no hay consola).
+    fn show_database_warnings(&mut self, ctx: &egui::Context) {
+        if self.db_warnings_dismissed || self.services.load_warnings().is_empty() {
+            return;
+        }
+        egui::TopBottomPanel::top("db_load_warnings")
+            .frame(
+                egui::Frame::none()
+                    .fill(egui::Color32::from_rgb(254, 243, 199))
+                    .inner_margin(egui::Margin::symmetric(10.0, 6.0)),
+            )
+            .show(ctx, |ui| {
+                ui.horizontal_wrapped(|ui| {
+                    ui.label(egui::RichText::new("⚠ Bases de datos").strong().color(egui::Color32::from_rgb(146, 64, 14)));
+                    for warning in self.services.load_warnings() {
+                        ui.label(egui::RichText::new(warning).color(egui::Color32::from_rgb(120, 53, 15)));
+                    }
+                    if ui.small_button("Cerrar aviso").clicked() {
+                        self.db_warnings_dismissed = true;
+                    }
+                });
+            });
+    }
+
     fn show_launcher_ui(&mut self, ctx: &egui::Context) {
         // Poll child processes periodically while launcher is open
         ctx.request_repaint_after(std::time::Duration::from_millis(400));
@@ -1481,7 +1636,7 @@ impl SoryntelDesktopApp {
                 if should_kill {
                     kill_child(slot);
                 } else {
-                    *slot = spawn_module_window(mode_arg, custom.as_deref());
+                    launch_into_slot(slot, || spawn_module_window(mode_arg, custom.as_deref()));
                 }
             }
         }
@@ -1516,7 +1671,7 @@ impl SoryntelDesktopApp {
     fn launch_module_by_key(&mut self, mode_arg: &str) {
         let custom = self.custom_db_arg.clone();
         if let Some(slot) = self.module_slot_mut(mode_arg) {
-            *slot = spawn_module_window(mode_arg, custom.as_deref());
+            launch_into_slot(slot, || spawn_module_window(mode_arg, custom.as_deref()));
         }
     }
 
@@ -1551,6 +1706,61 @@ impl SoryntelDesktopApp {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn launching_a_running_module_keeps_the_tracked_child() {
+        let spawn = || std::process::Command::new("sleep").arg("30").spawn().ok();
+        let mut slot = None;
+        assert!(launch_into_slot(&mut slot, spawn));
+        let first = slot.as_ref().unwrap().id();
+        let mut spawned_again = false;
+        assert!(!launch_into_slot(&mut slot, || {
+            spawned_again = true;
+            spawn()
+        }));
+        assert!(!spawned_again, "no se lanza un segundo proceso del mismo módulo");
+        assert_eq!(slot.as_ref().unwrap().id(), first);
+        kill_child(&mut slot);
+        assert!(slot.is_none());
+        // Tras cerrarse, el módulo puede volver a abrirse.
+        assert!(launch_into_slot(&mut slot, spawn));
+        kill_child(&mut slot);
+    }
+
+    #[test]
+    fn cli_rejects_unknown_module_and_missing_values() {
+        let args = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        let ok = parse_cli_args(&args(&["--module", "geo", "--hsc-db", "/db ñ/Maindb6.HSC"])).unwrap();
+        assert!(ok.window_mode == WindowMode::ExcelAddIns);
+        assert_eq!(ok.custom_db.as_deref(), Some("/db ñ/Maindb6.HSC"));
+        assert!(parse_cli_args(&args(&["--module=balance"])).unwrap().window_mode == WindowMode::Balance);
+        let err = parse_cli_args(&args(&["--module", "equilibirum"])).err().unwrap();
+        assert!(err.contains("equilibirum") && err.contains("equilibrium"), "{err}");
+        assert!(parse_cli_args(&args(&["--module"])).is_err());
+        assert!(parse_cli_args(&args(&["--hsc-db"])).is_err());
+        assert!(parse_cli_args(&args(&["--hsc-db", "--module", "reaction"])).is_err());
+        assert!(parse_cli_args(&args(&[])).unwrap().window_mode == WindowMode::Launcher);
+        // Cada módulo que el launcher puede abrir se acepta en --module.
+        for m in ["reaction", "balance", "heatloss", "equilibrium", "exergy", "estimate", "ehph", "diagrams",
+                  "phase_stability", "species_converter", "benson", "elements", "water", "units",
+                  "excel_addins", "aqua", "sim", "lca", "mass_balance", "species"] {
+            assert!(parse_cli_args(&args(&["--module", m])).is_ok(), "{m}");
+        }
+    }
+
+    #[test]
+    fn heat_loss_send_checks_target_area_before_sending() {
+        let mut sent = false;
+        let (msg, ok) = heat_loss_send_outcome(|| { sent = true; Ok(()) }, Some(1), 2);
+        assert!(!ok && !sent && msg.contains("Area 3"), "{msg}");
+        let (_, ok) = heat_loss_send_outcome(|| Ok(()), Some(3), 2);
+        assert!(ok);
+        let (msg, ok) = heat_loss_send_outcome(|| Err("disco lleno".into()), None, 0);
+        assert!(!ok && msg.contains("disco lleno"));
+        let (msg, ok) = heat_loss_send_outcome(|| Ok(()), None, 0);
+        assert!(ok && msg.contains("No había ningún Balance"));
+    }
 
     fn collect_rendered_texts(
         app: &mut SoryntelDesktopApp,

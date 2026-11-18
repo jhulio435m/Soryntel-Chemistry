@@ -1,5 +1,8 @@
 //! Module 05 — Exergy Balance UI (HSC Exergy Balance Fig. 1 & Fig. 2 parity).
 
+use crate::ui_common::{
+    calculated_cell, species_row_status, SpeciesRowStatus, MISSING_VALUE, SPECIES_NOT_FOUND_TOOLTIP,
+};
 use crate::excel_grid::{
     col_letter, header_cell, row_num_cell, text_cell, widget_cell, CELL_H, EXCEL_ALT_ROW_BG,
     EXCEL_GRID_BORDER, EXCEL_HEADER_BORDER, EXCEL_SECTION_BG,
@@ -124,6 +127,61 @@ impl ExergyModuleState {
         self.energy_unit.label()
     }
 
+    /// Estado de la fila `r_idx` del stream `s_idx` (resuelta o no encontrada en el catálogo).
+    fn species_status(&self, s_idx: usize, r_idx: usize, db: &dyn SpeciesCatalogPort) -> SpeciesRowStatus {
+        let row = &self.wb.streams[s_idx].species[r_idx];
+        species_row_status(&row.formula, row.missing_in_db, db.get_species(&row.formula).is_some())
+    }
+
+    /// Fórmulas de todas las filas que no están en las bases cargadas.
+    pub fn unresolved_species(&self, db: &dyn SpeciesCatalogPort) -> Vec<String> {
+        let mut out = Vec::new();
+        for (s_idx, stream) in self.wb.streams.iter().enumerate() {
+            for r_idx in 0..stream.species.len() {
+                if self.species_status(s_idx, r_idx, db) == SpeciesRowStatus::NotFound {
+                    out.push(stream.species[r_idx].formula.clone());
+                }
+            }
+        }
+        out
+    }
+
+    fn open_exe8(&mut self, path: &std::path::Path, db: &dyn SpeciesCatalogPort) {
+        match std::fs::read_to_string(path)
+            .map_err(|e| e.to_string())
+            .and_then(|raw| ExergyWorkbook::from_exe8_str(&raw))
+        {
+            Ok(mut wb) => {
+                MiscUseCases::calculate_exergy(db, &mut wb);
+                self.selected_stream = if wb.streams.is_empty() { None } else { Some(0) };
+                self.wb = wb;
+                self.selected_species = None;
+                self.sync_input_buffers();
+                self.file_path_input = path.to_string_lossy().into_owned();
+                self.status_msg = format!("Cargado '{}'", path.display());
+            }
+            Err(e) => {
+                self.status_msg = format!("Error al abrir: {e}");
+            }
+        }
+    }
+
+    fn save_exe8(&mut self, path: &std::path::Path) {
+        match self
+            .wb
+            .to_exe8_json()
+            .and_then(|j| crate::storage::write_atomic(path, j).map_err(|e| e.to_string()))
+        {
+            Ok(()) => {
+                self.file_path_input = path.to_string_lossy().into_owned();
+                self.status_msg = format!("Guardado '{}'", path.display());
+            }
+            Err(e) => {
+                self.status_msg = format!("Error al guardar: {e}");
+            }
+        }
+    }
+
     fn fmt_temp(&self, k: f64) -> f64 {
         match self.temp_unit {
             TemperatureUnit::Kelvin => k,
@@ -192,44 +250,24 @@ impl ExergyModuleState {
                             ui.close_menu();
                         }
                         ui.separator();
-                        ui.horizontal(|ui| {
-                            ui.label(crate::i18n::text("common.064"));
-                            ui.add(
-                                egui::TextEdit::singleline(&mut self.file_path_input)
-                                    .desired_width(140.0),
-                            );
-                        });
                         if ui.button("Open (.exe8)...").clicked() {
-                            match std::fs::read_to_string(&self.file_path_input)
-                                .map_err(|e| e.to_string())
-                                .and_then(|raw| ExergyWorkbook::from_exe8_str(&raw))
-                            {
-                                Ok(mut wb) => {
-                                    MiscUseCases::calculate_exergy(db, &mut wb);
-                                    self.wb = wb;
-                                    self.selected_stream = Some(0);
-                                    self.selected_species = None;
-                                    self.sync_input_buffers();
-                                    self.status_msg =
-                                        format!("Cargado '{}'", self.file_path_input);
-                                }
-                                Err(e) => {
-                                    self.status_msg = format!("Error al abrir: {e}");
-                                }
+                            let current = Some(std::path::PathBuf::from(&self.file_path_input))
+                                .filter(|p| p.is_absolute());
+                            if let Some(path) = crate::storage::choose_file(false, "Abrir libro (.exe8)", "exe8", "", current.as_deref()) {
+                                self.open_exe8(&path, db);
                             }
                             ui.close_menu();
                         }
                         if ui.button("Save (.exe8)...").clicked() {
-                            match self.wb.to_exe8_json().and_then(|j| {
-                                crate::storage::write_atomic(&self.file_path_input, j).map_err(|e| e.to_string())
-                            }) {
-                                Ok(()) => {
-                                    self.status_msg =
-                                        format!("Guardado '{}'", self.file_path_input);
-                                }
-                                Err(e) => {
-                                    self.status_msg = format!("Error al guardar: {e}");
-                                }
+                            let current = Some(std::path::PathBuf::from(&self.file_path_input))
+                                .filter(|p| p.is_absolute());
+                            let name = std::path::Path::new(&self.file_path_input)
+                                .file_name()
+                                .map(|n| n.to_string_lossy().into_owned())
+                                .unwrap_or_default();
+                            let suggested = crate::storage::suggested_file_name(&name, "exe8");
+                            if let Some(path) = crate::storage::choose_file(true, "Guardar libro (.exe8)", "exe8", &suggested, current.as_deref()) {
+                                self.save_exe8(&path);
                             }
                             ui.close_menu();
                         }
@@ -532,6 +570,15 @@ impl ExergyModuleState {
                     });
                 });
             });
+
+        // Aviso visible si alguna especie no está en las bases cargadas (C27).
+        if let Some(notice) = crate::ui_common::incomplete_calculation_notice(&self.unresolved_species(db)) {
+            egui::TopBottomPanel::top("exergy_incomplete_notice")
+                .frame(egui::Frame::none().fill(egui::Color32::from_rgb(254, 226, 226)).inner_margin(egui::Margin::symmetric(10.0, 5.0)))
+                .show(ctx, |ui| {
+                    ui.label(egui::RichText::new(notice).color(egui::Color32::from_rgb(153, 27, 27)));
+                });
+        }
 
         // Main Spreadsheet Area (`Calculations`)
         egui::CentralPanel::default()
@@ -1026,7 +1073,8 @@ impl ExergyModuleState {
                         let sp_len = self.wb.streams[s_idx].species.len();
                         for r_idx in 0..sp_len {
                             let is_sp_sel = self.selected_species == Some((s_idx, r_idx));
-                            let missing = self.wb.streams[s_idx].species[r_idx].missing_in_db;
+                            let status = self.species_status(s_idx, r_idx, db);
+                            let missing = status == SpeciesRowStatus::NotFound;
                             let warn = self.wb.streams[s_idx].species[r_idx].phase_warning.is_some();
                             let name_color = if missing {
                                 egui::Color32::from_rgb(185, 28, 28)
@@ -1040,17 +1088,23 @@ impl ExergyModuleState {
                                 row_num_cell(ui, excel_row, row_num_w);
                                 let formula =
                                     self.wb.streams[s_idx].species[r_idx].formula.clone();
-                                if text_cell(
+                                let shown = if missing { format!("⚠ {formula}") } else { formula };
+                                let name_resp = text_cell(
                                     ui,
-                                    &formula,
+                                    &shown,
                                     col_widths[0],
                                     EXCEL_ALT_ROW_BG,
                                     name_color,
                                     false,
                                     false,
                                     is_sp_sel,
-                                )
-                                .clicked()
+                                );
+                                let name_resp = if missing {
+                                    name_resp.on_hover_text(SPECIES_NOT_FOUND_TOOLTIP)
+                                } else {
+                                    name_resp
+                                };
+                                if name_resp.clicked()
                                 {
                                     self.selected_stream = Some(s_idx);
                                     self.selected_species = Some((s_idx, r_idx));
@@ -1058,6 +1112,11 @@ impl ExergyModuleState {
 
                                 // Editable Mass (Col B, Section 15.2)
                                 let mut mass_kg = self.wb.streams[s_idx].species[r_idx].mass_kg;
+                                if missing {
+                                    // Sin masa molar no hay masa: «—», no 0.000 kg.
+                                    text_cell(ui, MISSING_VALUE, col_widths[1], EXCEL_ALT_ROW_BG, name_color, true, false, false)
+                                        .on_hover_text(SPECIES_NOT_FOUND_TOOLTIP);
+                                } else {
                                 widget_cell(ui, col_widths[1], egui::Color32::WHITE, false, |ui| {
                                     if ui
                                         .add(
@@ -1072,6 +1131,7 @@ impl ExergyModuleState {
                                         recalc_needed = true;
                                     }
                                 });
+                                }
 
                                 // Editable Amount (Col C)
                                 let mut amt_disp = self
@@ -1102,16 +1162,13 @@ impl ExergyModuleState {
                                     format!("{mf:.2}"),
                                     format!("{t_d:.2}"),
                                     format!("{p_d:.2}"),
-                                    format!(
-                                        "{:.2}",
-                                        row.s_j_molk / self.amount_unit.from_mol(1.0)
-                                    ),
-                                    format!("{:.2}", row.h_kj_mol * m_scale),
-                                    format!("{:.2}", row.h_total_kj * ef),
-                                    format!("{:.2}", row.ex_elemental_kj_mol * m_scale),
-                                    format!("{:.2}", row.ex_che_kj_mol * m_scale),
-                                    format!("{:.2}", row.ex_phy_kj_mol * m_scale),
-                                    format!("{:.2}", row.ex_tot_kj_mol * m_scale),
+                                    calculated_cell(status, row.s_j_molk / self.amount_unit.from_mol(1.0), 2),
+                                    calculated_cell(status, row.h_kj_mol * m_scale, 2),
+                                    calculated_cell(status, row.h_total_kj * ef, 2),
+                                    calculated_cell(status, row.ex_elemental_kj_mol * m_scale, 2),
+                                    calculated_cell(status, row.ex_che_kj_mol * m_scale, 2),
+                                    calculated_cell(status, row.ex_phy_kj_mol * m_scale, 2),
+                                    calculated_cell(status, row.ex_tot_kj_mol * m_scale, 2),
                                 ];
                                 for (offset, val_txt) in cells.iter().enumerate() {
                                     text_cell(
@@ -1271,5 +1328,50 @@ impl ExergyModuleState {
                 self.status_msg = format!("Insertado '{formula}' desde Maindb6");
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use soryntel_db::ThermoDatabase;
+
+    #[test]
+    fn species_missing_from_catalog_is_reported_not_shown_as_zero() {
+        let db = ThermoDatabase::with_open_defaults(); // sin MainDB: no trae H2O
+        let mut st = ExergyModuleState::new(&db);
+        let s_idx = 0;
+        st.wb.streams[s_idx]
+            .species
+            .push(soryntel_application::models::exergy::ExergySpeciesRow::new("H2O", 1.0, 298.15, 1.0));
+        MiscUseCases::calculate_exergy(&db, &mut st.wb);
+        let r_idx = st.wb.streams[s_idx].species.len() - 1;
+        assert_eq!(st.species_status(s_idx, r_idx, &db), SpeciesRowStatus::NotFound);
+        assert!(st.unresolved_species(&db).contains(&"H2O".to_string()));
+        let notice = crate::ui_common::incomplete_calculation_notice(&st.unresolved_species(&db)).unwrap();
+        assert!(notice.contains("H2O"));
+        // La fila se dibuja sin pánico.
+        let ctx = egui::Context::default();
+        let _ = ctx.run(egui::RawInput::default(), |ctx| st.ui(ctx, &db));
+    }
+
+    #[test]
+    fn exe8_save_and_open_use_the_chosen_absolute_path() {
+        let db = ThermoDatabase::with_open_defaults();
+        let mut st = ExergyModuleState::new(&db);
+        let dir = std::env::temp_dir().join(format!("soryntel-c23-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("exergía 1.exe8");
+        st.save_exe8(&path);
+        assert!(path.is_file(), "{}", st.status_msg);
+        assert_eq!(st.file_path_input, path.to_string_lossy());
+        let n = st.wb.streams.len();
+        st.open_exe8(&path, &db);
+        assert_eq!(st.wb.streams.len(), n);
+        std::fs::write(&path, "basura").unwrap();
+        st.open_exe8(&path, &db);
+        assert!(st.status_msg.starts_with("Error"));
+        assert_eq!(st.wb.streams.len(), n);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

@@ -4,7 +4,6 @@ use crate::excel_grid::{
     col_letter, header_cell, row_num_cell, text_cell, widget_cell, EXCEL_GRID_BORDER,
     EXCEL_HEADER_BORDER, EXCEL_READONLY_BG,
 };
-use crate::ui_common::temp_file_path;
 use eframe::egui;
 use egui_plot::{Bar, BarChart, Legend, Line, Plot, PlotPoints, Points};
 use serde::{Deserialize, Serialize};
@@ -154,8 +153,9 @@ impl EstimateModuleState {
         }
         let own_db_path = CatalogUseCases::status(db)
             .own_path
+            .or_else(crate::composition::default_own_db_path)
             .map(|p| p.to_string_lossy().into_owned())
-            .unwrap_or_else(|| temp_file_path("soryntel_owndb6.HSC"));
+            .unwrap_or_default();
 
         let mut selected_rows = BTreeSet::new();
         selected_rows.insert(0);
@@ -204,7 +204,7 @@ impl EstimateModuleState {
             cp_target_row: 0,
             db_review: DbReviewDraft::default(),
             own_db_path,
-            sheet_file_path: temp_file_path("soryntel_estimate_sheet.est8"),
+            sheet_file_path: String::new(),
             show_file_io_modal: false,
             file_io_save_mode: true,
             show_help_modal: false,
@@ -249,14 +249,52 @@ impl EstimateModuleState {
         }
     }
 
+    /// Índices seleccionados que existen en la hoja actual (nunca fuera de rango).
     fn target_indices_for_edit(&self) -> Vec<usize> {
-        if !self.selected_rows.is_empty() {
+        let mut out: Vec<usize> = if !self.selected_rows.is_empty() {
             self.selected_rows.iter().copied().collect()
         } else if let Some(idx) = self.selected_row {
             vec![idx]
         } else {
             Vec::new()
+        };
+        out.retain(|&i| i < self.rows.len());
+        out
+    }
+
+    /// Inserta una fila y desplaza la selección para que siga señalando las mismas filas.
+    fn insert_row_at(&mut self, idx: usize, row: EstimateRow) -> usize {
+        let idx = idx.min(self.rows.len());
+        self.rows.insert(idx, row);
+        self.selected_rows = self
+            .selected_rows
+            .iter()
+            .map(|&i| if i >= idx { i + 1 } else { i })
+            .collect();
+        self.selected_row = self.selected_row.map(|i| if i >= idx { i + 1 } else { i });
+        idx
+    }
+
+    /// Elimina una fila (si hay más de una) y reajusta la selección: la fila borrada deja de
+    /// estar seleccionada y las posteriores se desplazan una posición.
+    fn remove_row_at(&mut self, idx: usize) -> bool {
+        if idx >= self.rows.len() || self.rows.len() <= 1 {
+            return false;
         }
+        self.rows.remove(idx);
+        self.selected_rows = self
+            .selected_rows
+            .iter()
+            .filter(|&&i| i != idx)
+            .map(|&i| if i > idx { i - 1 } else { i })
+            .filter(|&i| i < self.rows.len())
+            .collect();
+        self.selected_row = match self.selected_row {
+            Some(i) if i == idx => self.selected_rows.iter().next().copied(),
+            Some(i) if i > idx => Some(i - 1),
+            other => other.filter(|&i| i < self.rows.len()),
+        };
+        true
     }
 
     fn copy_selected_rows(&mut self, ctx: &egui::Context) {
@@ -277,18 +315,22 @@ impl EstimateModuleState {
     }
 
     fn cut_selected_rows(&mut self, ctx: &egui::Context) {
-        self.copy_selected_rows(ctx);
         let mut indices = self.target_indices_for_edit();
+        if indices.is_empty() {
+            return;
+        }
+        self.copy_selected_rows(ctx);
         indices.sort_unstable();
-        indices.reverse();
-        for i in indices {
-            if i < self.rows.len() && self.rows.len() > 1 {
-                self.rows.remove(i);
-            } else if let Some(r) = self.rows.get_mut(0) {
-                *r = EstimateRow::new("");
+        let first = indices[0];
+        for &i in indices.iter().rev() {
+            if !self.remove_row_at(i) {
+                // Única fila restante (y seleccionada): se vacía en lugar de eliminarla.
+                if let Some(r) = self.rows.get_mut(i) {
+                    *r = EstimateRow::new("");
+                }
             }
         }
-        self.select_single(0);
+        self.select_single(first.min(self.rows.len().saturating_sub(1)));
     }
 
     fn parse_rows_from_text(&self, txt: &str) -> Vec<EstimateRow> {
@@ -305,7 +347,7 @@ impl EstimateModuleState {
             }
             let mut r = EstimateRow::new(formula);
             if let Some(t_str) = parts.next() {
-                if let Ok(v) = t_str.trim().parse::<f64>() {
+                if let Ok(v) = crate::ui_common::parse_user_number(t_str) {
                     r.temp_c = v;
                 }
             }
@@ -506,6 +548,10 @@ impl EstimateModuleState {
         if self.db_review.intervals.is_empty() {
             return Err("Debe existir al menos un rango de temperatura".into());
         }
+        // Se prepara el archivo OwnDB antes de tocar la capa en memoria: si hay que abrirlo o
+        // crearlo, eso no debe descartar la especie que se va a guardar.
+        let save_path = crate::composition::prepare_own_db_target(db, &self.own_db_path)?;
+        self.own_db_path = save_path.to_string_lossy().into_owned();
         let mut intervals = self.db_review.intervals.clone();
         for (i, iv) in intervals.iter_mut().enumerate() {
             iv.phase = self.db_review.phase;
@@ -536,8 +582,8 @@ impl EstimateModuleState {
         };
         let raw_ph = self.db_review.raw_phase_code.clone();
         CatalogUseCases::save_own_species(db, sp, meta, raw_ph);
-        let save_path = self.own_db_path.trim().to_string();
-        CatalogUseCases::save_own_db_creating_dirs(db, &save_path)?;
+        crate::composition::persist_own_db(db, &save_path)?;
+        let save_path = save_path.display();
         self.cached_db_scope = None;
         self.recalc_all(db);
         self.status_msg = format!("Especie '{formula}' guardada en OwnDB ({save_path})");
@@ -596,7 +642,7 @@ impl EstimateModuleState {
                 }
                 let mut r = EstimateRow::new(formula);
                 if let Some(temp_s) = parts.next() {
-                    if let Ok(v) = temp_s.trim().parse::<f64>() {
+                    if let Ok(v) = crate::ui_common::parse_user_number(temp_s) {
                         r.temp_c = v;
                     }
                 }
@@ -1045,7 +1091,7 @@ impl EstimateModuleState {
                             .iter()
                             .position(|x| x.formula.trim().is_empty())
                             .unwrap_or(self.rows.len());
-                        self.rows.insert(insert_pos, r);
+                        let insert_pos = self.insert_row_at(insert_pos, r);
                         self.select_single(insert_pos);
                         self.status_msg = format!("Estimado '{}'", self.quick_species.trim());
                     }
@@ -1728,12 +1774,10 @@ impl EstimateModuleState {
             self.paste_at_row(pos, ctx, db);
         }
         if let Some(idx) = action.insert_at {
-            self.rows.insert(idx, EstimateRow::new(""));
+            self.insert_row_at(idx, EstimateRow::new(""));
         }
         if let Some(idx) = action.delete_at {
-            if self.rows.len() > 1 {
-                self.rows.remove(idx);
-            }
+            self.remove_row_at(idx);
         }
         if action.open_db_picker {
             self.show_db_picker = true;
@@ -1804,8 +1848,7 @@ impl EstimateModuleState {
         if let Some(f) = insert_formula {
             let mut r = EstimateRow::new(f);
             MiscUseCases::evaluate_estimate(db, &mut r);
-            let idx = self.selected_row.unwrap_or(0).min(self.rows.len());
-            self.rows.insert(idx, r);
+            let idx = self.insert_row_at(self.selected_row.unwrap_or(0), r);
             self.select_single(idx);
         }
     }
@@ -2706,50 +2749,36 @@ impl EstimateModuleState {
         }
     }
 
-    fn render_file_io_modal(&mut self, ctx: &egui::Context, db: &dyn SpeciesWorkspacePort) {
-        let mut open = self.show_file_io_modal;
-        let mut close_now = false;
-        let title = if self.file_io_save_mode {
-            "Save Estimate Sheet"
-        } else {
-            "Open Estimate Sheet"
+    /// Abrir o guardar la hoja con el diálogo nativo (confirma la sobrescritura al guardar).
+    fn render_file_io_modal(&mut self, _ctx: &egui::Context, db: &dyn SpeciesWorkspacePort) {
+        if !self.show_file_io_modal {
+            return;
+        }
+        self.show_file_io_modal = false;
+        let save = self.file_io_save_mode;
+        let title = if save { "Guardar hoja Estimate (.est8 / .tsv / .csv)" } else { "Abrir hoja Estimate" };
+        let current = Some(std::path::PathBuf::from(&self.sheet_file_path)).filter(|p| p.is_absolute());
+        let Some(path) = crate::storage::choose_file(save, title, "est8", "estimate.est8", current.as_deref()) else {
+            return;
         };
-        egui::Window::new(title)
-            .open(&mut open)
-            .collapsible(false)
-            .show(ctx, |ui| {
-                ui.horizontal(|ui| {
-                    ui.label("Path:");
-                    ui.add(egui::TextEdit::singleline(&mut self.sheet_file_path).desired_width(360.0));
-                });
-                ui.horizontal(|ui| {
-                    let action_lbl = if self.file_io_save_mode { "Save" } else { "Open" };
-                    if ui.button(action_lbl).clicked() {
-                        let p = self.sheet_file_path.clone();
-                        if self.file_io_save_mode {
-                            match self.save_sheet_to_path(&p) {
-                                Ok(n) => {
-                                    self.status_msg = format!("Hoja guardada ({n} especies) -> {p}");
-                                    close_now = true;
-                                }
-                                Err(e) => self.status_msg = format!("Error guardando hoja: {e}"),
-                            }
-                        } else {
-                            match self.load_sheet_from_path(&p, db) {
-                                Ok(n) => {
-                                    self.status_msg = format!("Hoja abierta ({n} especies) <- {p}");
-                                    close_now = true;
-                                }
-                                Err(e) => self.status_msg = format!("Error abriendo hoja: {e}"),
-                            }
-                        }
-                    }
-                    if ui.button(crate::i18n::text("common.000")).clicked() {
-                        close_now = true;
-                    }
-                });
-            });
-        self.show_file_io_modal = open && !close_now;
+        let p = path.to_string_lossy().into_owned();
+        if save {
+            match self.save_sheet_to_path(&p) {
+                Ok(n) => {
+                    self.status_msg = format!("Hoja guardada ({n} especies) -> {p}");
+                    self.sheet_file_path = p;
+                }
+                Err(e) => self.status_msg = format!("Error guardando hoja: {e}"),
+            }
+        } else {
+            match self.load_sheet_from_path(&p, db) {
+                Ok(n) => {
+                    self.status_msg = format!("Hoja abierta ({n} especies) <- {p}");
+                    self.sheet_file_path = p;
+                }
+                Err(e) => self.status_msg = format!("Error abriendo hoja: {e}"),
+            }
+        }
     }
 }
 
@@ -2796,6 +2825,7 @@ fn series_palette_color(idx: usize) -> egui::Color32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ui_common::temp_file_path;
     use soryntel_db::ThermoDatabase;
     use soryntel_core::SpeciesRepository;
     use soryntel_application::use_cases::MiscUseCases;
@@ -2899,5 +2929,45 @@ mod tests {
         state.own_db_path = test_owndb.clone();
         state.save_db_review_to_owndb(&mut db).unwrap();
         let _ = std::fs::remove_file(&test_owndb);
+    }
+
+    #[test]
+    fn cut_with_stale_selection_does_not_clear_unrelated_row() {
+        let db = ThermoDatabase::with_open_defaults();
+        let mut state = EstimateModuleState::new(&db);
+        let ctx = egui::Context::default();
+        state.rows = vec![EstimateRow::new("CaO"), EstimateRow::new("MgO"), EstimateRow::new("SiO2")];
+        state.select_single(2);
+        // Menú contextual «Eliminar fila» sobre la fila 3 (rama `action.delete_at` de ui).
+        assert!(state.remove_row_at(2));
+        assert!(state.target_indices_for_edit().is_empty(), "la fila borrada sigue seleccionada");
+        state.cut_selected_rows(&ctx);
+        let formulas: Vec<&str> = state.rows.iter().map(|r| r.formula.as_str()).collect();
+        assert_eq!(formulas, ["CaO", "MgO"], "Cortar con selección obsoleta borró otra fila");
+
+        // Insertar desplaza la selección: Cortar elimina la fila resaltada, no la nueva.
+        state.select_single(1); // MgO
+        state.insert_row_at(0, EstimateRow::new(""));
+        state.cut_selected_rows(&ctx);
+        let formulas: Vec<&str> = state.rows.iter().map(|r| r.formula.as_str()).collect();
+        assert_eq!(formulas, ["", "CaO"]);
+
+        // Cortar todas las filas deja una fila vacía.
+        state.rows = vec![EstimateRow::new("CaO"), EstimateRow::new("MgO")];
+        state.selected_rows = [0, 1].into_iter().collect();
+        state.cut_selected_rows(&ctx);
+        assert_eq!(state.rows.len(), 1);
+        assert!(state.rows[0].formula.is_empty());
+    }
+
+    #[test]
+    fn owndb_default_path_is_not_in_temp_dir() {
+        let db = ThermoDatabase::with_open_defaults();
+        let state = EstimateModuleState::new(&db);
+        assert!(
+            !std::path::Path::new(&state.own_db_path).starts_with(std::env::temp_dir()),
+            "OwnDB por defecto: {}",
+            state.own_db_path
+        );
     }
 }

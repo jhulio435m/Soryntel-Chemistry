@@ -17,7 +17,6 @@ use soryntel_application::models::reaction::{
     ReactionYAxis,
 };
 
-const DEFAULT_REA8_PATH: &str = "soryntel_reaction.rea8";
 const DEFAULT_SVG_PATH: &str = "soryntel_reaction_chart.svg";
 
 const SERIES_PALETTE: [egui::Color32; 6] = [
@@ -69,6 +68,9 @@ pub struct ReactionModuleState {
     pub file_path_buf: String,
     pub request_open_browser: bool,
     pub plot_reset_counter: u64,
+    /// `true` cuando el último cálculo falló: los resultados guardados ya no corresponden a
+    /// los parámetros visibles y no se muestran ni se exportan.
+    pub results_stale: bool,
 }
 
 impl ReactionModuleState {
@@ -106,16 +108,37 @@ impl ReactionModuleState {
             show_help_modal: false,
             show_file_modal: false,
             file_modal_is_save: true,
-            file_path_buf: crate::ui_common::temp_file_path(DEFAULT_REA8_PATH),
+            file_path_buf: String::new(),
             request_open_browser: false,
             plot_reset_counter: 0,
+            results_stale: false,
         };
         state.run_calculate(db);
         state
     }
 
     pub fn active_sheet(&self) -> Option<&ReactionCollectedSheet> {
+        if self.results_stale {
+            return None;
+        }
         self.sheets.get(self.active_sheet_idx)
+    }
+
+    /// Cambia la unidad de temperatura convirtiendo Desde/Hasta/Paso para que representen las
+    /// mismas temperaturas, y recalcula.
+    pub fn change_temp_unit(&mut self, new_unit: TemperatureUnit, db: &dyn SpeciesCatalogPort) {
+        self.convert_temperature_range(self.temp_unit, new_unit);
+        self.temp_unit = new_unit;
+        self.run_calculate(db);
+    }
+
+    fn convert_temperature_range(&mut self, old: TemperatureUnit, new: TemperatureUnit) {
+        if old == new {
+            return;
+        }
+        self.t_from = new.from_kelvin(old.to_kelvin(self.t_from));
+        self.t_to = new.from_kelvin(old.to_kelvin(self.t_to));
+        self.t_step = old.step_to_kelvin(self.t_step) / new.step_to_kelvin(1.0);
     }
 
     pub fn active_response(&self) -> Option<&CalculationResponse> {
@@ -170,6 +193,7 @@ impl ReactionModuleState {
 
                 self.status_msg = format!("Cálculo completado: {}", resp.normalized_input);
                 self.status_ok = true;
+                self.results_stale = false;
 
                 if self.collect_data && !self.sheets.is_empty() {
                     let next_num = self.sheets.len() + 1;
@@ -197,6 +221,7 @@ impl ReactionModuleState {
             Err(e) => {
                 self.status_msg = format!("Error: {e}");
                 self.status_ok = false;
+                self.results_stale = true;
             }
         }
     }
@@ -279,10 +304,18 @@ impl ReactionModuleState {
     }
 
     pub fn load_rea8(&mut self, path: &str) {
-        match std::fs::read_to_string(path)
-            .map_err(|e| soryntel_core::SoryntelError::DatabaseError(e.to_string()))
-            .and_then(|raw| ReactionUseCases::deserialize_rea8_workbook(&raw))
-        {
+        // Carga atómica: se valida el libro completo antes de tocar el estado.
+        let loaded = std::fs::read_to_string(path)
+            .map_err(|e| e.to_string())
+            .and_then(|raw| ReactionUseCases::deserialize_rea8_workbook(&raw).map_err(|e| e.to_string()))
+            .and_then(|wb| {
+                if wb.sheets.is_empty() {
+                    Err("el libro no contiene hojas de resultados".to_string())
+                } else {
+                    Ok(wb)
+                }
+            });
+        match loaded {
             Ok(wb) => {
                 self.formula_input = wb.formula_input;
                 self.smallest_coeff = wb.smallest_coeff;
@@ -299,10 +332,12 @@ impl ReactionModuleState {
                 self.plot_all_data = wb.plot_all_data;
                 self.log_y_scale = wb.log_y_scale;
                 self.decimals = wb.decimals.clamp(1, 8);
-                if !wb.sheets.is_empty() {
-                    self.active_sheet_idx = wb.active_sheet_idx.min(wb.sheets.len() - 1);
-                    self.sheets = wb.sheets;
-                }
+                self.active_sheet_idx = wb.active_sheet_idx.min(wb.sheets.len() - 1);
+                self.sheets = wb.sheets;
+                // Estado derivado del libro anterior.
+                self.results_stale = false;
+                self.selected_cell = None;
+                self.plot_reset_counter = self.plot_reset_counter.wrapping_add(1);
                 self.status_msg = format!("Libro cargado desde {path}");
                 self.status_ok = true;
             }
@@ -344,7 +379,7 @@ impl ReactionModuleState {
             t!("reaction.open")
         };
         if let Some(path) =
-            crate::reaction_actions::choose_file(save, &title, "rea8", "reacciones.rea8")
+            crate::reaction_actions::choose_file(save, &title, "rea8", "reacciones.rea8", Some(std::path::Path::new(&self.file_path_buf)))
         {
             self.file_path_buf = path.to_string_lossy().into_owned();
             let path = self.file_path_buf.clone();
@@ -368,6 +403,7 @@ impl ReactionModuleState {
             &title,
             extension,
             &format!("reacciones.{extension}"),
+            Some(std::path::Path::new(&self.file_path_buf)),
         ) else {
             return;
         };
@@ -563,13 +599,11 @@ impl ReactionModuleState {
                 ui.menu_button(t!("common.020"), |ui| {
                     if ui.button(t!("review.000")).clicked() {
                         self.file_modal_is_save = false;
-                        self.file_path_buf = crate::ui_common::temp_file_path(DEFAULT_REA8_PATH);
                         self.show_file_modal = true;
                         ui.close_menu();
                     }
                     if ui.button(t!("review.001")).clicked() {
                         self.file_modal_is_save = true;
-                        self.file_path_buf = crate::ui_common::temp_file_path(DEFAULT_REA8_PATH);
                         self.show_file_modal = true;
                         ui.close_menu();
                     }
@@ -700,6 +734,7 @@ impl ReactionModuleState {
 
                 ui.menu_button(t!("review.016"), |ui| {
                     let mut recalc = false;
+                    let prev_unit = self.temp_unit;
                     ui.label(egui::RichText::new(t!("common.052")).strong());
                     recalc |= ui
                         .radio_value(
@@ -718,6 +753,10 @@ impl ReactionModuleState {
                             "°F (Fahrenheit)",
                         )
                         .changed();
+                    if self.temp_unit != prev_unit {
+                        let new_unit = self.temp_unit;
+                        self.convert_temperature_range(prev_unit, new_unit);
+                    }
                     ui.separator();
                     ui.label(egui::RichText::new(t!("review.017")).strong());
                     recalc |= ui
@@ -805,7 +844,6 @@ impl ReactionModuleState {
                         .clicked()
                     {
                         self.file_modal_is_save = false;
-                        self.file_path_buf = crate::ui_common::temp_file_path(DEFAULT_REA8_PATH);
                         self.show_file_modal = true;
                     }
                     if ui
@@ -892,8 +930,7 @@ impl ReactionModuleState {
                             .clicked()
                             && self.temp_unit != u
                         {
-                            self.temp_unit = u;
-                            self.run_calculate(db);
+                            self.change_temp_unit(u, db);
                         }
                     }
                     for eu in [EnergyUnit::Kilojoules, EnergyUnit::Kilocalories] {
@@ -2108,5 +2145,78 @@ mod tests {
         assert_eq!(state.sheets.len(), 3);
         let svg = state.build_chart_svg().expect("chart svg");
         assert!(svg.contains("<svg") && svg.contains("Mg = Mg(g)"));
+    }
+
+    #[test]
+    fn switching_temperature_unit_keeps_results_consistent() {
+        let db = ThermoDatabase::with_open_defaults();
+        let mut state = ReactionModuleState::new(&db);
+        assert!(state.status_ok, "{}", state.status_msg);
+        // Mismo camino que el botón «K» de la barra: cambia la unidad y recalcula.
+        state.change_temp_unit(TemperatureUnit::Kelvin, &db);
+        assert!((state.t_from - 273.15).abs() < 1e-9 && (state.t_to - 2273.15).abs() < 1e-9);
+        state.change_temp_unit(TemperatureUnit::Fahrenheit, &db);
+        assert!((state.t_from - 32.0).abs() < 1e-9 && (state.t_step - 180.0).abs() < 1e-9);
+        state.change_temp_unit(TemperatureUnit::Kelvin, &db);
+        let label = state.active_response().map(|r| r.temp_unit_label.clone());
+        assert!(
+            state.status_ok && label.as_deref() == Some("K"),
+            "estado={:?} «{}», tabla en {label:?} con t_from={} {:?}",
+            state.status_ok, state.status_msg, state.t_from, state.temp_unit
+        );
+        // Un cálculo fallido invalida lo mostrado en lugar de dejar la hoja anterior.
+        state.t_from = 0.0;
+        state.run_calculate(&db);
+        assert!(!state.status_ok);
+        assert!(state.active_response().is_none(), "resultados obsoletos visibles tras un error");
+        assert!(state.build_chart_svg().is_none());
+    }
+
+    #[test]
+    fn species_missing_from_catalog_shows_an_error_not_zeros() {
+        let db = ThermoDatabase::with_open_defaults(); // sin MainDB: no trae H2O
+        let mut state = ReactionModuleState::new(&db);
+        state.formula_input = "H2O".into();
+        state.run_calculate(&db);
+        assert!(!state.status_ok, "{}", state.status_msg);
+        assert!(state.active_response().is_none(), "se muestran resultados de otra especie o ceros");
+    }
+
+    #[test]
+    fn loading_rea8_without_sheets_does_not_keep_previous_results() {
+        let db = ThermoDatabase::with_open_defaults();
+        let mut state = ReactionModuleState::new(&db); // hoja S1 con Al2O3
+        let wb = ReactionWorkbookFile {
+            version: "HSC-REA8-10.0".to_string(),
+            formula_input: "Zn = Zn(g)".to_string(),
+            smallest_coeff: 1.0,
+            t_from: 500.0,
+            t_to: 1000.0,
+            t_step: 100.0,
+            temp_unit: TemperatureUnit::Celsius,
+            energy_unit: EnergyUnit::Kilojoules,
+            result_format: ResultFormat::Normal,
+            show_transitions: true,
+            criss_cobble: false,
+            y_axis: ReactionYAxis::K,
+            collect_data: false,
+            plot_all_data: false,
+            log_y_scale: false,
+            decimals: 3,
+            sheets: Vec::new(),
+            active_sheet_idx: 0,
+        };
+        let path = std::env::temp_dir().join(format!("soryntel-c07-{}.rea8", std::process::id()));
+        std::fs::write(&path, ReactionUseCases::serialize_rea8_workbook(&wb).unwrap()).unwrap();
+        state.load_rea8(path.to_str().unwrap());
+        let _ = std::fs::remove_file(&path);
+        // El libro se rechaza y el anterior queda intacto y coherente.
+        assert!(!state.status_ok, "{}", state.status_msg);
+        assert_eq!(state.formula_input, "Al2O3");
+        let shown = state.active_response().map(|r| r.normalized_input.clone());
+        assert!(
+            shown.as_deref().is_some_and(|s| s.contains("Al2O3")),
+            "la tabla muestra {shown:?} con la fórmula {}", state.formula_input
+        );
     }
 }

@@ -1,21 +1,14 @@
 //! Adaptadores de archivos e imagen del módulo de reacciones.
 use std::path::PathBuf;
 
-pub fn choose_file(save: bool, title: &str, extension: &str, filename: &str) -> Option<PathBuf> {
-    let dialog = rfd::FileDialog::new()
-        .set_title(title)
-        .add_filter(extension.to_uppercase(), &[extension])
-        .set_file_name(filename);
-    if save {
-        dialog.save_file().map(|mut path| {
-            if path.extension().is_none() {
-                path.set_extension(extension);
-            }
-            path
-        })
-    } else {
-        dialog.pick_file()
-    }
+pub fn choose_file(
+    save: bool,
+    title: &str,
+    extension: &str,
+    filename: &str,
+    current_file: Option<&std::path::Path>,
+) -> Option<PathBuf> {
+    crate::storage::choose_file(save, title, extension, filename, current_file)
 }
 
 pub fn render_svg(svg: &str) -> Result<resvg::tiny_skia::Pixmap, String> {

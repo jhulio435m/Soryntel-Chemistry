@@ -194,7 +194,11 @@ impl ElementsModuleState {
 
     fn export_csv(&mut self) {
         let csv = MiscUseCases::export_elements_csv(&self.workbook);
-        let path = "/tmp/soryntel_elements_export.csv";
+        let Some(chosen) = crate::storage::choose_file(true, "Exportar elementos", "csv", "elements.csv", None) else {
+            return;
+        };
+        let path = chosen.to_string_lossy().into_owned();
+        let path = path.as_str();
         match crate::storage::write_atomic(path, csv) {
             Ok(_) => {
                 self.status_msg = format!("Exported Elements workbook to {path}");
@@ -206,7 +210,11 @@ impl ElementsModuleState {
     }
 
     fn print_periodic_svg(&mut self) {
-        let path = "/tmp/soryntel_periodic_chart.svg";
+        let Some(chosen) = crate::storage::choose_file(true, "Guardar tabla periódica", "svg", "periodic_chart.svg", None) else {
+            return;
+        };
+        let path = chosen.to_string_lossy().into_owned();
+        let path = path.as_str();
         let title = self
             .diagram_cache
             .as_ref()
@@ -871,7 +879,7 @@ impl ElementsModuleState {
                             ui.close_menu();
                         }
                         ui.separator();
-                        if ui.button("Export CSV (/tmp/soryntel_elements_export.csv)").clicked() {
+                        if ui.button("Export CSV...").clicked() {
                             self.export_csv();
                             ui.close_menu();
                         }

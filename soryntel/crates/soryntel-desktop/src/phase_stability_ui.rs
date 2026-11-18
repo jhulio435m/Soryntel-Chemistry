@@ -15,6 +15,7 @@ use crate::excel_grid::{
 };
 use crate::ui_common::{
     draw_dashed_line, draw_rotated_y_title, format_tick, is_organic_formula, nice_ticks,
+    parse_user_number,
     render_chart_tabs, ChartTabAction, ELEMENT_GRID_4COL,
 };
 
@@ -64,6 +65,8 @@ pub struct PhaseStabilityModuleState {
     create_new_page: bool,
 
     charts: Vec<(String, PhaseStabilityDiagram)>,
+    /// Contador monotónico para que los nombres de gráfico no se repitan tras cerrar uno.
+    chart_counter: usize,
     active_tab: RightTab,
     last_error: Option<String>,
 }
@@ -91,6 +94,7 @@ impl PhaseStabilityModuleState {
             show_colors: true,
             create_new_page: true,
             charts: Vec::new(),
+            chart_counter: 0,
             active_tab: RightTab::Chart(0),
             last_error: None,
         };
@@ -245,15 +249,35 @@ impl PhaseStabilityModuleState {
         }
 
         let is_pp = self.is_pp_mode();
-        let x_min = self.x_min_str.trim().parse::<f64>().unwrap_or(-45.0);
-        let x_max = self.x_max_str.trim().parse::<f64>().unwrap_or(5.0);
-        let y_min = self.y_min_str.trim().parse::<f64>().unwrap_or(-80.0);
-        let y_max = self.y_max_str.trim().parse::<f64>().unwrap_or(5.0);
+        let parse_field = |label: &str, text: &str| {
+            parse_user_number(text).map_err(|e| format!("{label}: {e}"))
+        };
+        let bounds = (|| -> Result<(f64, f64, f64, f64), String> {
+            Ok((
+                parse_field("X min", &self.x_min_str)?,
+                parse_field("X max", &self.x_max_str)?,
+                parse_field("Y min", &self.y_min_str)?,
+                parse_field("Y max", &self.y_max_str)?,
+            ))
+        })();
+        // Con auto-escala en modo p–p los límites los calcula el dominio y no se exigen.
+        let (x_min, x_max, y_min, y_max) = match bounds {
+            Ok(b) => b,
+            Err(_) if is_pp && self.auto_scale => (-45.0, 5.0, -80.0, 5.0),
+            Err(e) => {
+                self.last_error = Some(e);
+                return;
+            }
+        };
+        if !(is_pp && self.auto_scale) && (x_min >= x_max || y_min >= y_max) {
+            self.last_error = Some("Cada eje necesita mín < máx.".into());
+            return;
+        }
 
-        let fixed_temp_val = match self.fixed_temp_str.trim().parse::<f64>() {
+        let fixed_temp_val = match parse_user_number(&self.fixed_temp_str) {
             Ok(v) => v,
-            Err(_) if is_pp => {
-                self.last_error = Some("Invalid fixed temperature.".into());
+            Err(e) if is_pp => {
+                self.last_error = Some(format!("Temperatura fija: {e}"));
                 return;
             }
             Err(_) => 300.0,
@@ -263,7 +287,7 @@ impl PhaseStabilityModuleState {
         let fixed_gas = if is_pp {
             None
         } else {
-            let p_val = match self.fixed_gas_p_str.trim().parse::<f64>() {
+            let p_val = match parse_user_number(&self.fixed_gas_p_str) {
                 Ok(v) if v > 0.0 => v,
                 _ => {
                     self.last_error =
@@ -307,7 +331,8 @@ impl PhaseStabilityModuleState {
                 }
                 if self.create_new_page || self.charts.is_empty() {
                     let idx = self.charts.len();
-                    let label = format!("Chart {}", idx + 1);
+                    self.chart_counter += 1;
+                    let label = format!("Chart {}", self.chart_counter);
                     self.charts.push((label, diagram));
                     self.active_tab = RightTab::Chart(idx);
                 } else {
@@ -607,26 +632,38 @@ impl PhaseStabilityModuleState {
                 TemperatureUnit::Kelvin => TemperatureUnit::Celsius,
             };
             self.temp_unit = new;
-            if let Ok(v) = self.fixed_temp_str.trim().parse::<f64>() {
+            if let Ok(v) = parse_user_number(&self.fixed_temp_str) {
                 let k = old.to_kelvin(v);
                 self.fixed_temp_str = format!("{:.2}", new.from_kelvin(k));
             }
             if self.x_axis_choice == "Temperature" {
-                if let Ok(v) = self.x_min_str.trim().parse::<f64>() {
+                if let Ok(v) = parse_user_number(&self.x_min_str) {
                     self.x_min_str = format!("{:.2}", new.from_kelvin(old.to_kelvin(v)));
                 }
-                if let Ok(v) = self.x_max_str.trim().parse::<f64>() {
+                if let Ok(v) = parse_user_number(&self.x_max_str) {
                     self.x_max_str = format!("{:.2}", new.from_kelvin(old.to_kelvin(v)));
                 }
             }
             if self.y_axis_choice == "Temperature" {
-                if let Ok(v) = self.y_min_str.trim().parse::<f64>() {
+                if let Ok(v) = parse_user_number(&self.y_min_str) {
                     self.y_min_str = format!("{:.2}", new.from_kelvin(old.to_kelvin(v)));
                 }
-                if let Ok(v) = self.y_max_str.trim().parse::<f64>() {
+                if let Ok(v) = parse_user_number(&self.y_max_str) {
                     self.y_max_str = format!("{:.2}", new.from_kelvin(old.to_kelvin(v)));
                 }
             }
+        }
+    }
+
+    /// Cierra la pestaña `i` manteniendo activo el mismo gráfico si no era el cerrado.
+    fn close_chart(&mut self, i: usize) {
+        if i >= self.charts.len() {
+            return;
+        }
+        self.charts.remove(i);
+        if let RightTab::Chart(active) = self.active_tab {
+            let new_active = if active > i { active - 1 } else { active };
+            self.active_tab = RightTab::Chart(new_active.min(self.charts.len().saturating_sub(1)));
         }
     }
 
@@ -638,10 +675,7 @@ impl PhaseStabilityModuleState {
         };
         match render_chart_tabs(ui, &names, active_chart, self.active_tab == RightTab::Table) {
             ChartTabAction::SelectChart(i) => self.active_tab = RightTab::Chart(i),
-            ChartTabAction::CloseChart(i) => {
-                self.charts.remove(i);
-                self.active_tab = RightTab::Chart(i.min(self.charts.len().saturating_sub(1)));
-            }
+            ChartTabAction::CloseChart(i) => self.close_chart(i),
             ChartTabAction::SelectTable => self.active_tab = RightTab::Table,
             ChartTabAction::None => {}
         }
@@ -1014,4 +1048,85 @@ fn pick_gas(gases: &[String], preferred: &str) -> String {
         .cloned()
         .or_else(|| gases.first().cloned())
         .unwrap_or_else(|| preferred.to_string())
+}
+
+#[cfg(test)]
+mod bug_repro_area_c {
+    //! Reproducciones de hallazgos del área C (soryntel/docs/bugs/area-c.md). Fallan hoy.
+    use super::*;
+    use soryntel_db::ThermoDatabase;
+
+    /// Estado con un diagrama T–log p dibujado a partir de las especies abiertas incluidas.
+    fn prepared_state(db: &ThermoDatabase) -> PhaseStabilityModuleState {
+        let mut st = PhaseStabilityModuleState::new(db);
+        st.selected_elements = vec!["Ni".into(), "C".into(), "O".into()];
+        st.refresh_species_and_gases(db);
+        // Los datos abiertos no clasifican Ni como fase condensada; se selecciona a mano.
+        st.selected_species.insert("Ni".into());
+        st.selected_species.insert("Al2O3".into());
+        st.x_axis_choice = "Temperature".into();
+        st.y_axis_choice = "CO(g)".into();
+        st.run_calculate(db);
+        if st.last_error.is_none() && !st.charts.is_empty() {
+            return st;
+        }
+        panic!("preparación: ningún sistema abierto produjo diagrama: {:?}", st.last_error);
+    }
+
+    #[test]
+    fn closing_inactive_chart_keeps_active_chart_and_names_are_unique() {
+        let db = ThermoDatabase::with_open_defaults();
+        let mut st = prepared_state(&db);
+        st.create_new_page = true;
+        st.run_calculate(&db);
+        st.run_calculate(&db);
+        assert!(st.charts.len() >= 3);
+        st.active_tab = RightTab::Chart(2);
+        let active_name = st.charts[2].0.clone();
+        st.close_chart(0);
+        let RightTab::Chart(now) = st.active_tab else { panic!("pestaña de gráfico") };
+        assert_eq!(st.charts[now].0, active_name);
+        st.run_calculate(&db);
+        let names: std::collections::BTreeSet<_> = st.charts.iter().map(|c| c.0.clone()).collect();
+        assert_eq!(names.len(), st.charts.len(), "nombres repetidos: {names:?}");
+    }
+
+    #[test]
+    fn comma_decimal_axis_limit_is_not_replaced_silently() {
+        let db = ThermoDatabase::with_open_defaults();
+        let mut st = prepared_state(&db);
+        st.x_min_str = "0,5".into();
+        st.create_new_page = true;
+        let before = st.charts.len();
+        st.run_calculate(&db);
+        // Esperado: o se interpreta 0.5, o se informa un error y no se dibuja nada.
+        if st.charts.len() > before {
+            let x_min = st.charts.last().unwrap().1.x_min;
+            assert!((x_min - 0.5).abs() < 1e-9, "x_min usado = {x_min}; el usuario escribió 0,5");
+        } else {
+            assert!(st.last_error.is_some());
+        }
+    }
+
+    #[test]
+    fn non_finite_axis_limit_is_rejected_before_drawing() {
+        let db = ThermoDatabase::with_open_defaults();
+        let mut st = prepared_state(&db);
+        st.x_max_str = "1e400".into(); // se parsea como +inf
+        st.create_new_page = true;
+        let before = st.charts.len();
+        st.run_calculate(&db);
+        if st.charts.len() > before {
+            let d = &st.charts.last().unwrap().1;
+            // render_chart llamaría a nice_ticks(d.x_min, d.x_max, 6): con x_max infinito el
+            // bucle `while v <= max` no termina y llena la memoria, así que aquí no se dibuja.
+            assert!(
+                d.x_min.is_finite() && d.x_max.is_finite() && d.y_min.is_finite() && d.y_max.is_finite(),
+                "diagrama con ejes no finitos: x=[{}, {}] y=[{}, {}]",
+                d.x_min, d.x_max, d.y_min, d.y_max
+            );
+        } else {
+            assert!(st.last_error.is_some());
+        }
+    }
 }

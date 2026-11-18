@@ -181,7 +181,7 @@ impl HeatLossModuleState {
             material_db: HeatLossUseCases::default_material_database(),
             status_msg: "Listo (Hotwatertank.htr8 cargado).".into(),
             status_ok: true,
-            file_path_input: "Hotwatertank.htr8".into(),
+            file_path_input: String::new(),
             show_cond_picker: false,
             cond_search: String::new(),
             cond_selected_idx: 0,
@@ -298,6 +298,8 @@ impl HeatLossModuleState {
             Err(e) => {
                 self.status_msg = format!("Error: {e}");
                 self.status_ok = false;
+                // Sin resultados obsoletos: no se muestran ni se exportan los del estado anterior.
+                self.result = None;
             }
         }
     }
@@ -322,25 +324,77 @@ impl HeatLossModuleState {
     }
 
     pub fn load_htr8(&mut self, path: &str) {
-        match std::fs::read_to_string(path) {
-            Ok(raw) => match HeatLossUseCases::deserialize_htr8_workbook(&raw) {
-                Ok(wb) => {
-                    self.wb = wb;
-                    self.selected_col = 0;
-                    self.recalculate();
+        // Carga atómica: se valida y se resuelve el libro antes de sustituir el estado. Si
+        // algo falla, el libro y los resultados anteriores quedan intactos.
+        let loaded = std::fs::read_to_string(path)
+            .map_err(|e| format!("Error leyendo {path}: {e}"))
+            .and_then(|raw| HeatLossUseCases::deserialize_htr8_workbook(&raw))
+            .and_then(|mut wb| {
+                validate_heat_loss_workbook(&mut wb)?;
+                let res = HeatLossUseCases::solve_heat_loss_workbook(&wb)
+                    .map_err(|e| format!("El libro {path} no se puede calcular: {e}"))?;
+                Ok((wb, res))
+            });
+        match loaded {
+            Ok((wb, res)) => {
+                self.wb = wb;
+                self.result = Some(res);
+                self.reset_derived_state();
+                self.recalculate();
+                if self.status_ok {
                     self.status_msg = format!("📂 Cargado {path}");
-                    self.status_ok = true;
                 }
-                Err(e) => {
-                    self.status_msg = e;
-                    self.status_ok = false;
-                }
-            },
+            }
             Err(e) => {
-                self.status_msg = format!("Error leyendo {path}: {e}");
+                self.status_msg = e;
                 self.status_ok = false;
             }
         }
+    }
+
+    fn current_file(&self) -> Option<std::path::PathBuf> {
+        Some(std::path::PathBuf::from(&self.file_path_input)).filter(|p| p.is_absolute())
+    }
+
+    fn choose_and_open(&mut self) {
+        if let Some(path) = crate::storage::choose_file(false, "Abrir libro (.htr8)", "htr8", "", self.current_file().as_deref()) {
+            let p = path.to_string_lossy().into_owned();
+            self.load_htr8(&p);
+            if self.status_ok {
+                self.file_path_input = p;
+            }
+        }
+    }
+
+    /// Guardar como: siempre pasa por el diálogo nativo, que confirma la sobrescritura.
+    fn choose_and_save(&mut self) {
+        let suggested = crate::storage::suggested_file_name(&self.wb.title, "htr8");
+        if let Some(path) = crate::storage::choose_file(true, "Guardar libro (.htr8)", "htr8", &suggested, self.current_file().as_deref()) {
+            let p = path.to_string_lossy().into_owned();
+            self.save_htr8(&p);
+            if self.status_ok {
+                self.file_path_input = p;
+            }
+        }
+    }
+
+    fn choose_and_export(&mut self) {
+        let suggested = crate::storage::suggested_file_name(&self.wb.title, "xlsx");
+        if let Some(path) = crate::storage::choose_file(true, "Exportar a Excel", "xlsx", &suggested, self.current_file().as_deref()) {
+            self.export_xlsx(&path.to_string_lossy());
+        }
+    }
+
+    /// Reinicia el estado que depende del libro abierto (selección, diagramas y exportación).
+    fn reset_derived_state(&mut self) {
+        self.selected_col = 0;
+        self.profile_series.clear();
+        self.profile_total_w = 0.0;
+        self.sweep_points.clear();
+        self.opt_points.clear();
+        self.opt_best = None;
+        self.pending_export_w = None;
+        self.export_target_area = 0;
     }
 
     pub fn export_xlsx(&mut self, path: &str) {
@@ -359,9 +413,10 @@ impl HeatLossModuleState {
     }
 
     fn load_preset(&mut self, wb: HeatLossWorkbook) {
-        self.file_path_input = wb.title.clone();
+        // Un ejemplo no tiene archivo: Guardar pedirá destino (con el título como nombre).
+        self.file_path_input.clear();
         self.wb = wb;
-        self.selected_col = 0;
+        self.reset_derived_state();
         self.recalculate();
     }
 
@@ -374,18 +429,15 @@ impl HeatLossModuleState {
             egui::menu::bar(ui, |ui| {
                 ui.menu_button(crate::i18n::text("common.020"), |ui| {
                     if ui.button(crate::i18n::text("review.140")).clicked() {
-                        let p = self.file_path_input.clone();
-                        self.load_htr8(&p);
+                        self.choose_and_open();
                         ui.close_menu();
                     }
                     if ui.button(crate::i18n::text("review.141")).clicked() {
-                        let p = self.file_path_input.clone();
-                        self.save_htr8(&p);
+                        self.choose_and_save();
                         ui.close_menu();
                     }
                     if ui.button(crate::i18n::text("review.142")).clicked() {
-                        let p = format!("{}.xlsx", self.file_path_input.trim_end_matches(".htr8"));
-                        self.export_xlsx(&p);
+                        self.choose_and_export();
                         ui.close_menu();
                     }
                     ui.separator();
@@ -635,22 +687,19 @@ impl HeatLossModuleState {
             ui.separator();
             // Quick Icon Action Bar + Context-Sensitive "Get Data for Column" Frame (Ch. 12.1 step 4, Fig. 4 item 5)
             ui.horizontal_wrapped(|ui| {
-                ui.add(
-                    egui::TextEdit::singleline(&mut self.file_path_input)
-                        .desired_width(145.0)
-                        .hint_text("File.htr8"),
-                );
+                let shown = std::path::Path::new(&self.file_path_input)
+                    .file_name()
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| format!("{} (sin guardar)", self.wb.title));
+                ui.label(egui::RichText::new(shown).small()).on_hover_text(&self.file_path_input);
                 if ui.button(crate::i18n::text("common.009")).on_hover_text("Abrir archivo .htr8").clicked() {
-                    let p = self.file_path_input.clone();
-                    self.load_htr8(&p);
+                    self.choose_and_open();
                 }
                 if ui.button(crate::i18n::text("common.014")).on_hover_text("Guardar archivo .htr8").clicked() {
-                    let p = self.file_path_input.clone();
-                    self.save_htr8(&p);
+                    self.choose_and_save();
                 }
                 if ui.button("📊 .xlsx").on_hover_text("Exportar a Excel").clicked() {
-                    let p = format!("{}.xlsx", self.file_path_input.trim_end_matches(".htr8"));
-                    self.export_xlsx(&p);
+                    self.choose_and_export();
                 }
                 ui.separator();
 
@@ -4932,6 +4981,21 @@ impl HeatLossModuleState {
     }
 }
 
+/// Comprueba que un libro abierto se puede mostrar: al menos una hoja, cada hoja con al
+/// menos una columna y la hoja activa dentro de rango (se ajusta si no lo está).
+pub(crate) fn validate_heat_loss_workbook(wb: &mut HeatLossWorkbook) -> Result<(), String> {
+    if wb.sheets.is_empty() {
+        return Err("El libro .htr8 no contiene hojas.".into());
+    }
+    if let Some(idx) = wb.sheets.iter().position(|s| s.columns.is_empty()) {
+        return Err(format!("La hoja {} del libro .htr8 no tiene columnas.", idx + 1));
+    }
+    if wb.active_sheet >= wb.sheets.len() {
+        wb.active_sheet = 0;
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -4969,5 +5033,63 @@ mod tests {
         state.load_htr8(tmp_htr8);
         assert!(state.status_ok);
         let _ = std::fs::remove_file(tmp_htr8);
+    }
+
+    #[test]
+    fn presets_do_not_point_saves_at_relative_paths() {
+        let mut state = HeatLossModuleState::new();
+        assert!(state.file_path_input.is_empty());
+        state.load_preset(HeatLossUseCases::preset(HeatLossPreset::Smelting1));
+        assert!(state.file_path_input.is_empty(), "ruta: {}", state.file_path_input);
+        assert!(state.current_file().is_none());
+        assert!(crate::storage::suggested_file_name(&state.wb.title, "htr8").ends_with(".htr8"));
+    }
+
+    fn render(state: &mut HeatLossModuleState) {
+        let ctx = egui::Context::default();
+        let mut raw_input = egui::RawInput::default();
+        raw_input.screen_rect = Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1400.0, 900.0)));
+        let _ = ctx.run(raw_input, |ctx| state.ui(ctx, 2));
+    }
+
+    #[test]
+    fn htr8_without_sheets_does_not_panic_the_ui() {
+        let mut state = HeatLossModuleState::new();
+        let mut wb = state.wb.clone();
+        wb.sheets.clear();
+        wb.active_sheet = 0;
+        let path = std::env::temp_dir().join(format!("soryntel-c01-{}.htr8", std::process::id()));
+        std::fs::write(&path, HeatLossUseCases::serialize_htr8_workbook(&wb).unwrap()).unwrap();
+        state.load_htr8(path.to_str().unwrap());
+        let _ = std::fs::remove_file(&path);
+        let loaded = state.status_ok;
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| render(&mut state)));
+        assert!(
+            outcome.is_ok() || !loaded,
+            "el archivo se aceptó (\"{}\") y el frame siguiente entró en pánico",
+            state.status_msg
+        );
+    }
+
+    #[test]
+    fn failed_recalculation_after_open_is_reported_and_clears_old_results() {
+        let mut state = HeatLossModuleState::new();
+        assert!(state.result.is_some());
+        let mut wb = state.wb.clone();
+        // Hoja sin columnas: el solver la rechaza.
+        for sheet in &mut wb.sheets {
+            sheet.columns.clear();
+        }
+        assert!(HeatLossUseCases::solve_heat_loss_workbook(&wb).is_err(), "preparación: el solver debería fallar");
+        let path = std::env::temp_dir().join(format!("soryntel-c08-{}.htr8", std::process::id()));
+        std::fs::write(&path, HeatLossUseCases::serialize_htr8_workbook(&wb).unwrap()).unwrap();
+        state.load_htr8(path.to_str().unwrap());
+        let _ = std::fs::remove_file(&path);
+        assert!(
+            !state.status_ok || state.result.is_none(),
+            "estado «{}» y resultado anterior conservado: {}",
+            state.status_msg,
+            state.result.is_some()
+        );
     }
 }
