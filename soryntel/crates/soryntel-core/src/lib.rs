@@ -5,6 +5,7 @@ use thiserror::Error;
 
 pub mod catalog;
 pub mod ports;
+pub mod serde_nonfinite;
 pub mod species;
 
 pub use catalog::{
@@ -42,6 +43,9 @@ pub const STP_MOLAR_VOL_L: f64 = 22.414;
 
 /// Stefan-Boltzmann constant in W/(m^2·K^4) (CODATA).
 pub const STEFAN_BOLTZMANN: f64 = 5.670_374_419e-8;
+
+/// Area of one international square foot in m² (exact: 0.3048² m²).
+pub const SQUARE_FOOT_M2: f64 = 0.092_903_04;
 
 /// Standard acceleration of gravity in m/s^2.
 pub const GRAVITY_STANDARD: f64 = 9.806_65;
@@ -256,6 +260,21 @@ impl HeatFlowUnit {
         1.0 / self.to_watts_factor()
     }
 
+    /// Factor to multiply a heat flux in W/m² to obtain this unit's flux (see [`Self::flux_label`]).
+    /// Metric units keep m² as area; `BtuPerHour` reports BTU/(h·ft²), so the area factor
+    /// 1 ft² = 0.09290304 m² (exact) applies: 1 W/m² = 0.316998 BTU/(h·ft²).
+    pub fn flux_from_w_m2_factor(self) -> f64 {
+        match self {
+            Self::BtuPerHour => self.from_watts_factor() * SQUARE_FOOT_M2,
+            _ => self.from_watts_factor(),
+        }
+    }
+
+    /// Inverse of [`Self::flux_from_w_m2_factor`]: flux in this unit to W/m².
+    pub fn flux_to_w_m2_factor(self) -> f64 {
+        1.0 / self.flux_from_w_m2_factor()
+    }
+
     pub fn label(self) -> &'static str {
         match self {
             Self::Watt => "W",
@@ -308,5 +327,20 @@ impl LengthUnit {
             Self::Millimeter => "mm",
             Self::Inch => "in",
         }
+    }
+}
+
+#[cfg(test)]
+mod heat_flux_unit_tests {
+    use super::*;
+
+    #[test]
+    fn btu_flux_roundtrip_uses_square_foot() {
+        let f = HeatFlowUnit::BtuPerHour.flux_from_w_m2_factor();
+        assert!((f - 0.316_998).abs() < 1e-6, "1 W/m² = {f} BTU/(h·ft²)");
+        let w = 1234.5;
+        let back = w * f * HeatFlowUnit::BtuPerHour.flux_to_w_m2_factor();
+        assert!((back - w).abs() < 1e-9);
+        assert_eq!(HeatFlowUnit::Kilowatt.flux_from_w_m2_factor(), 1e-3);
     }
 }

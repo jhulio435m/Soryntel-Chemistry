@@ -17,6 +17,7 @@ use std::collections::{BTreeMap, HashSet};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MaterialCompositionRow {
     pub component: String,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub wt_pct: f64,
     pub reference: String,
 }
@@ -25,6 +26,7 @@ pub struct MaterialCompositionRow {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ResolvedSpeciesWt {
     pub formula: String,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub wt_pct: f64,
     pub reference: String,
 }
@@ -33,15 +35,20 @@ pub struct ResolvedSpeciesWt {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ResolvedElementWt {
     pub element: String,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub wt_pct: f64,
 }
 
 /// Reference data for pure species used when auto-calculating material properties.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub struct SpeciesMaterialProps {
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub molar_mass_g_mol: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub density_kg_l: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub h298_kj_kg: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub cp298_j_kg_k: f64,
 }
 
@@ -62,15 +69,24 @@ pub struct MaterialPropertyRow {
 /// $C_p(T) = A + B T \cdot 10^{-3} + C T^{-2} \cdot 10^5 + D T^2 \cdot 10^{-6} + E T^{-3} \cdot 10^8 + F T^3 \cdot 10^{-9} \;\text{[J/(kg}\cdot\text{K)]}$
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MaterialCpRange {
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub t_min_k: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub t_max_k: f64,
     pub phase: String,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub h_kj_kg: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub a: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub b: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub c: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub d: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub e: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub f: f64,
     pub reference: String,
 }

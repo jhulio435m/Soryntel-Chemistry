@@ -167,11 +167,17 @@ pub struct OwnBinaryRow {
     pub cation: String,
     pub anion: String,
     pub show_t_params: bool,
+    #[serde(default, with = "soryntel_core::serde_nonfinite::option")]
     pub min_t_c: Option<f64>,
+    #[serde(default, with = "soryntel_core::serde_nonfinite::option")]
     pub max_t_c: Option<f64>,
+    #[serde(default, with = "soryntel_core::serde_nonfinite::option")]
     pub min_m: Option<f64>,
+    #[serde(default, with = "soryntel_core::serde_nonfinite::option")]
     pub max_m: Option<f64>,
+    #[serde(default, with = "soryntel_core::serde_nonfinite::option")]
     pub min_i: Option<f64>,
+    #[serde(default, with = "soryntel_core::serde_nonfinite::option")]
     pub max_i: Option<f64>,
     pub beta0: PitzerTempCurve,
     pub beta1: PitzerTempCurve,
@@ -184,11 +190,17 @@ pub struct OwnThetaRow {
     pub ion_i: String,
     pub ion_j: String,
     pub show_t_params: bool,
+    #[serde(default, with = "soryntel_core::serde_nonfinite::option")]
     pub min_t_c: Option<f64>,
+    #[serde(default, with = "soryntel_core::serde_nonfinite::option")]
     pub max_t_c: Option<f64>,
+    #[serde(default, with = "soryntel_core::serde_nonfinite::option")]
     pub min_m: Option<f64>,
+    #[serde(default, with = "soryntel_core::serde_nonfinite::option")]
     pub max_m: Option<f64>,
+    #[serde(default, with = "soryntel_core::serde_nonfinite::option")]
     pub min_i: Option<f64>,
+    #[serde(default, with = "soryntel_core::serde_nonfinite::option")]
     pub max_i: Option<f64>,
     pub theta: PitzerTempCurve,
 }
@@ -199,11 +211,17 @@ pub struct OwnPsiRow {
     pub ion2: String,
     pub ion3: String,
     pub show_t_params: bool,
+    #[serde(default, with = "soryntel_core::serde_nonfinite::option")]
     pub min_t_c: Option<f64>,
+    #[serde(default, with = "soryntel_core::serde_nonfinite::option")]
     pub max_t_c: Option<f64>,
+    #[serde(default, with = "soryntel_core::serde_nonfinite::option")]
     pub min_m: Option<f64>,
+    #[serde(default, with = "soryntel_core::serde_nonfinite::option")]
     pub max_m: Option<f64>,
+    #[serde(default, with = "soryntel_core::serde_nonfinite::option")]
     pub min_i: Option<f64>,
+    #[serde(default, with = "soryntel_core::serde_nonfinite::option")]
     pub max_i: Option<f64>,
     pub psi: PitzerTempCurve,
 }
@@ -213,11 +231,17 @@ pub struct OwnLambdaRow {
     pub neutral: String,
     pub ion: String,
     pub show_t_params: bool,
+    #[serde(default, with = "soryntel_core::serde_nonfinite::option")]
     pub min_t_c: Option<f64>,
+    #[serde(default, with = "soryntel_core::serde_nonfinite::option")]
     pub max_t_c: Option<f64>,
+    #[serde(default, with = "soryntel_core::serde_nonfinite::option")]
     pub min_m: Option<f64>,
+    #[serde(default, with = "soryntel_core::serde_nonfinite::option")]
     pub max_m: Option<f64>,
+    #[serde(default, with = "soryntel_core::serde_nonfinite::option")]
     pub min_i: Option<f64>,
+    #[serde(default, with = "soryntel_core::serde_nonfinite::option")]
     pub max_i: Option<f64>,
     pub lambda: PitzerTempCurve,
 }
@@ -677,7 +701,9 @@ pub fn parse_ion_charge_tag(formula: &str) -> Option<i32> {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AquaSpeciesInput {
     pub formula: String,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub temp: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub amount_kmol: f64,
 }
 
@@ -893,11 +919,23 @@ pub fn water_density_kell_kg_m3(t_c: f64) -> f64 {
     num / (1.0 + 0.01687985 * t)
 }
 
-/// Pure water static dielectric constant (Bradley & Pitzer 1979 correlation, `T` in K).
-fn water_dielectric_constant(t_k: f64) -> f64 {
+/// Pure water static dielectric constant (Bradley & Pitzer 1979, J. Phys. Chem. 83, 1599,
+/// Eq. 1 and Table I), `T` in K and `P` in bar:
+///
+/// `ε = ε1000 + C·ln((B + P)/(B + 1000))`, `ε1000 = U1·exp(U2·T + U3·T²)`,
+/// `C = U4 + U5/(U6 + T)`, `B = U7 + U8/T + U9·T`.
+///
+/// Without the pressure term the correlation returns ε at 1000 bar (81.8 at 25 °C instead of
+/// 78.4), which lowered `A_phi` by 6 % (BUG-B07).
+fn water_dielectric_constant(t_k: f64, p_bar: f64) -> f64 {
     let t = t_k.clamp(260.0, 620.0);
-    let u1 = 3.4279e2 * (-5.0866e-3 * t + 9.4690e-7 * t * t).exp();
-    u1.max(5.0)
+    let (u1, u2, u3) = (3.4279e2, -5.0866e-3, 9.4690e-7);
+    let (u4, u5, u6) = (-2.0525, 3.1159e3, -1.8289e2);
+    let (u7, u8, u9) = (-8.0325e3, 4.2142e6, 2.1417);
+    let eps1000 = u1 * (u2 * t + u3 * t * t).exp();
+    let c = u4 + u5 / (u6 + t);
+    let b = u7 + u8 / t + u9 * t;
+    (eps1000 + c * ((b + p_bar) / (b + 1000.0)).ln()).max(5.0)
 }
 
 /// Debye-Hückel osmotic slope `A_phi(T)` in `(kg/mol)^0.5` (`0.39148` at 298.15 K).
@@ -905,7 +943,9 @@ pub fn pitzer_a_phi(t_k: f64) -> f64 {
     let t = t_k.clamp(260.0, 600.0);
     let t_c = t - 273.15;
     let rho_g_cm3 = (water_density_kell_kg_m3(t_c) / 1000.0).max(0.3);
-    let eps = water_dielectric_constant(t);
+    // Saturation line above 100 °C, 1.01325 bar below (Pitzer 1991 convention for A_phi).
+    let p_bar = (pure_water_vapor_pressure_pa(t_c) / 1.0e5).max(1.01325);
+    let eps = water_dielectric_constant(t, p_bar);
     // Exact SI/Pitzer relation calibrated at 298.15 K (rho=0.997045, eps=78.384 -> A_phi=0.39148)
     1.400_608e6 * rho_g_cm3.sqrt() * (eps * t).powf(-1.5)
 }
@@ -1757,6 +1797,7 @@ pub fn analyze_parameter_sets(
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DensityInputRow {
     pub component: String,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub mass_fraction: f64,
 }
 

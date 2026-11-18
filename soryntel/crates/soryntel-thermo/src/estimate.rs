@@ -80,33 +80,46 @@ impl FunctionalGroup {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ElementInfo {
     pub symbol: String,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub amount: f64,
     pub charge: i32,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub weight_pct: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub atom_pct: f64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DatabaseRefValues {
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub h_kj_mol: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub s_j_molk: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub cp_j_molk: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub dg_kj_mol: f64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EstimateRow {
     pub formula: String,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub temp_c: f64,
     pub species_type: EstimateSpeciesType,
     pub organic_group: OrganicGroup,
     pub functional_group: FunctionalGroup,
     pub oxidation_set_idx: usize,
     pub available_sets: usize,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub mw: f64,
+    #[serde(default, with = "soryntel_core::serde_nonfinite::option")]
     pub est_h_kj_mol: Option<f64>,
+    #[serde(default, with = "soryntel_core::serde_nonfinite::option")]
     pub est_s_j_molk: Option<f64>,
+    #[serde(default, with = "soryntel_core::serde_nonfinite::option")]
     pub est_cp_j_molk: Option<f64>,
+    #[serde(default, with = "soryntel_core::serde_nonfinite::option")]
     pub est_dg_kj_mol: Option<f64>,
     pub db_vals: Option<DatabaseRefValues>,
     pub elements: Vec<ElementInfo>,
@@ -1023,8 +1036,11 @@ pub fn generate_cp_curve(
         let mut tmp = row.clone();
         tmp.temp_c = t - 273.15;
         evaluate_estimate_row(&mut tmp, repo);
-        let cp = tmp.est_cp_j_molk.unwrap_or(40.0);
-        pts.push((t, cp));
+        // Points without an estimate are left out instead of using a fictitious
+        // 40 J/(mol·K) that the Kelley fit would then reproduce (BUG-B25).
+        if let Some(cp) = tmp.est_cp_j_molk.filter(|v| v.is_finite()) {
+            pts.push((t, cp));
+        }
     }
     pts
 }
@@ -1286,6 +1302,18 @@ pub fn default_fig1_rows() -> Vec<EstimateRow> {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn b25_cp_curve_skips_points_without_estimate() {
+        let row = EstimateRow::new("Xx9");
+        let pts = generate_cp_curve(&row, &EmptyRepo, 298.15, 600.0, 10);
+        let mut ev = row.clone();
+        evaluate_estimate_row(&mut ev, &EmptyRepo);
+        if ev.est_cp_j_molk.is_none() {
+            assert!(pts.is_empty(), "sin estimación no debe haber puntos: {pts:?}");
+        }
+    }
+
     use super::*;
 
     struct EmptyRepo;

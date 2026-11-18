@@ -96,6 +96,7 @@ impl DiagramEnergyUnit {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DiagramSpeciesInput {
     pub formula: String,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub coeff: f64,
     #[serde(default)]
     pub row_index: Option<usize>,
@@ -108,8 +109,11 @@ pub struct DiagramSpeciesInput {
 pub struct DiagramRequest {
     pub species: Vec<DiagramSpeciesInput>,
     pub diagram_type: DiagramType,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub t_min_k: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub t_max_k: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub step_k: f64,
     pub energy_unit: DiagramEnergyUnit,
     pub per_kg: bool,
@@ -118,7 +122,9 @@ pub struct DiagramRequest {
 /// Single evaluated point on a species curve.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub struct DiagramPoint {
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub t_k: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub y_val: f64,
     pub extrapolated: bool,
 }
@@ -128,10 +134,13 @@ pub struct DiagramPoint {
 pub struct DiagramSeries {
     pub label: String,
     pub formula: String,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub coeff: f64,
     #[serde(default)]
     pub row_index: Option<usize>,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub t_min_db_k: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub t_max_db_k: f64,
     pub points: Vec<DiagramPoint>,
 }
@@ -156,21 +165,34 @@ pub fn balanced_coeff_for_element(formula: &str, element: &str, target_atoms: f6
     Some(target_atoms / count)
 }
 
+/// Maximum number of temperature steps of a diagram request.
+pub const MAX_DIAGRAM_STEPS: usize = 100_000;
+
 /// Evaluates all requested species over `[t_min_k, t_max_k]` with step `step_k`.
 pub fn calculate_diagram(
     req: &DiagramRequest,
     repo: &dyn SpeciesRepository,
 ) -> Result<DiagramResult, String> {
+    if !req.t_min_k.is_finite() || !req.t_max_k.is_finite() || !req.step_k.is_finite() {
+        return Err("T Min, T Max and Step must be finite numbers.".to_string());
+    }
     if req.t_max_k <= req.t_min_k {
         return Err("T Max must be greater than T Min.".to_string());
     }
     let step = req.step_k.max(1.0);
-    let mut temps = Vec::new();
-    let mut t = req.t_min_k;
-    while t <= req.t_max_k + 1e-6 {
-        temps.push(t.max(1.0));
-        t += step;
+    // Count the points first and build them by index: the loop never relies on `t += step`
+    // advancing (it does not once `t` exceeds 2^53 · step) and the allocation is bounded.
+    let n_steps = ((req.t_max_k - req.t_min_k) / step + 1e-9).floor();
+    if !n_steps.is_finite() || n_steps > MAX_DIAGRAM_STEPS as f64 {
+        return Err(format!(
+            "Too many temperature points (maximum {} steps).",
+            MAX_DIAGRAM_STEPS
+        ));
     }
+    let n_steps = n_steps as usize;
+    let temps: Vec<f64> = (0..=n_steps)
+        .map(|i| (req.t_min_k + (i as f64) * step).max(1.0))
+        .collect();
 
     let mut series = Vec::new();
     let mut warnings = Vec::new();
@@ -210,7 +232,13 @@ pub fn calculate_diagram(
         let h_298_j = pt_298.as_ref().map(|p| p.h).unwrap_or(0.0);
         let s_298_j_k = pt_298.as_ref().map(|p| p.s).unwrap_or(0.0);
         let ex_chem_j = if req.diagram_type == DiagramType::ExExergy {
-            species_chemical_exergy_kj_mol(repo, &sp) * 1000.0
+            match species_chemical_exergy_kj_mol(repo, &sp) {
+                Ok(v) => v * 1000.0,
+                Err(e) => {
+                    warnings.push(format!("{f_trim}: exergía química no calculable: {e}"));
+                    continue;
+                }
+            }
         } else {
             0.0
         };
@@ -222,14 +250,27 @@ pub fn calculate_diagram(
             item.coeff
         };
 
+        // Δ diagrams need every element reference; without one, G/H/S would be plotted as
+        // absolute values under a ΔG/ΔH/ΔS label (BUG-B14).
+        if need_ref {
+            if let Some(&tk0) = temps.first() {
+                if let Err(e) = sum_element_references(&term, tk0, false, repo) {
+                    warnings.push(format!("{f_trim}: no se puede calcular Δ: {e}"));
+                    continue;
+                }
+            }
+        }
+
         let mut points = Vec::with_capacity(temps.len());
         for &tk in &temps {
             let Ok((pt, _)) = evaluate_species_si(&sp, tk, false, false) else {
                 continue;
             };
             let (h_ref, s_ref, g_ref) = if need_ref {
-                let (h, s, g, _) = sum_element_references(&term, tk, false, repo)
-                    .unwrap_or((0.0, 0.0, 0.0, 0.0));
+                // A reference that fails at this T leaves the point out instead of using zeros.
+                let Ok((h, s, g, _)) = sum_element_references(&term, tk, false, repo) else {
+                    continue;
+                };
                 (h, s, g)
             } else {
                 (0.0, 0.0, 0.0)

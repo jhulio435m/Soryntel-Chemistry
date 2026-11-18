@@ -944,13 +944,19 @@ pub fn eval_addin_function(
             }
         }
         "SPECIES" => {
-            let _db_no = args.first().and_then(|a| a.as_f64()).unwrap_or(2.0) as usize;
-            let pos = args.get(1).and_then(|a| a.as_f64()).unwrap_or(1.0) as usize;
-            if pos == 0 {
-                return CellEvalValue::Error("#VALUE!".into());
+            let pos_raw = args.get(1).and_then(|a| a.as_f64()).unwrap_or(1.0);
+            // Reject non-finite, non-positive and out-of-range positions before casting.
+            let count = catalog.species_count();
+            if !pos_raw.is_finite() || pos_raw < 1.0 || pos_raw > count.max(1) as f64 {
+                return CellEvalValue::Error(if pos_raw.is_finite() && pos_raw >= 1.0 {
+                    "#N/A".into()
+                } else {
+                    "#VALUE!".into()
+                });
             }
+            let pos = pos_raw as usize;
             let sp_opt = catalog.get_species_at(pos - 1).or_else(|| {
-                let list = catalog.search_species("", pos + 8);
+                let list = catalog.search_species("", pos.saturating_add(8));
                 list.get(pos.saturating_sub(1)).cloned()
             });
             if let Some(sp) = sp_opt {
@@ -1352,7 +1358,7 @@ pub fn parse_a1(token: &str) -> Option<(usize, usize)> {
     let row = row_part.parse::<usize>().ok()?.checked_sub(1)?;
     let mut col = 0usize;
     for b in col_part.to_ascii_uppercase().bytes() {
-        col = col * 26 + ((b - b'A') as usize + 1);
+        col = col.checked_mul(26)?.checked_add((b - b'A') as usize + 1)?;
     }
     Some((row, col.checked_sub(1)?))
 }

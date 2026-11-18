@@ -10,24 +10,41 @@ use std::collections::{BTreeMap, BTreeSet};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SpeciesRow {
     pub formula: String,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub temp_display: f64,
     pub temp_formula: Option<String>,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub pressure_bar: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub amount_kmol: f64,
     pub amount_formula: Option<String>,
     // Computed outputs (in workbook display energy unit)
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub mw: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub amount_kg: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub amount_nm3: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub heat_content: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub total_h: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub hc_per_kmol: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub tot_h_per_kmol: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub ts: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub g: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub ex_phys: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub ex_tot: f64,
     pub missing_in_db: bool,
+    /// Visible warning for this row (e.g. chemical exergy not computable: missing reference element).
+    #[serde(default)]
+    pub warning: Option<String>,
 }
 
 impl SpeciesRow {
@@ -51,6 +68,7 @@ impl SpeciesRow {
             ex_phys: 0.0,
             ex_tot: 0.0,
             missing_in_db: false,
+            warning: None,
         }
     }
 
@@ -68,13 +86,19 @@ impl SpeciesRow {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StreamGroup {
     pub name: String,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub stream_temp_display: f64,
     pub species: Vec<SpeciesRow>,
     // Computed stream sums
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub sum_kmol: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub sum_kg: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub sum_nm3: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub sum_heat_content: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub sum_total_h: f64,
 }
 
@@ -97,32 +121,49 @@ impl StreamGroup {
 pub struct BalanceArea {
     pub name: String,
     pub in_streams: Vec<StreamGroup>,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub extra_heat: f64, // Extra Heat on INx (display energy unit)
     pub out_streams: Vec<StreamGroup>,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub heat_losses: f64, // Heat Losses on OUTx (display energy unit)
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ElementBalanceRow {
     pub element: String,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub in_kmol: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub out_kmol: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub balance_kmol: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub in_kg: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub out_kg: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub balance_kg: f64,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct SheetTotals {
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub kmol: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub kg: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub nm3: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub heat_content: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub total_h: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub ts: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub g: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub ex_phys: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub ex_tot: f64,
 }
 
@@ -140,17 +181,24 @@ pub struct AreaBalanceSummary {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StreamElementRow {
     pub element: String,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub kmol: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub kg: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub mol_pct: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub wt_pct: f64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StreamComposition {
     pub stream_name: String,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub temp_display: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub total_kmol: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub total_kg: f64,
     pub elements: Vec<StreamElementRow>,
 }
@@ -160,13 +208,18 @@ pub struct TargetRow {
     pub name: String,
     /// e.g. "IN1!D11" or "IN1!STREAM:GAS:TEMP"
     pub var_cell_ref: String,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub test_value: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub min_val: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub max_val: f64,
     pub target_name: String,
     /// e.g. "BALANCE1!H4" (Total H Balance) or "EL1!Cu:IN"
     pub target_cell_ref: String,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub current_target_val: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub goal_value: f64,
     pub max_iterations: usize,
 }
@@ -182,8 +235,11 @@ pub struct DiagramSeriesDef {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DiagramConfig {
     pub title: String,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub x_min: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub x_max: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub x_step: f64,
     pub x_cell_ref: String,
     pub x_label: String,
@@ -257,6 +313,18 @@ pub struct BalanceWorkbook {
     pub circular_converged: bool,
 }
 
+/// Reset the energy/exergy results of a species row.
+fn clear_computed_energy(sp: &mut SpeciesRow) {
+    sp.hc_per_kmol = 0.0;
+    sp.tot_h_per_kmol = 0.0;
+    sp.heat_content = 0.0;
+    sp.total_h = 0.0;
+    sp.ts = 0.0;
+    sp.g = 0.0;
+    sp.ex_phys = 0.0;
+    sp.ex_tot = 0.0;
+}
+
 fn atomic_weight(el: &str) -> f64 {
     crate::species::awdb_atomic_weight(el).unwrap_or(0.0)
 }
@@ -294,16 +362,21 @@ pub fn evaluate_workbook(
                     let mut s_th = 0.0;
 
                     for sp in stream.species.iter_mut() {
+                        let mut formula_warning = None;
                         if let Some(ref tf) = sp.temp_formula {
-                            if let Ok(val) = eval_formula_expr(tf, &cell_map, &elem_vars) {
-                                sp.temp_display = val;
+                            match eval_formula_expr(tf, &cell_map, &elem_vars) {
+                                Ok(val) => sp.temp_display = val,
+                                Err(e) => formula_warning = Some(format!("Fórmula de temperatura: {e}")),
                             }
                         }
                         if let Some(ref af) = sp.amount_formula {
-                            if let Ok(val) = eval_formula_expr(af, &cell_map, &elem_vars) {
-                                let clamped = val.max(0.0);
-                                max_delta = max_delta.max((clamped - sp.amount_kmol).abs());
-                                sp.amount_kmol = clamped;
+                            match eval_formula_expr(af, &cell_map, &elem_vars) {
+                                Ok(val) => {
+                                    let clamped = val.max(0.0);
+                                    max_delta = max_delta.max((clamped - sp.amount_kmol).abs());
+                                    sp.amount_kmol = clamped;
+                                }
+                                Err(e) => formula_warning = Some(format!("Fórmula de cantidad: {e}")),
                             }
                         }
 
@@ -320,14 +393,20 @@ pub fn evaluate_workbook(
                                 0.0
                             };
 
-                            if let Ok(pt) = evaluate_balance_point_si(
+                            let point = evaluate_balance_point_si(
                                 repo,
                                 &species_rec,
                                 t_k,
                                 sp.pressure_bar,
                                 wb.h2o_pressure_corr,
                                 false,
-                            ) {
+                            );
+                            if let Err(e) = &point {
+                                // Never keep the results of a previous evaluation (BUG-B10).
+                                clear_computed_energy(sp);
+                                sp.warning = Some(format!("No se pudo evaluar {}: {e}", sp.formula));
+                            }
+                            if let Ok(pt) = point {
                                 sp.hc_per_kmol = pt.h_cont_mj_kmol * e_factor;
                                 sp.tot_h_per_kmol = pt.h_tot_mj_kmol * e_factor;
                                 sp.heat_content = sp.amount_kmol * sp.hc_per_kmol;
@@ -336,9 +415,20 @@ pub fn evaluate_workbook(
                                 sp.g = sp.amount_kmol * pt.g_mj_kmol * e_factor;
                                 sp.ex_phys = sp.amount_kmol * pt.ex_phys_mj_kmol * e_factor;
                                 sp.ex_tot = sp.amount_kmol * pt.ex_tot_mj_kmol * e_factor;
+                                sp.warning = pt.ex_chem_error.clone();
                             }
                         } else {
+                            // Species not in the catalog: drop stale results of the previous
+                            // formula so they do not enter the IN/OUT totals (BUG-B10).
                             sp.missing_in_db = true;
+                            sp.mw = 0.0;
+                            sp.amount_kg = 0.0;
+                            sp.amount_nm3 = 0.0;
+                            clear_computed_energy(sp);
+                            sp.warning = Some(format!("{} no está en la base de datos", sp.formula));
+                        }
+                        if formula_warning.is_some() {
+                            sp.warning = formula_warning;
                         }
 
                         s_kmol += sp.amount_kmol;
@@ -552,6 +642,23 @@ pub fn solve_adiabatic_temperature(
         ));
     }
 
+    // Every output species must exist: an adiabatic temperature computed without one of
+    // them would be silently wrong (BUG-B09).
+    if let Some((missing, _, _)) = out_species
+        .iter()
+        .find(|(f, kmol, _)| *kmol > 0.0 && repo.get_species(f).is_none())
+    {
+        return Err(SoryntelError::SpeciesNotFound(missing.clone()));
+    }
+    if let Some(missing) = area
+        .in_streams
+        .iter()
+        .flat_map(|s| s.species.iter())
+        .find(|sp| sp.amount_kmol > 0.0 && sp.missing_in_db)
+    {
+        return Err(SoryntelError::SpeciesNotFound(missing.formula.clone()));
+    }
+
     let eval_f = |t_k: f64| -> Result<f64, SoryntelError> {
         let mut h_out = heat_losses;
         for (formula, kmol, p_bar) in &out_species {
@@ -581,6 +688,11 @@ where
 {
     let mut fa = f(a)?;
     let mut fb = f(b)?;
+    if !fa.is_finite() || !fb.is_finite() {
+        return Err(SoryntelError::TargetNotBracketed(format!(
+            "Non-finite objective at the bounds: f({a})={fa}, f({b})={fb}"
+        )));
+    }
     if fa * fb > 0.0 {
         return Err(SoryntelError::TargetNotBracketed(format!(
             "No sign change in [{a}, {b}]: f(a)={fa:.4}, f(b)={fb:.4}"
@@ -623,6 +735,11 @@ where
         };
 
         let fs = f(s)?;
+        if !fs.is_finite() {
+            return Err(SoryntelError::TargetNotBracketed(format!(
+                "Non-finite objective f({s})={fs}"
+            )));
+        }
         d = c;
         c = b;
         fc = fb;
@@ -638,7 +755,10 @@ where
             std::mem::swap(&mut fa, &mut fb);
         }
     }
-    Ok(b)
+    // 100 iterations without meeting the tolerance: report it instead of returning `b` (BUG-B19).
+    Err(SoryntelError::CircularConvergenceFailed(format!(
+        "Brent did not converge in 100 iterations (last x = {b}, f = {fb:.3e})"
+    )))
 }
 
 /// Set a workbook cell value by reference string (e.g. "IN1!D11", "IN1!STREAM:GAS:TEMP", "IN1!EXTRA_HEAT").
@@ -662,13 +782,27 @@ pub fn set_cell_value(wb: &mut BalanceWorkbook, cell_ref: &str, val: f64) -> Res
         return Ok(());
     }
 
-    let is_out = sheet_upper.starts_with("OUT");
-    let area_num: usize = sheet_upper
-        .trim_start_matches("IN")
-        .trim_start_matches("OUT")
-        .parse()
-        .unwrap_or(1);
-    let area_idx = area_num.saturating_sub(1);
+    // Only `INn` / `OUTn` (or bare `IN` / `OUT` for area 1) address balance areas; any other
+    // sheet name is an error instead of silently writing into IN1 (BUG-B08).
+    let sheet_trim = sheet_upper.trim();
+    let (is_out, suffix) = if let Some(rest) = sheet_trim.strip_prefix("OUT") {
+        (true, rest)
+    } else if let Some(rest) = sheet_trim.strip_prefix("IN") {
+        (false, rest)
+    } else {
+        return Err(SoryntelError::InvalidCellReference(cell_ref.into()));
+    };
+    let area_num: usize = if suffix.is_empty() {
+        1
+    } else {
+        suffix
+            .parse()
+            .map_err(|_| SoryntelError::InvalidCellReference(cell_ref.into()))?
+    };
+    if area_num == 0 {
+        return Err(SoryntelError::InvalidCellReference(cell_ref.into()));
+    }
+    let area_idx = area_num - 1;
     let area = wb
         .areas
         .get_mut(area_idx)
@@ -768,7 +902,14 @@ pub fn get_cell_value(wb: &BalanceWorkbook, cell_ref: &str) -> Result<f64, Soryn
 
     // BALANCE1!H4 -> Total H Balance of Area 1
     if sheet_upper.starts_with("BALANCE") {
-        let area_num: usize = sheet_upper.trim_start_matches("BALANCE").parse().unwrap_or(1);
+        let suffix = sheet_upper.trim_start_matches("BALANCE");
+        let area_num: usize = if suffix.is_empty() {
+            1
+        } else {
+            suffix
+                .parse()
+                .map_err(|_| SoryntelError::InvalidCellReference(cell_ref.into()))?
+        };
         let idx = area_num.saturating_sub(1);
         if let Some(sum) = wb.summaries.get(idx) {
             return match loc_part.to_uppercase().as_str() {
@@ -777,7 +918,8 @@ pub fn get_cell_value(wb: &BalanceWorkbook, cell_ref: &str) -> Result<f64, Soryn
                 "G4" | "HEAT_CONTENT" => Ok(sum.balance_totals.heat_content),
                 "H4" | "TOTAL_H" => Ok(sum.balance_totals.total_h),
                 "EXERGY" => Ok(sum.balance_totals.ex_tot),
-                _ => Ok(sum.balance_totals.total_h),
+                // An unknown cell is an error, not the total H balance (BUG-B20).
+                _ => Err(SoryntelError::InvalidCellReference(cell_ref.into())),
             };
         }
     }
@@ -1082,10 +1224,11 @@ impl<'a> FormulaParser<'a> {
                 let rhs = self.parse_power()?;
                 lhs = if op == b'*' {
                     lhs * rhs
-                } else if rhs.abs() > 1e-18 {
+                } else if rhs != 0.0 {
                     lhs / rhs
                 } else {
-                    0.0
+                    // Like Excel's #DIV/0!: an error, never a silent 0 (BUG-B21).
+                    return Err(SoryntelError::FormulaSyntaxError("#DIV/0!: división por cero".into()));
                 };
             } else {
                 break;
@@ -2389,6 +2532,18 @@ pub fn build_balance_export_sheets(
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn b19_brent_reports_non_convergence_and_nan() {
+        // Discontinuous sign change (no root): the iteration cannot meet |f| < 1e-9.
+        let r = brent_root(|x| Ok(if x < 1.0 { -1.0 } else { 1.0 }), 0.0, 3.0, 1e-300);
+        assert!(r.is_err(), "{r:?}");
+        let r = brent_root(|_| Ok(f64::NAN), 0.0, 1.0, 1e-9);
+        assert!(r.is_err(), "{r:?}");
+        let r = brent_root(|x| Ok(x - 2.0), 0.0, 5.0, 1e-12).unwrap();
+        assert!((r - 2.0).abs() < 1e-9);
+    }
+
     use super::*;
 
     #[test]

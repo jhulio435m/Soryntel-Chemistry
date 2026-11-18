@@ -50,7 +50,9 @@ impl PotentialScale {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ElementSpec {
     pub symbol: String,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub molality: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub pressure_bar: f64,
 }
 
@@ -60,17 +62,26 @@ pub struct EhPhRequest {
     pub elements: Vec<ElementSpec>,
     pub main_element: String,
     pub species: Vec<ChemicalSpecies>,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub t_k: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub min_ph: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub max_ph: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub min_eh_v: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub max_eh_v: f64,
     pub potential_scale: PotentialScale,
     pub criss_cobble: bool,
     pub use_davies: bool,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub ionic_strength: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub correction_factor: f64,
+    #[serde(default, with = "soryntel_core::serde_nonfinite::option")]
     pub dielectric_constant: Option<f64>,
+    #[serde(default, with = "soryntel_core::serde_nonfinite::option")]
     pub delta_g_h2o_kcal: Option<f64>,
     pub delta_g_overrides_kcal: BTreeMap<String, f64>,
     pub show_predominance_ions: bool,
@@ -107,9 +118,13 @@ impl Default for EhPhRequest {
 pub struct BoundarySegment {
     pub species_a: String,
     pub species_b: String,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub x1_ph: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub y1_v: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub x2_ph: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub y2_v: f64,
 }
 
@@ -119,8 +134,11 @@ pub struct PredominanceRegion {
     pub area_no: usize,
     pub species: String,
     pub phase: Phase,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub delta_g_kcal_mol: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub label_ph: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub label_eh_v: f64,
     pub cell_count: usize,
 }
@@ -129,6 +147,7 @@ pub struct PredominanceRegion {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SpeciesTableRow {
     pub formula: String,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub delta_g_kcal_mol: f64,
     pub area_no: Option<usize>,
     pub segments: Vec<(f64, f64, f64, f64)>,
@@ -138,9 +157,13 @@ pub struct SpeciesTableRow {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EhPhResult {
     pub title: String,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub t_k: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub dielectric_constant: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub delta_g_h2o_kcal: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub p_sat_h2o_bar: f64,
     pub warnings: Vec<String>,
     pub segments: Vec<BoundarySegment>,
@@ -218,6 +241,7 @@ fn prepare_species(
     eps: f64,
     ionic_strength: f64,
     corr_factor: f64,
+    ref_error: &mut Option<String>,
 ) -> Option<PreparedSpecies> {
     if sp.formula.eq_ignore_ascii_case("H2O")
         || sp.formula.eq_ignore_ascii_case("H2O(L)")
@@ -234,9 +258,15 @@ fn prepare_species(
     } else {
         let (pt, _) = evaluate_species_si(sp, t_k, criss_cobble, false).ok()?;
         let g_ref = if let Some(r) = repo {
-            sum_element_references(&term, t_k, criss_cobble, r)
-                .map(|(_, _, g, _)| g)
-                .unwrap_or(0.0)
+            // Without every element reference ΔfG cannot be formed; mixing absolute G with
+            // ΔfG of the other species would move the boundaries (BUG-B14).
+            match sum_element_references(&term, t_k, criss_cobble, r) {
+                Ok((_, _, g, _)) => g,
+                Err(e) => {
+                    *ref_error = Some(format!("{}: {e}", sp.formula));
+                    return None;
+                }
+            }
         } else {
             0.0
         };
@@ -442,18 +472,26 @@ pub fn delta_g_formation_h2o_kcal(
     t_k: f64,
     criss_cobble: bool,
 ) -> f64 {
-    let Some(h2o) = repo.get_species("H2O").or_else(|| repo.get_species("H2O(L)")) else {
-        return -56.678;
-    };
-    let Ok((pt, _)) = evaluate_species_si(&h2o, t_k, criss_cobble, false) else {
-        return -56.678;
-    };
-    let g_ref = parse_term(&h2o.formula)
-        .ok()
-        .and_then(|t| sum_element_references(&t, t_k, criss_cobble, repo).ok())
-        .map(|(_, _, g, _)| g)
-        .unwrap_or(0.0);
-    (pt.g - g_ref) / (1000.0 * CAL_TO_JOULE)
+    try_delta_g_formation_h2o_kcal(repo, t_k, criss_cobble).unwrap_or(-56.678)
+}
+
+/// ΔfG(H2O, l) at `t_k` in kcal/mol from the catalog, or an error naming the missing data.
+/// (`delta_g_formation_h2o_kcal` keeps the historic 25 °C fallback of -56.678 kcal/mol.)
+pub fn try_delta_g_formation_h2o_kcal(
+    repo: &dyn SpeciesRepository,
+    t_k: f64,
+    criss_cobble: bool,
+) -> Result<f64, String> {
+    let h2o = repo
+        .get_species("H2O")
+        .or_else(|| repo.get_species("H2O(L)"))
+        .or_else(|| repo.get_species("H2O(l)"))
+        .ok_or_else(|| "H2O no está en la base de datos".to_string())?;
+    let (pt, _) = evaluate_species_si(&h2o, t_k, criss_cobble, false).map_err(|e| e.to_string())?;
+    let term = parse_term(&h2o.formula).map_err(|e| e.to_string())?;
+    let (_, _, g_ref, _) =
+        sum_element_references(&term, t_k, criss_cobble, repo).map_err(|e| e.to_string())?;
+    Ok((pt.g - g_ref) / (1000.0 * CAL_TO_JOULE))
 }
 
 /// Solved grid + contour segments + interior regions for one diagram layer.
@@ -685,14 +723,38 @@ pub fn calculate_ehph(
         .dielectric_constant
         .unwrap_or_else(|| water_dielectric_constant(t_k));
 
-    let dg_h2o_kcal = req.delta_g_h2o_kcal.unwrap_or_else(|| {
-        repo.map(|r| delta_g_formation_h2o_kcal(r, t_k, req.criss_cobble))
-            .unwrap_or(-56.678)
-    });
+    let mut warnings = Vec::new();
+    // ΔfG(H2O) from the catalog. If it cannot be formed (missing H2O or element references)
+    // the tabulated 25 °C value -56.678 kcal/mol is used, but never silently: a visible warning
+    // states it, stressing when T differs from 25 °C (BUG-B14).
+    let dg_h2o_kcal = match req.delta_g_h2o_kcal {
+        Some(v) => v,
+        None => {
+            let computed = match repo {
+                Some(r) => try_delta_g_formation_h2o_kcal(r, t_k, req.criss_cobble),
+                None => Err("sin base de datos".to_string()),
+            };
+            match computed {
+                Ok(v) => v,
+                Err(e) => {
+                    let mut msg = format!(
+                        "ΔfG(H2O) no calculable ({e}): se usa -56,678 kcal/mol, valor a 25 °C."
+                    );
+                    if (t_k - 298.15).abs() > 0.5 {
+                        msg.push_str(&format!(
+                            " A {:.2} °C el diagrama es aproximado: indique ΔG(H2O) o cargue H2O en la base de datos.",
+                            t_k - 273.15
+                        ));
+                    }
+                    warnings.push(msg);
+                    -56.678
+                }
+            }
+        }
+    };
     let dg_h2o_j = dg_h2o_kcal * 1000.0 * CAL_TO_JOULE;
 
     let p_sat_h2o_bar = h2o_saturation_pressure_bar(t_k);
-    let mut warnings = Vec::new();
     // Per §17.3.6, system total pressure is the highest pressure among selected elements.
     let max_p_bar = req
         .elements
@@ -726,7 +788,8 @@ pub fn calculate_ehph(
     let mut ion_sec_species = Vec::new();
 
     for sp in &req.species {
-        if let Some(prep) = prepare_species(
+        let mut ref_error = None;
+        let prepared = prepare_species(
             sp,
             t_k,
             req.criss_cobble,
@@ -738,7 +801,12 @@ pub fn calculate_ehph(
             eps,
             req.ionic_strength,
             req.correction_factor,
-        ) {
+            &mut ref_error,
+        );
+        if let Some(e) = ref_error {
+            warnings.push(format!("Especie omitida, falta una referencia: {e}"));
+        }
+        if let Some(prep) = prepared {
             let is_aq = matches!(sp.phase, Phase::AqueousIon | Phase::AqueousNeutral);
             if prep.other_elements.contains_key(&req.main_element) {
                 if is_aq {
