@@ -1,17 +1,41 @@
-//! Enlace entre las ventanas Heat Loss y Balance, que se ejecutan en procesos distintos.
+//! Enlaces entre ventanas de módulos, que se ejecutan en procesos distintos.
 //!
-//! Balance publica cuántas áreas tiene el libro abierto; Heat Loss envía la pérdida de calor a
+//! Heat Loss → Balance: Balance publica cuántas áreas tiene el libro abierto; Heat Loss envía la pérdida de calor a
 //! un área y Balance responde con un acuse que Heat Loss muestra al usuario. Todo va por
 //! archivos pequeños en el directorio temporal del usuario, escritos de forma atómica.
 use std::io;
 use std::path::{Path, PathBuf};
 
-pub struct BalanceLink {
+/// Antigüedad máxima de una fórmula enviada de Species a Reaction: si ninguna ventana de
+/// Reaction la recoge a tiempo, se descarta en lugar de aparecer días después.
+pub const FORMULA_MAX_AGE_SECS: u64 = 15;
+
+fn now_secs() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
+
+/// Codifica una fórmula enviada en el instante `sent_at` (segundos Unix).
+pub fn encode_formula(formula: &str, sent_at: u64) -> String {
+    format!("{sent_at}\n{}", formula.trim())
+}
+
+/// Decodifica un envío y lo descarta si es más antiguo que `max_age` o no tiene marca.
+pub fn decode_formula(content: &str, now: u64, max_age: u64) -> Option<String> {
+    let (stamp, formula) = content.split_once('\n')?;
+    let sent_at: u64 = stamp.trim().parse().ok()?;
+    let formula = formula.trim();
+    (now.saturating_sub(sent_at) <= max_age && !formula.is_empty()).then(|| formula.to_string())
+}
+
+pub struct ModuleLink {
     dir: PathBuf,
     prefix: String,
 }
 
-impl BalanceLink {
+impl ModuleLink {
     /// Enlace en el directorio temporal, con un prefijo por usuario para no mezclar sesiones
     /// de usuarios distintos que comparten `/tmp`.
     pub fn in_temp_dir() -> Self {
@@ -41,6 +65,17 @@ impl BalanceLink {
         let content = std::fs::read_to_string(path).ok()?;
         let _ = std::fs::remove_file(path);
         Some(content)
+    }
+
+    /// Species: envía una fórmula a la ventana de Reaction abierta.
+    pub fn send_formula(&self, formula: &str) -> io::Result<()> {
+        crate::storage::write_atomic(self.path("import_formula.txt"), encode_formula(formula, now_secs()))
+    }
+
+    /// Reaction: recoge una fórmula reciente; los envíos caducados se borran sin aplicarse.
+    pub fn take_formula(&self) -> Option<String> {
+        let content = Self::take(&self.path("import_formula.txt"))?;
+        decode_formula(&content, now_secs(), FORMULA_MAX_AGE_SECS)
     }
 
     /// Heat Loss: envía `q_w` (W) al área `area_idx` (base 0).
@@ -101,11 +136,26 @@ mod tests {
     use super::*;
 
     #[test]
+    fn stale_or_malformed_formula_is_ignored() {
+        assert_eq!(decode_formula(&encode_formula(" Fe2O3 ", 100), 105, 15).as_deref(), Some("Fe2O3"));
+        assert_eq!(decode_formula(&encode_formula("Fe2O3", 100), 200, 15), None, "envío caducado");
+        assert_eq!(decode_formula("Fe2O3", 100, 15), None, "formato antiguo sin marca de tiempo");
+        assert_eq!(decode_formula(&encode_formula("", 100), 100, 15), None);
+        let dir = std::env::temp_dir().join(format!("soryntel-formula-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let link = ModuleLink::new(&dir, "prueba");
+        link.send_formula("CuSO4").unwrap();
+        assert_eq!(link.take_formula().as_deref(), Some("CuSO4"));
+        assert_eq!(link.take_formula(), None, "se consume una vez");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn heat_loss_round_trip_with_presence_and_ack() {
         let dir = std::env::temp_dir().join(format!("soryntel-link-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
-        let link = BalanceLink::new(&dir, "prueba");
+        let link = ModuleLink::new(&dir, "prueba");
         assert_eq!(link.balance_area_count(), None);
         link.publish_presence(3).unwrap();
         assert_eq!(link.balance_area_count(), Some(3));

@@ -10,7 +10,7 @@ mod i18n;
 mod storage;
 mod addins_bridge;
 mod aqua_ui;
-mod balance_link;
+mod module_link;
 mod balance_ui;
 mod benson_ui;
 mod composition;
@@ -530,6 +530,7 @@ struct SoryntelDesktopApp {
     /// Último número de áreas publicado para Heat Loss (solo en la ventana Balance).
     published_balance_areas: Option<usize>,
     db_warnings_dismissed: bool,
+    last_formula_poll: Option<std::time::Instant>,
 }
 
 impl SoryntelDesktopApp {
@@ -611,6 +612,7 @@ impl SoryntelDesktopApp {
             launcher_ui_state: launcher_ui::LauncherUiState::default(),
             published_balance_areas: None,
             db_warnings_dismissed: false,
+            last_formula_poll: None,
         }
     }
 }
@@ -618,7 +620,7 @@ impl SoryntelDesktopApp {
 impl eframe::App for SoryntelDesktopApp {
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
         if self.window_mode == WindowMode::Balance {
-            balance_link::BalanceLink::in_temp_dir().clear_presence();
+            module_link::ModuleLink::in_temp_dir().clear_presence();
         }
     }
 
@@ -626,14 +628,17 @@ impl eframe::App for SoryntelDesktopApp {
         self.show_database_warnings(ctx);
         match self.window_mode {
             WindowMode::Reaction => {
-                let import_path = crate::ui_common::temp_file_path("soryntel_import_formula.txt");
-                if let Ok(imported) = std::fs::read_to_string(&import_path) {
-                    let f = imported.trim().to_string();
-                    if !f.is_empty() {
-                        self.reaction_state.formula_input = f;
+                // Fórmulas enviadas desde Species: sondeo cada 500 ms, no en cada frame.
+                ctx.request_repaint_after(std::time::Duration::from_millis(500));
+                let due = self
+                    .last_formula_poll
+                    .is_none_or(|t| t.elapsed() >= std::time::Duration::from_millis(500));
+                if due {
+                    self.last_formula_poll = Some(std::time::Instant::now());
+                    if let Some(formula) = module_link::ModuleLink::in_temp_dir().take_formula() {
+                        self.reaction_state.formula_input = formula;
                         self.reaction_state.run_calculate(&*self.services.catalog());
                     }
-                    let _ = std::fs::remove_file(&import_path);
                 }
                 self.reaction_state.ui(ctx, &*self.services.catalog());
                 if self.reaction_state.request_open_browser {
@@ -648,7 +653,7 @@ impl eframe::App for SoryntelDesktopApp {
             WindowMode::Balance => {
                 // Sondeo periódico del envío de Heat Loss aunque no haya eventos de entrada.
                 ctx.request_repaint_after(std::time::Duration::from_millis(500));
-                let link = balance_link::BalanceLink::in_temp_dir();
+                let link = module_link::ModuleLink::in_temp_dir();
                 if let Some(received) = link.take_heat_loss() {
                     match received {
                         Ok((area, q_w)) => self.services.with_catalog(|catalog| {
@@ -671,7 +676,7 @@ impl eframe::App for SoryntelDesktopApp {
             }
             WindowMode::HeatLoss => {
                 ctx.request_repaint_after(std::time::Duration::from_millis(500));
-                let link = balance_link::BalanceLink::in_temp_dir();
+                let link = module_link::ModuleLink::in_temp_dir();
                 // Áreas del Balance abierto (otro proceso); 0 si no hay ninguno.
                 let open_balance_areas = link.balance_area_count();
                 self.heat_loss_state.ui(ctx, open_balance_areas.unwrap_or(0));
@@ -776,12 +781,19 @@ impl eframe::App for SoryntelDesktopApp {
                 // tomar el de lectura para recalcular la reacción.
                 let selected = self.species_state.ui(ctx, &mut *self.services.catalog_mut());
                 if let Some(f) = selected {
-                    let _ = crate::storage::write_atomic(
-                        crate::ui_common::temp_file_path("soryntel_import_formula.txt"),
-                        &f,
-                    );
-                    self.reaction_state.formula_input = f;
-                    self.reaction_state.run_calculate(&*self.services.catalog());
+                    match module_link::ModuleLink::in_temp_dir().send_formula(&f) {
+                        Ok(()) => {
+                            self.species_state.status_msg = format!(
+                                "«{f}» enviada a Reaction: se cargará si hay una ventana de Reaction abierta en los próximos {} s.",
+                                module_link::FORMULA_MAX_AGE_SECS
+                            );
+                            self.species_state.status_is_err = false;
+                        }
+                        Err(e) => {
+                            self.species_state.status_msg = format!("No se pudo enviar «{f}» a Reaction: {e}");
+                            self.species_state.status_is_err = true;
+                        }
+                    }
                 }
                 return;
             }

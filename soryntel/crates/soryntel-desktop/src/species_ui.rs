@@ -1009,10 +1009,6 @@ impl SpeciesModuleState {
                             .clicked()
                         {
                             self.import_to_reaction_formula = Some(sel.formula.clone());
-                            let _ = crate::storage::write_atomic(
-                                crate::ui_common::temp_file_path("soryntel_import_formula.txt"),
-                                &sel.formula,
-                            );
                         }
                         if ui.button("Edit Copy in OwnDB").clicked() {
                             self.load_into_editor(&sel.species, &sel.metadata, &sel.raw_phase_code);
