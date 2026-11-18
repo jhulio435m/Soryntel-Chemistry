@@ -87,7 +87,6 @@ fn write(path: &Path, datasets: &[SpeciesDataset]) {
 // ---------------------------------------------------------------------------------------------
 // A01: la fusión de HSC colapsa los conjuntos alternativos de una misma fórmula.
 #[test]
-#[ignore = "BUG-A01: merge_hsc_files pierde datasets alternativos del destino (clave por fórmula)"]
 fn a01_merge_conserva_datasets_alternativos_del_destino() {
     let tmp = TempDir::new("a01");
     let src = tmp.path("src.HSC");
@@ -106,7 +105,6 @@ fn a01_merge_conserva_datasets_alternativos_del_destino() {
 
 // A02: editar (upsert) una especie de OwnDB borra sus datasets alternativos.
 #[test]
-#[ignore = "BUG-A02: upsert_own_dataset sustituye TODOS los datasets de la fórmula, no solo el primario"]
 fn a02_upsert_own_conserva_datasets_alternativos() {
     let tmp = TempDir::new("a02");
     let own = tmp.path("own.HSC");
@@ -126,7 +124,6 @@ fn a02_upsert_own_conserva_datasets_alternativos() {
 
 // A03: importar CSV con dos datasets de la misma fórmula conserva solo el último.
 #[test]
-#[ignore = "BUG-A03: import_csv_into_own informa N datasets pero guarda solo el último por fórmula"]
 fn a03_import_csv_conserva_todos_los_datasets() {
     let csv = export_datasets_csv(&two_alt_datasets("Al2O3"));
     let mut db = ThermoDatabase::default();
@@ -223,17 +220,20 @@ fn a10_ida_y_vuelta_de_solubilidad_no_ascii() {
 
 // A11: fórmulas > 24 bytes se truncan en silencio y dos especies distintas se fusionan.
 #[test]
-#[ignore = "BUG-A11: serialize trunca fórmula a 24 B sin error; especies distintas colisionan"]
 fn a11_formulas_largas_no_colisionan() {
     let f1 = "C12H22O11*Ca(NO3)2*4H2O(a)";
     let f2 = "C12H22O11*Ca(NO3)2*4H2O(g)";
     assert!(f1.len() > 24);
-    let back = roundtrip(&[
-        ds(one_interval(f1, "uno", 298.15, 1000.0), 0),
-        ds(one_interval(f2, "dos", 298.15, 1000.0), 0),
-    ]);
-    let formulas: Vec<&str> = back.iter().map(|d| d.species.formula.as_str()).collect();
-    assert_eq!(formulas, vec![f1, f2], "o bien error explícito al serializar");
+    let tmp = TempDir::new("a11");
+    let path = tmp.path("own.HSC");
+    let mut db = ThermoDatabase::default();
+    db.create_empty_own_hsc(&path).unwrap();
+    let before = std::fs::read(&path).unwrap();
+    db.insert_species(one_interval(f1, "uno", 298.15, 1000.0));
+    db.insert_species(one_interval(f2, "dos", 298.15, 1000.0));
+    let error = db.save_own_hsc(&path).unwrap_err().to_string();
+    assert!(error.contains(f1) && error.contains(f2), "{error}");
+    assert_eq!(std::fs::read(&path).unwrap(), before);
 }
 
 // A12: una especie sin intervalos desaparece al guardar OwnDB (y save informa que se guardó).
@@ -424,7 +424,6 @@ fn a23_busqueda_insensible_a_mayusculas_unicode() {
 
 // A24: decisiones de conflicto: con dos datasets en origen, el segundo pisa al primero.
 #[test]
-#[ignore = "BUG-A24: detect_and_merge_datasets: datasets alternativos del origen se pisan entre sí"]
 fn a24_merge_conserva_datasets_alternativos_del_origen() {
     let tmp = TempDir::new("a24");
     let src = tmp.path("src.HSC");
@@ -434,4 +433,17 @@ fn a24_merge_conserva_datasets_alternativos_del_origen() {
     decisions.insert("Al2O3".to_string(), MergeConflictDecision::TakeSource);
     let (n, _) = ThermoDatabase::merge_hsc_files(&src, &dst, &decisions, false).unwrap();
     assert_eq!(n, 2, "dos datasets de origen, destino vacío: deben quedar los dos");
+}
+
+#[test]
+fn a25_escritura_atomica_limpia_temporal_si_falla_rename() {
+    let tmp = TempDir::new("a25");
+    let path = tmp.path("own.HSC");
+    std::fs::create_dir(&path).unwrap();
+    let marker = path.join("previous");
+    std::fs::write(&marker, b"original").unwrap();
+    let mut db = ThermoDatabase::default();
+    assert!(db.create_empty_own_hsc(&path).is_err());
+    assert_eq!(std::fs::read(marker).unwrap(), b"original");
+    assert_eq!(std::fs::read_dir(path.parent().unwrap()).unwrap().count(), 1);
 }

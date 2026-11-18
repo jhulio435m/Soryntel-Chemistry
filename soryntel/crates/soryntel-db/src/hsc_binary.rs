@@ -8,7 +8,6 @@ use soryntel_thermo::{
     ChemicalSpecies, KelleyCoefficients, Phase, SpeciesMetadata, SpeciesThermoInterval,
 };
 use std::collections::{BTreeMap, HashMap};
-use std::fs;
 use std::path::{Path, PathBuf};
 
 pub use soryntel_core::catalog::ReferenceEntry;
@@ -374,6 +373,39 @@ pub fn build_empty_hsc_bytes() -> Vec<u8> {
 
 /// Serialize a list of `SpeciesDataset`s into binary `.HSC` 256-byte LE/CP1252 format.
 /// Emits a valid sentinel `'0'` record if no intervals exist so HSC 6.0 always opens the file cleanly.
+/// Validate all fixed-width fields before building bytes for a persistent write.
+pub fn serialize_datasets_checked(datasets: &[SpeciesDataset]) -> Result<Vec<u8>, SoryntelError> {
+    let mut invalid = std::collections::BTreeSet::new();
+    for ds in datasets {
+        let sp = &ds.species;
+        let meta = &ds.metadata;
+        let fields = [
+            ("formula", sp.formula.as_str(), 24),
+            ("structural formula", meta.structural_formula.as_str(), 32),
+            ("name", sp.name.as_str(), 52),
+            ("common name", meta.common_name.as_str(), 32),
+            ("CAS", meta.cas_number.as_str(), 12),
+            ("solubility", meta.solubility.as_str(), 14),
+        ];
+        for (field, value, width) in fields.into_iter().chain(
+            sp.intervals.iter().map(|interval| ("reference", interval.reference.as_str(), 36)),
+        ) {
+            if value.chars().count() > width || value.chars().any(|ch| {
+                ch.is_control() || !(ch.is_ascii() || ('\u{00a0}'..='ÿ').contains(&ch)
+                    || CP1252_80_9F.contains(&ch))
+            }) {
+                invalid.insert(format!("{} ({field}: max {width} CP1252 bytes)", sp.formula));
+            }
+        }
+    }
+    if !invalid.is_empty() {
+        return Err(SoryntelError::DatabaseError(format!(
+            "Unrepresentable HSC fields: {}", invalid.into_iter().collect::<Vec<_>>().join(", ")
+        )));
+    }
+    Ok(serialize_datasets_to_hsc(datasets))
+}
+
 pub fn serialize_datasets_to_hsc(datasets: &[SpeciesDataset]) -> Vec<u8> {
     let mut out = Vec::new();
     for ds in datasets {
@@ -481,7 +513,7 @@ pub fn write_catalogue_file(hsc_path: &Path, datasets: &[SpeciesDataset]) -> Res
     }
     let cat_path = hsc_path.with_extension("CAT");
     let body = lines.join("\r\n") + "\r\n";
-    fs::write(&cat_path, body.as_bytes()).map_err(|e| {
+    crate::atomic_write::write(&cat_path, body.as_bytes()).map_err(|e| {
         SoryntelError::DatabaseError(format!("Failed writing {}: {e}", cat_path.display()))
     })?;
     Ok(cat_path)
@@ -671,13 +703,13 @@ pub fn detect_and_merge_datasets(
     Vec<SpeciesDataset>,
     Vec<soryntel_thermo::species::DbMergeConflict>,
 ) {
-    let mut by_formula: BTreeMap<(String, String), SpeciesDataset> = BTreeMap::new();
+    let mut by_formula: BTreeMap<((String, String), usize), SpeciesDataset> = BTreeMap::new();
     for ds in target_ds {
-        by_formula.insert(formula_sort_key(&ds.species.formula), ds.clone());
+        by_formula.insert((formula_sort_key(&ds.species.formula), ds.dataset_index), ds.clone());
     }
     let mut conflicts = Vec::new();
     for src in source_ds {
-        let key = formula_sort_key(&src.species.formula);
+        let key = (formula_sort_key(&src.species.formula), src.dataset_index);
         if let Some(dst) = by_formula.get(&key).cloned() {
             conflicts.push(soryntel_thermo::species::DbMergeConflict {
                 formula: src.species.formula.clone(),

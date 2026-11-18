@@ -2,12 +2,13 @@
 //! full `.HSC` / `.REF` / `.CAT` codecs, and stoichiometric / elemental / keyword search.
 
 pub mod adapters;
+mod atomic_write;
 pub mod hsc_binary;
 
 use hsc_binary::{
     build_empty_hsc_bytes, detect_and_merge_datasets, discover_companion_ref, export_datasets_csv,
     group_records_to_datasets, import_datasets_csv, parse_hsc_binary_records, parse_ref_binary,
-    serialize_datasets_to_hsc, upgrade_legacy_datasets, write_catalogue_file, ReferenceEntry,
+    serialize_datasets_checked, upgrade_legacy_datasets, write_catalogue_file, ReferenceEntry,
 };
 use soryntel_core::{ChemicalSpecies, KelleyCoefficients, Phase, SpeciesCatalogPort, SpeciesMetadata, SpeciesRepository, SpeciesThermoInterval, SoryntelError, CAL_TO_JOULE};
 use soryntel_thermo::species::{
@@ -205,15 +206,16 @@ impl ThermoDatabase {
         if !self.own_datasets.contains_key(&f) {
             self.own_order.push(f.clone());
         }
+        let index = self.active_dataset_choice.get(&(DbSource::Own, f.clone())).copied().unwrap_or(0);
         let ds = SpeciesDataset {
             source: DbSource::Own,
             species: sp,
             metadata: meta,
-            dataset_index: 0,
+            dataset_index: index,
             raw_phase_code,
         };
-        self.own_datasets.insert(f.clone(), vec![ds.clone()]);
-        self.active_dataset_choice.insert((DbSource::Own, f.clone()), 0);
+        self.store_own_dataset(ds.clone());
+        self.active_dataset_choice.insert((DbSource::Own, f.clone()), index);
         if !self.species.contains_key(&f) {
             self.ordered_formulas.push(f.clone());
         }
@@ -224,6 +226,15 @@ impl ThermoDatabase {
             .flatten()
             .map(|d| d.species.intervals.len())
             .sum();
+    }
+
+    fn store_own_dataset(&mut self, dataset: SpeciesDataset) {
+        let formula = dataset.species.formula.clone();
+        let datasets = self.own_datasets.entry(formula).or_default();
+        match datasets.binary_search_by_key(&dataset.dataset_index, |item| item.dataset_index) {
+            Ok(index) => datasets[index] = dataset,
+            Err(index) => datasets.insert(index, dataset),
+        }
     }
 
     /// Delete a species from `OwnDB` (`CU-05` / `CU-09`). If `MainDB` has an entry with the same
@@ -342,8 +353,8 @@ impl ThermoDatabase {
     /// Persist active `OwnDB` to a binary 256-byte `.HSC` file (plus refreshed `.CAT` index).
     pub fn save_own_hsc<P: AsRef<Path>>(&mut self, path: P) -> Result<usize, SoryntelError> {
         let ordered = self.collect_flat_datasets(DbSource::Own);
-        let bytes = serialize_datasets_to_hsc(&ordered);
-        fs::write(path.as_ref(), &bytes).map_err(|e| {
+        let bytes = serialize_datasets_checked(&ordered)?;
+        atomic_write::write(path.as_ref(), &bytes).map_err(|e| {
             SoryntelError::DatabaseError(format!(
                 "Cannot write OwnDB {}: {e}",
                 path.as_ref().display()
@@ -357,7 +368,7 @@ impl ThermoDatabase {
     /// Create a fresh empty `OwnDB` `.HSC` file (valid 256-byte `'0'` sentinel matching `OWNDB6.HSC`).
     pub fn create_empty_own_hsc<P: AsRef<Path>>(&mut self, path: P) -> Result<(), SoryntelError> {
         let sentinel = build_empty_hsc_bytes();
-        fs::write(path.as_ref(), &sentinel).map_err(|e| {
+        atomic_write::write(path.as_ref(), &sentinel).map_err(|e| {
             SoryntelError::DatabaseError(format!("Cannot create {}: {e}", path.as_ref().display()))
         })?;
         self.own_order.clear();
@@ -372,8 +383,8 @@ impl ThermoDatabase {
     /// Save active `MainDB` (as a custom copy or updated `.HSC`) to `path`.
     pub fn save_main_hsc_copy<P: AsRef<Path>>(&self, path: P) -> Result<usize, SoryntelError> {
         let ordered = self.collect_flat_datasets(DbSource::Main);
-        let bytes = serialize_datasets_to_hsc(&ordered);
-        fs::write(path.as_ref(), &bytes).map_err(|e| {
+        let bytes = serialize_datasets_checked(&ordered)?;
+        atomic_write::write(path.as_ref(), &bytes).map_err(|e| {
             SoryntelError::DatabaseError(format!("Cannot write {}: {e}", path.as_ref().display()))
         })?;
         let _ = write_catalogue_file(path.as_ref(), &ordered);
@@ -503,8 +514,8 @@ impl ThermoDatabase {
 
         let (merged, conflicts) = detect_and_merge_datasets(&src_flat, &dst_flat, decisions);
         if !dry_run_conflicts_only {
-            let out_bytes = serialize_datasets_to_hsc(&merged);
-            fs::write(dst_path.as_ref(), &out_bytes).map_err(|e| {
+            let out_bytes = serialize_datasets_checked(&merged)?;
+            atomic_write::write(dst_path.as_ref(), &out_bytes).map_err(|e| {
                 SoryntelError::DatabaseError(format!(
                     "Cannot write {}: {e}",
                     dst_path.as_ref().display()
@@ -532,8 +543,8 @@ impl ThermoDatabase {
             import_datasets_csv(&txt, DbSource::Main)?
         };
         let upgraded = upgrade_legacy_datasets(datasets);
-        let out_bytes = serialize_datasets_to_hsc(&upgraded);
-        fs::write(dst_path.as_ref(), &out_bytes).map_err(|e| {
+        let out_bytes = serialize_datasets_checked(&upgraded)?;
+        atomic_write::write(dst_path.as_ref(), &out_bytes).map_err(|e| {
             SoryntelError::DatabaseError(format!("Cannot write {}: {e}", dst_path.as_ref().display()))
         })?;
         let _ = write_catalogue_file(dst_path.as_ref(), &upgraded);
@@ -564,8 +575,13 @@ impl ThermoDatabase {
         let imported = import_datasets_csv(csv_text, DbSource::Own)?;
         let count = imported.len();
         for ds in imported {
-            self.upsert_own_dataset(ds.species, ds.metadata, ds.raw_phase_code);
+            if !self.own_datasets.contains_key(&ds.species.formula) {
+                self.own_order.push(ds.species.formula.clone());
+            }
+            self.store_own_dataset(ds);
         }
+        self.own_binary_records = self.own_datasets.values().flatten().map(|d| d.species.intervals.len()).sum();
+        self.rebuild_resolved();
         Ok(count)
     }
 

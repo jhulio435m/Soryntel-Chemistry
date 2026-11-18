@@ -152,8 +152,20 @@ impl ChemDatabase {
             "#,
         )?;
 
-        self.seed_species()?;
-        self.seed_minerals()?;
+        let transaction = rusqlite::Transaction::new_unchecked(&self.conn, rusqlite::TransactionBehavior::Immediate)?;
+        let species_empty = transaction.query_row(
+            "SELECT NOT EXISTS(SELECT 1 FROM species_thermo)", [], |row| row.get::<_, bool>(0),
+        )?;
+        if species_empty {
+            self.seed_species()?;
+        }
+        let minerals_empty = transaction.query_row(
+            "SELECT NOT EXISTS(SELECT 1 FROM minerals)", [], |row| row.get::<_, bool>(0),
+        )?;
+        if minerals_empty {
+            self.seed_minerals()?;
+        }
+        transaction.commit()?;
         Ok(())
     }
 

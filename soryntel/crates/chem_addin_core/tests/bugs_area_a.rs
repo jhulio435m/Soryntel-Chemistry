@@ -58,28 +58,15 @@ fn fuzz_parser_y_balanceo_no_entran_en_panico() {
     assert!(panics.is_empty(), "pánicos: {panics:#?}");
 }
 
-const DEEP_ENV: &str = "SORYNTEL_BUG_A30_CHILD";
 
 // A30: anidamiento profundo de paréntesis desborda la pila (aborta el proceso, no es capturable).
 // El test se relanza a sí mismo como subproceso para que el aborto no tumbe el binario de tests.
 #[test]
-#[ignore = "BUG-A30: parse_sequence es recursivo sin límite; '((((…H…))))' desborda la pila y aborta"]
 fn a30_parentesis_anidados_profundos_no_abortan() {
-    if std::env::var_os(DEEP_ENV).is_some() {
-        let depth = 200_000;
-        let s = format!("{}H{}", "(".repeat(depth), ")".repeat(depth));
-        let _ = parse_species(&s);
-        return;
-    }
-    let exe = std::env::current_exe().unwrap();
-    let status = std::process::Command::new(exe)
-        .args(["--exact", "a30_parentesis_anidados_profundos_no_abortan", "--ignored", "--nocapture"])
-        .env(DEEP_ENV, "1")
-        .stderr(std::process::Stdio::null())
-        .stdout(std::process::Stdio::null())
-        .status()
-        .unwrap();
-    assert!(status.success(), "el subproceso abortó: {status:?}");
+    let nested = |depth| format!("{}H{}", "(".repeat(depth), ")".repeat(depth));
+    assert!(parse_species(&nested(64)).is_ok());
+    assert!(parse_species(&nested(65)).is_err());
+    assert!(parse_species(&"H".repeat(4097)).is_err());
 }
 
 // A31: MW del electrón es 0.
@@ -117,7 +104,6 @@ fn a34_subindice_cero_se_rechaza() {
 
 // A35: reabrir un SQLite persistente sobrescribe con las semillas los cambios del usuario.
 #[test]
-#[ignore = "BUG-A35: open_file ejecuta seed_species con ON CONFLICT DO UPDATE y pisa ediciones del usuario"]
 fn a35_reabrir_sqlite_conserva_ediciones() {
     let dir = std::env::temp_dir().join(format!("chem-addin-a35-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);

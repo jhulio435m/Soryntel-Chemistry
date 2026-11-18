@@ -117,6 +117,9 @@ pub fn is_reaction(expr: &str) -> bool {
 /// Parse a chemical species string supporting phase tags (`(g)`), nested parentheses/brackets,
 /// hydrate/adduct separators (`*`, `·`), fractional coefficients, and ionic charges.
 pub fn parse_species(input: &str) -> Result<ParsedSpecies> {
+    if input.chars().take(4097).count() > 4096 {
+        return Err(ChemAddinError::InvalidFormula("input exceeds 4096 characters".into()));
+    }
     let trimmed = input.trim();
     if trimmed.is_empty() {
         return Err(ChemAddinError::InvalidFormula("<empty>".to_string()));
@@ -194,6 +197,9 @@ pub fn parse_species(input: &str) -> Result<ParsedSpecies> {
 
 /// Parse a reaction string containing `=`, `<=>`, `=>`, or `->`.
 pub fn parse_reaction(input: &str) -> Result<ParsedReaction> {
+    if input.chars().take(4097).count() > 4096 {
+        return Err(ChemAddinError::InvalidFormula("input exceeds 4096 characters".into()));
+    }
     let normalized = input
         .trim()
         .replace("<=>", "=")
@@ -476,7 +482,7 @@ fn split_leading_unsigned_multiplier<'a>(s: &'a str, full_ctx: &str) -> Result<(
 
 fn parse_formula_group(s: &str, full_ctx: &str) -> Result<BTreeMap<String, f64>> {
     let bytes = s.as_bytes();
-    let (map, pos) = parse_sequence(bytes, 0, None, full_ctx)?;
+    let (map, pos) = parse_sequence(bytes, 0, None, full_ctx, 0)?;
     if pos != bytes.len() {
         return Err(ChemAddinError::InvalidFormula(full_ctx.to_string()));
     }
@@ -488,6 +494,7 @@ fn parse_sequence(
     mut i: usize,
     closing_delim: Option<u8>,
     full_ctx: &str,
+    depth: usize,
 ) -> Result<(BTreeMap<String, f64>, usize)> {
     let mut comp = BTreeMap::<String, f64>::new();
 
@@ -504,7 +511,10 @@ fn parse_sequence(
         }
         if b == b'(' || b == b'[' {
             let expected_close = if b == b'(' { b')' } else { b']' };
-            let (inner, next_i) = parse_sequence(bytes, i + 1, Some(expected_close), full_ctx)?;
+            if depth == 64 {
+                return Err(ChemAddinError::InvalidFormula("nesting exceeds 64 levels".into()));
+            }
+            let (inner, next_i) = parse_sequence(bytes, i + 1, Some(expected_close), full_ctx, depth + 1)?;
             if inner.is_empty() {
                 return Err(ChemAddinError::InvalidFormula(full_ctx.to_string()));
             }
