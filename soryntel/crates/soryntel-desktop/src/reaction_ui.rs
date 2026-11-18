@@ -2109,4 +2109,58 @@ mod tests {
         let svg = state.build_chart_svg().expect("chart svg");
         assert!(svg.contains("<svg") && svg.contains("Mg = Mg(g)"));
     }
+
+    #[test]
+    #[ignore = "BUG-C06: cambiar °C→K no convierte Desde/Hasta; 0 K falla y la tabla sigue mostrando resultados en °C"]
+    fn switching_temperature_unit_keeps_results_consistent() {
+        let db = ThermoDatabase::with_open_defaults();
+        let mut state = ReactionModuleState::new(&db);
+        assert!(state.status_ok, "{}", state.status_msg);
+        // Mismo camino que el botón «K» de la barra: cambia la unidad y recalcula.
+        state.temp_unit = TemperatureUnit::Kelvin;
+        state.run_calculate(&db);
+        let label = state.active_response().map(|r| r.temp_unit_label.clone());
+        assert!(
+            state.status_ok && label.as_deref() == Some("K"),
+            "estado={:?} «{}», tabla en {label:?} con t_from={} {:?}",
+            state.status_ok, state.status_msg, state.t_from, state.temp_unit
+        );
+    }
+
+    #[test]
+    #[ignore = "BUG-C07: abrir un .rea8 sin hojas conserva las hojas del libro anterior junto a la fórmula nueva"]
+    fn loading_rea8_without_sheets_does_not_keep_previous_results() {
+        let db = ThermoDatabase::with_open_defaults();
+        let mut state = ReactionModuleState::new(&db); // hoja S1 con Al2O3
+        let wb = ReactionWorkbookFile {
+            version: "HSC-REA8-10.0".to_string(),
+            formula_input: "Zn = Zn(g)".to_string(),
+            smallest_coeff: 1.0,
+            t_from: 500.0,
+            t_to: 1000.0,
+            t_step: 100.0,
+            temp_unit: TemperatureUnit::Celsius,
+            energy_unit: EnergyUnit::Kilojoules,
+            result_format: ResultFormat::Normal,
+            show_transitions: true,
+            criss_cobble: false,
+            y_axis: ReactionYAxis::K,
+            collect_data: false,
+            plot_all_data: false,
+            log_y_scale: false,
+            decimals: 3,
+            sheets: Vec::new(),
+            active_sheet_idx: 0,
+        };
+        let path = std::env::temp_dir().join(format!("soryntel-c07-{}.rea8", std::process::id()));
+        std::fs::write(&path, ReactionUseCases::serialize_rea8_workbook(&wb).unwrap()).unwrap();
+        state.load_rea8(path.to_str().unwrap());
+        let _ = std::fs::remove_file(&path);
+        assert_eq!(state.formula_input, "Zn = Zn(g)");
+        let shown = state.active_response().map(|r| r.normalized_input.clone());
+        assert!(
+            shown.is_none() || shown.as_deref().is_some_and(|s| s.contains("Zn")),
+            "la tabla muestra {shown:?} pero la fórmula del libro abierto es Zn = Zn(g)"
+        );
+    }
 }
