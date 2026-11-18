@@ -1066,3 +1066,22 @@ fn draw_pie_chart(ui: &mut egui::Ui, title: &str, slices: &[(String, f64)]) {
         start_angle = end_angle;
     }
 }
+
+#[cfg(test)]
+mod bug_repro_area_c {
+    //! Reproducciones de hallazgos del área C (soryntel/docs/bugs/area-c.md). Fallan hoy.
+    use super::*;
+    use soryntel_db::ThermoDatabase;
+
+    #[test]
+    #[ignore = "BUG-C13: un % en peso con coma decimal (\"12,5\") se envía como 0 % sin avisar"]
+    fn comma_decimal_weight_percent_is_not_sent_as_zero() {
+        let db = ThermoDatabase::with_open_defaults();
+        let mut st = SpeciesConverterModuleState::new(&db);
+        let idx = st.sheets.iter().position(|s| !s.is_summary).expect("hoja de entrada");
+        st.sheets[idx].inputs[0].wt_pct_str = "12,5".into();
+        let req = st.build_request(&st.sheets[idx]);
+        let sent = req.inputs[0].wt_pct;
+        assert!((sent - 12.5).abs() < 1e-9, "el usuario escribió 12,5 % y se envía {sent} %");
+    }
+}
