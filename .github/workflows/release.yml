@@ -50,6 +50,9 @@ jobs:
     # 22.04 (glibc 2.35) para que el binario funcione en distribuciones no tan recientes.
     runs-on: ubuntu-22.04
     timeout-minutes: 45
+    permissions:
+      contents: read
+      id-token: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
@@ -66,21 +69,21 @@ jobs:
       - name: Tests
         working-directory: soryntel
         run: cargo test --workspace --locked
-      - &download_sdb
-        name: Descargar y verificar SoryntelDB
+      - &prepare_sdb
+        name: Preparar SoryntelDB
+        id: prepare_sdb
         shell: bash
         env:
           SORYNTEL_SDB_S3_URI: ${{ secrets.SORYNTEL_SDB_S3_URI }}
           SORYNTEL_SDB_SHA256: ${{ secrets.SORYNTEL_SDB_SHA256 }}
-          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_ROLE_ARN: ${{ secrets.AWS_ROLE_ARN }}
           AWS_REGION: ${{ secrets.AWS_REGION }}
         run: |
           db_dir="$(mktemp -d "$RUNNER_TEMP/soryntel-db.XXXXXX")/Databases"
           mkdir -p "$db_dir"
           echo "SORYNTEL_SDB_DIR=$db_dir" >> "$GITHUB_ENV"
           if [[ -z "$SORYNTEL_SDB_S3_URI" || -z "$SORYNTEL_SDB_SHA256" ||
-                -z "$AWS_ACCESS_KEY_ID" || -z "$AWS_SECRET_ACCESS_KEY" || -z "$AWS_REGION" ]]; then
+                -z "$AWS_ROLE_ARN" || -z "$AWS_REGION" ]]; then
             if [[ "$GITHUB_REF_TYPE" == tag ]]; then
               echo "::error::Faltan secretos de SoryntelDB para empaquetar la versión."
               exit 1
@@ -88,10 +91,40 @@ jobs:
             echo "::warning::Faltan secretos de SoryntelDB. Se empaquetará sin la base."
             exit 0
           fi
+          echo "ready=true" >> "$GITHUB_OUTPUT"
+      - &configure_aws
+        name: Asumir el rol de AWS mediante OIDC
+        id: configure_aws
+        if: steps.prepare_sdb.outputs.ready == 'true'
+        continue-on-error: ${{ github.event_name == 'workflow_dispatch' && github.ref_type == 'branch' }}
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ secrets.AWS_REGION }}
+          role-session-name: soryntel-release-${{ github.run_id }}
+      - &download_sdb
+        name: Descargar y verificar SoryntelDB
+        if: steps.prepare_sdb.outputs.ready == 'true'
+        shell: bash
+        env:
+          AWS_ROLE_OUTCOME: ${{ steps.configure_aws.outcome }}
+          SORYNTEL_SDB_S3_URI: ${{ secrets.SORYNTEL_SDB_S3_URI }}
+          SORYNTEL_SDB_SHA256: ${{ secrets.SORYNTEL_SDB_SHA256 }}
+          AWS_REGION: ${{ secrets.AWS_REGION }}
+        run: |
+          if [[ "$AWS_ROLE_OUTCOME" != success ]]; then
+            if [[ "$GITHUB_EVENT_NAME" == workflow_dispatch && "$GITHUB_REF_TYPE" == branch ]]; then
+              echo "::warning::No se pudo asumir el rol de AWS. Se empaquetará sin la base."
+              exit 0
+            fi
+            echo "::error::No se pudo asumir el rol de AWS para empaquetar la versión."
+            exit 1
+          fi
           if [[ "$SORYNTEL_SDB_S3_URI" != s3://*/* || ! "$SORYNTEL_SDB_SHA256" =~ ^[[:xdigit:]]{64}$ ]]; then
             echo "::error::La URI de S3 o el SHA-256 de SoryntelDB no son válidos."
             exit 1
           fi
+          db_dir="$SORYNTEL_SDB_DIR"
           tmp=$(mktemp "$db_dir/.soryntel.XXXXXX")
           trap 'rm -f "$tmp"' EXIT
           aws s3 cp "$SORYNTEL_SDB_S3_URI" "$tmp" --region "$AWS_REGION" --only-show-errors
@@ -122,6 +155,9 @@ jobs:
     needs: version
     runs-on: ubuntu-22.04
     timeout-minutes: 45
+    permissions:
+      contents: read
+      id-token: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
@@ -137,6 +173,8 @@ jobs:
         with:
           workspaces: soryntel
           key: release-windows
+      - *prepare_sdb
+      - *configure_aws
       - *download_sdb
       - name: Compilar y empaquetar
         run: soryntel/packaging/build-releases.sh windows
@@ -153,6 +191,9 @@ jobs:
     needs: linux
     runs-on: ubuntu-24.04
     timeout-minutes: 15
+    permissions:
+      contents: read
+      id-token: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
@@ -161,6 +202,8 @@ jobs:
         with:
           name: linux-binary
           path: soryntel/target/release
+      - *prepare_sdb
+      - *configure_aws
       - *download_sdb
       - name: Empaquetar con makepkg
         run: |
