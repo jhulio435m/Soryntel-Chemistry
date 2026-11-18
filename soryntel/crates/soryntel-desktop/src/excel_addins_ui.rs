@@ -5055,3 +5055,44 @@ mod tests {
         let _ = std::fs::remove_dir_all(&tmp);
     }
 }
+
+#[cfg(test)]
+mod area_d_regressions {
+    use super::*;
+    use soryntel_db::ThermoDatabase;
+
+    #[test]
+    #[ignore = "BUG-D03: una referencia inválida sobrescribe C2 al insertar una fórmula"]
+    fn invalid_reference_does_not_overwrite_worksheet() {
+        let db = ThermoDatabase::with_open_defaults();
+        let mut overwritten = Vec::new();
+        for reference in ["A0", "ZZZZ0"] {
+            let mut state = ExcelAddInsModuleState::default();
+            state.ensure_initialized(&db);
+            state.ws_raw[1][2] = "42".into();
+            state.select_cell(reference, String::new());
+            state.insert_formula_into_worksheet(&db, "=MW(\"H2O\")".into());
+            if state.ws_raw[1][2] != "42" {
+                overwritten.push(reference);
+            }
+        }
+        assert!(overwritten.is_empty(), "C2 sobrescrita con {overwritten:?}");
+    }
+
+    #[test]
+    #[ignore = "BUG-D07: una fórmula circular conserva un número que cambia al recalcular"]
+    fn circular_worksheet_formula_reports_an_error() {
+        let db = ThermoDatabase::with_open_defaults();
+        let mut state = ExcelAddInsModuleState::default();
+        state.ensure_initialized(&db);
+        state.select_cell("A20", "1".into());
+        state.apply_formula_bar(&db);
+        state.select_cell("A20", "=SUM(A20;1)".into());
+        state.apply_formula_bar(&db);
+        assert!(
+            matches!(state.ws_eval[19][0], CellEvalValue::Error(_)),
+            "{:?}",
+            state.ws_eval[19][0]
+        );
+    }
+}

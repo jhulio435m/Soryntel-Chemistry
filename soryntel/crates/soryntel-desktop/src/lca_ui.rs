@@ -2659,3 +2659,46 @@ fn render_shared_lca_modals(ctx: &egui::Context, project: &SimProject, state: &m
     }
 
 }
+
+#[cfg(test)]
+mod area_d_regressions {
+    use super::*;
+    use std::io::{BufRead, BufReader, Read, Write};
+    use std::net::TcpListener;
+    use std::time::Duration;
+
+    #[test]
+    #[ignore = "BUG-D08: un servidor HTTP ajeno a openLCA figura como IPC conectado"]
+    fn ipc_probe_requires_an_openlca_response() {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let mut state = LcaWindowState::default();
+        state.beta.ipc_endpoint = listener.local_addr().unwrap().to_string();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            stream.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
+            let mut request = BufReader::new(&mut stream);
+            let mut length = 0;
+            loop {
+                let mut line = String::new();
+                assert_ne!(request.read_line(&mut line).unwrap(), 0);
+                if line == "\r\n" {
+                    break;
+                }
+                if let Some(value) = line.strip_prefix("Content-Length: ") {
+                    length = value.trim().parse().unwrap();
+                }
+            }
+            request.read_exact(&mut vec![0; length]).unwrap();
+            stream
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nOK")
+                .unwrap();
+        });
+        let _ = SimulationUseCases::sim_lca_beta_probe_openlca_ipc(&mut state.beta);
+        server.join().unwrap();
+        assert!(
+            !state.beta.ipc_live_connected,
+            "{}",
+            state.beta.ipc_status_note
+        );
+    }
+}

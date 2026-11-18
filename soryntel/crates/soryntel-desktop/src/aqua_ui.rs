@@ -3610,3 +3610,24 @@ fn paint_ribbon_icon(p: &egui::Painter, c: egui::Pos2, icon: RibbonIcon, r: f32)
         }
     }
 }
+
+#[cfg(test)]
+mod area_d_regressions {
+    use super::*;
+    use soryntel_db::ThermoDatabase;
+
+    #[test]
+    #[ignore = "BUG-D02: Aqua sustituye decimales con coma por valores predeterminados"]
+    fn aqua_preserves_decimal_comma_inputs() {
+        let db = ThermoDatabase::with_open_defaults();
+        let mut state = AquaModuleState::new(&db);
+        state.rows = vec![AquaSpeciesRowBuf {
+            formula: "H2O".into(),
+            temp_buf: "40,5".into(),
+            amount_buf: "1,5".into(),
+        }];
+        state.sync_case_from_rows();
+        let input = &state.case_file.species[0];
+        assert_eq!((input.temp, input.amount_kmol), (40.5, 1.5));
+    }
+}
