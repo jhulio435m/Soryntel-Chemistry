@@ -156,21 +156,34 @@ pub fn balanced_coeff_for_element(formula: &str, element: &str, target_atoms: f6
     Some(target_atoms / count)
 }
 
+/// Maximum number of temperature steps of a diagram request.
+pub const MAX_DIAGRAM_STEPS: usize = 100_000;
+
 /// Evaluates all requested species over `[t_min_k, t_max_k]` with step `step_k`.
 pub fn calculate_diagram(
     req: &DiagramRequest,
     repo: &dyn SpeciesRepository,
 ) -> Result<DiagramResult, String> {
+    if !req.t_min_k.is_finite() || !req.t_max_k.is_finite() || !req.step_k.is_finite() {
+        return Err("T Min, T Max and Step must be finite numbers.".to_string());
+    }
     if req.t_max_k <= req.t_min_k {
         return Err("T Max must be greater than T Min.".to_string());
     }
     let step = req.step_k.max(1.0);
-    let mut temps = Vec::new();
-    let mut t = req.t_min_k;
-    while t <= req.t_max_k + 1e-6 {
-        temps.push(t.max(1.0));
-        t += step;
+    // Count the points first and build them by index: the loop never relies on `t += step`
+    // advancing (it does not once `t` exceeds 2^53 · step) and the allocation is bounded.
+    let n_steps = ((req.t_max_k - req.t_min_k) / step + 1e-9).floor();
+    if !n_steps.is_finite() || n_steps > MAX_DIAGRAM_STEPS as f64 {
+        return Err(format!(
+            "Too many temperature points (maximum {} steps).",
+            MAX_DIAGRAM_STEPS
+        ));
     }
+    let n_steps = n_steps as usize;
+    let temps: Vec<f64> = (0..=n_steps)
+        .map(|i| (req.t_min_k + (i as f64) * step).max(1.0))
+        .collect();
 
     let mut series = Vec::new();
     let mut warnings = Vec::new();

@@ -442,3 +442,41 @@ fn b15_heat_loss_rejects_unbounded_calculation_grid() {
         Err(_) => panic!("solve_workbook entró en pánico (capacity overflow)"),
     }
 }
+
+// ---------------------------------------------------------------------------
+// B16 — Diagrams: el bucle de temperaturas dependía de que `t += step` avanzara
+// ---------------------------------------------------------------------------
+
+fn diagram_req(t_min: f64, t_max: f64, step: f64) -> soryntel_thermo::diagrams::DiagramRequest {
+    use soryntel_thermo::diagrams::*;
+    DiagramRequest {
+        species: vec![DiagramSpeciesInput {
+            formula: "O2(g)".into(),
+            coeff: 1.0,
+            row_index: None,
+            species_override: None,
+        }],
+        diagram_type: DiagramType::HTotal,
+        t_min_k: t_min,
+        t_max_k: t_max,
+        step_k: step,
+        energy_unit: DiagramEnergyUnit::KiloJoules,
+        per_kg: false,
+    }
+}
+
+#[test]
+fn b16_diagram_rejects_non_advancing_or_huge_ranges() {
+    let repo = Repo(BTreeMap::from([("O2(g)".to_string(), o2())]));
+    // 1e16 + 1 == 1e16 en f64: antes era un bucle infinito.
+    let r = soryntel_thermo::diagrams::calculate_diagram(&diagram_req(1e16, 1.000_000_000_000_000_4e16, 1.0), &repo);
+    assert!(r.is_ok() || r.is_err());
+    if let Ok(d) = r {
+        assert!(d.series[0].points.len() <= 5);
+    }
+    assert!(soryntel_thermo::diagrams::calculate_diagram(&diagram_req(300.0, 1e12, 1.0), &repo).is_err());
+    assert!(soryntel_thermo::diagrams::calculate_diagram(&diagram_req(300.0, f64::INFINITY, 1.0), &repo).is_err());
+    let ok = soryntel_thermo::diagrams::calculate_diagram(&diagram_req(300.0, 500.0, 100.0), &repo).unwrap();
+    let ts: Vec<f64> = ok.series[0].points.iter().map(|p| p.t_k).collect();
+    assert_eq!(ts, vec![300.0, 400.0, 500.0]);
+}
