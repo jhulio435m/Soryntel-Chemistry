@@ -10,6 +10,7 @@ mod i18n;
 mod storage;
 mod addins_bridge;
 mod aqua_ui;
+mod balance_link;
 mod balance_ui;
 mod benson_ui;
 mod composition;
@@ -86,6 +87,42 @@ fn is_child_running(slot: &mut Option<std::process::Child>) -> bool {
         }
     }
     false
+}
+
+/// Envía (si procede) una pérdida de calor de Heat Loss a Balance y devuelve el mensaje para
+/// el usuario. Si el Balance abierto no tiene el área elegida, no se envía nada.
+fn heat_loss_send_outcome(
+    send: impl FnOnce() -> Result<(), String>,
+    open_balance_areas: Option<usize>,
+    target_area: usize,
+) -> (String, bool) {
+    if let Some(n) = open_balance_areas {
+        if target_area >= n {
+            return (
+                format!(
+                    "El Balance abierto tiene {n} área(s); el Area {} no existe. Elija otra área.",
+                    target_area + 1
+                ),
+                false,
+            );
+        }
+    }
+    if let Err(e) = send() {
+        return (format!("No se pudo enviar la pérdida de calor a Balance: {e}"), false);
+    }
+    match open_balance_areas {
+        Some(_) => (
+            format!("Enviado al Balance abierto (Area {}); esperando confirmación…", target_area + 1),
+            true,
+        ),
+        None => (
+            format!(
+                "No había ningún Balance abierto: se abre uno con el libro por defecto y la pérdida se importará en su Area {}.",
+                target_area + 1
+            ),
+            true,
+        ),
+    }
 }
 
 fn kill_child(slot: &mut Option<std::process::Child>) {
@@ -476,6 +513,8 @@ struct SoryntelDesktopApp {
     mb_state: mass_balance_ui::MassBalanceWindowState,
     species_state: species_ui::SpeciesModuleState,
     launcher_ui_state: launcher_ui::LauncherUiState,
+    /// Último número de áreas publicado para Heat Loss (solo en la ventana Balance).
+    published_balance_areas: Option<usize>,
 }
 
 impl SoryntelDesktopApp {
@@ -555,11 +594,18 @@ impl SoryntelDesktopApp {
             mb_state,
             species_state,
             launcher_ui_state: launcher_ui::LauncherUiState::default(),
+            published_balance_areas: None,
         }
     }
 }
 
 impl eframe::App for SoryntelDesktopApp {
+    fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
+        if self.window_mode == WindowMode::Balance {
+            balance_link::BalanceLink::in_temp_dir().clear_presence();
+        }
+    }
+
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         match self.window_mode {
             WindowMode::Reaction => {
@@ -583,37 +629,52 @@ impl eframe::App for SoryntelDesktopApp {
                 return;
             }
             WindowMode::Balance => {
-                let export_path = crate::ui_common::temp_file_path("soryntel_heat_loss_export.txt");
-                if let Ok(content) = std::fs::read_to_string(&export_path) {
-                    let parts: Vec<&str> = content.split_whitespace().collect();
-                    if parts.len() == 2 {
-                        if let (Ok(area), Ok(q_w)) =
-                            (parts[0].parse::<usize>(), parts[1].parse::<f64>())
-                        {
-                            self.services.with_catalog(|catalog| {
-                                self.balance_state.set_area_heat_loss_w(area, q_w, catalog)
-                            });
+                // Sondeo periódico del envío de Heat Loss aunque no haya eventos de entrada.
+                ctx.request_repaint_after(std::time::Duration::from_millis(500));
+                let link = balance_link::BalanceLink::in_temp_dir();
+                if let Some(received) = link.take_heat_loss() {
+                    match received {
+                        Ok((area, q_w)) => self.services.with_catalog(|catalog| {
+                            self.balance_state.set_area_heat_loss_w(area, q_w, catalog)
+                        }),
+                        Err(e) => {
+                            self.balance_state.status_msg = e;
+                            self.balance_state.status_ok = false;
                         }
                     }
-                    let _ = std::fs::remove_file(&export_path);
+                    let _ = link.write_ack(self.balance_state.status_ok, &self.balance_state.status_msg);
                 }
                 self.services
                     .with_catalog(|catalog| self.balance_state.ui(ctx, catalog));
+                let areas = self.balance_state.wb.areas.len();
+                if self.published_balance_areas != Some(areas) && link.publish_presence(areas).is_ok() {
+                    self.published_balance_areas = Some(areas);
+                }
                 return;
             }
             WindowMode::HeatLoss => {
-                let area_count = self.balance_state.wb.areas.len();
-                self.heat_loss_state.ui(ctx, area_count);
+                ctx.request_repaint_after(std::time::Duration::from_millis(500));
+                let link = balance_link::BalanceLink::in_temp_dir();
+                // Áreas del Balance abierto (otro proceso); 0 si no hay ninguno.
+                let open_balance_areas = link.balance_area_count();
+                self.heat_loss_state.ui(ctx, open_balance_areas.unwrap_or(0));
                 if let Some(q_w) = self.heat_loss_state.pending_export_w.take() {
                     let target_area = self.heat_loss_state.export_target_area;
-                    let _ = crate::storage::write_atomic(
-                        crate::ui_common::temp_file_path("soryntel_heat_loss_export.txt"),
-                        format!("{target_area} {q_w}"),
+                    let (msg, ok) = heat_loss_send_outcome(
+                        || link.send_heat_loss(target_area, q_w).map_err(|e| e.to_string()),
+                        open_balance_areas,
+                        target_area,
                     );
-                    if !is_child_running(&mut self.child_balance) {
+                    if ok && open_balance_areas.is_none() && !is_child_running(&mut self.child_balance) {
                         self.child_balance =
                             spawn_module_window("balance", self.custom_db_arg.as_deref());
                     }
+                    self.heat_loss_state.status_msg = msg;
+                    self.heat_loss_state.status_ok = ok;
+                }
+                if let Some((ok, msg)) = link.take_ack() {
+                    self.heat_loss_state.status_msg = format!("Balance: {msg}");
+                    self.heat_loss_state.status_ok = ok;
                 }
                 return;
             }
@@ -1551,6 +1612,19 @@ impl SoryntelDesktopApp {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn heat_loss_send_checks_target_area_before_sending() {
+        let mut sent = false;
+        let (msg, ok) = heat_loss_send_outcome(|| { sent = true; Ok(()) }, Some(1), 2);
+        assert!(!ok && !sent && msg.contains("Area 3"), "{msg}");
+        let (_, ok) = heat_loss_send_outcome(|| Ok(()), Some(3), 2);
+        assert!(ok);
+        let (msg, ok) = heat_loss_send_outcome(|| Err("disco lleno".into()), None, 0);
+        assert!(!ok && msg.contains("disco lleno"));
+        let (msg, ok) = heat_loss_send_outcome(|| Ok(()), None, 0);
+        assert!(ok && msg.contains("No había ningún Balance"));
+    }
 
     fn collect_rendered_texts(
         app: &mut SoryntelDesktopApp,

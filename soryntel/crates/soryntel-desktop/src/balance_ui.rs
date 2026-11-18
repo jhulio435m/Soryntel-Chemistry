@@ -96,6 +96,14 @@ impl BalanceModuleState {
                 q_w / 1000.0
             );
             self.status_ok = true;
+        } else {
+            self.status_msg = format!(
+                "Heat Loss envió {:.3} kW al Area {}, pero este libro solo tiene {} área(s): no se importó.",
+                q_w / 1000.0,
+                area_idx + 1,
+                self.wb.areas.len()
+            );
+            self.status_ok = false;
         }
     }
 
@@ -3077,7 +3085,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "BUG-C15: la pérdida de calor enviada desde Heat Loss a un área inexistente se descarta sin aviso"]
     fn heat_loss_import_to_missing_area_is_reported() {
         let db = ThermoDatabase::with_open_defaults();
         let mut state = BalanceModuleState::new(&db);
