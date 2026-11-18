@@ -315,6 +315,55 @@ pub struct StreamEquation {
     pub factor: f64,
 }
 
+/// Serde helpers for maps whose keys are not strings (`CellKey`, `(usize, usize)`):
+/// JSON objects only allow string keys, so they are written as a list of `[key, value]`
+/// pairs (BUG-B05: the `.HSCMas` JSON backup could not be produced).
+pub mod map_as_pairs {
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+    use std::collections::BTreeMap;
+
+    pub fn serialize<K: Serialize, V: Serialize, S: Serializer>(
+        map: &BTreeMap<K, V>,
+        s: S,
+    ) -> Result<S::Ok, S::Error> {
+        s.collect_seq(map.iter())
+    }
+
+    pub fn deserialize<'de, K, V, D>(d: D) -> Result<BTreeMap<K, V>, D::Error>
+    where
+        K: Deserialize<'de> + Ord,
+        V: Deserialize<'de>,
+        D: Deserializer<'de>,
+    {
+        Ok(Vec::<(K, V)>::deserialize(d)?.into_iter().collect())
+    }
+
+    /// Same encoding for `Vec<BTreeMap<K, V>>`.
+    pub mod vec {
+        use super::*;
+
+        pub fn serialize<K: Serialize, V: Serialize, S: Serializer>(
+            maps: &[BTreeMap<K, V>],
+            s: S,
+        ) -> Result<S::Ok, S::Error> {
+            let pairs: Vec<Vec<(&K, &V)>> = maps.iter().map(|m| m.iter().collect()).collect();
+            pairs.serialize(s)
+        }
+
+        pub fn deserialize<'de, K, V, D>(d: D) -> Result<Vec<BTreeMap<K, V>>, D::Error>
+        where
+            K: Deserialize<'de> + Ord,
+            V: Deserialize<'de>,
+            D: Deserializer<'de>,
+        {
+            Ok(Vec::<Vec<(K, V)>>::deserialize(d)?
+                .into_iter()
+                .map(|v| v.into_iter().collect())
+                .collect())
+        }
+    }
+}
+
 /// Key identifying a single cell in a dataset grid.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct CellKey {
@@ -327,16 +376,24 @@ pub struct CellKey {
 pub struct MbDataset {
     pub name: String,
     pub selected_for_batch: bool,
+    #[serde(with = "map_as_pairs")]
     pub values: BTreeMap<CellKey, f64>,
     pub estimated_cells: BTreeSet<CellKey>,
+    #[serde(with = "map_as_pairs")]
     pub meas_status_override: BTreeMap<CellKey, PreMeasStatus>,
+    #[serde(with = "map_as_pairs")]
     pub sd_override: BTreeMap<CellKey, f64>,
+    #[serde(with = "map_as_pairs")]
     pub min_bounds: BTreeMap<CellKey, f64>,
+    #[serde(with = "map_as_pairs")]
     pub max_bounds: BTreeMap<CellKey, f64>,
+    #[serde(with = "map_as_pairs::vec")]
     pub rounds: Vec<BTreeMap<CellKey, f64>>,
 
     // Frozen results (Freeze Balanced)
+    #[serde(with = "map_as_pairs")]
     pub frozen_values: BTreeMap<CellKey, f64>,
+    #[serde(with = "map_as_pairs")]
     pub frozen_bal_status: BTreeMap<CellKey, PostBalStatus>,
 
     // Per-dataset algorithm / calculation settings (Fig. 15–16)
@@ -357,6 +414,7 @@ pub struct MbDataset {
     pub feed_stream_id: Option<usize>,
     #[serde(with = "soryntel_core::serde_nonfinite")]
     pub liquid_sg: f64,
+    #[serde(with = "map_as_pairs")]
     pub recovered_for_model_fit: BTreeMap<(usize, usize), f64>, // (stream_id, var_id) -> Rec%
 }
 
@@ -479,6 +537,7 @@ pub struct UnitBalanceRow {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MbSolution {
     pub dataset_idx: usize,
+    #[serde(with = "map_as_pairs")]
     pub cells: BTreeMap<CellKey, ReconciliationCell>,
     pub convergence_rounds: Vec<(usize, f64)>, // (round, iterated_tolerance)
     pub converged: bool,

@@ -402,7 +402,6 @@ fn b04_htr8_and_gem9_with_non_finite_inputs_roundtrip() {
 // ---------------------------------------------------------------------------
 
 #[test]
-#[ignore = "BUG-B05: MassBalanceWorkbook no se serializa a JSON (claves BTreeMap<CellKey, _> no son cadenas)"]
 fn b05_mass_balance_workbook_serializes_to_json() {
     let wb = soryntel_thermo::sim::mass_balance::preset_rougher_flotation_mb();
     // Hoy: Err("key must be a string"); el escritorio muestra "Serialize error".
@@ -410,6 +409,25 @@ fn b05_mass_balance_workbook_serializes_to_json() {
     let back: soryntel_thermo::sim::mass_balance::MassBalanceWorkbook =
         serde_json::from_str(&json).unwrap();
     assert_eq!(back.datasets.len(), wb.datasets.len());
+    assert_eq!(back.datasets[0].values, wb.datasets[0].values);
+
+    // También con resultados calculados (MbSolution.cells) y el preset de molienda.
+    for mut wb in [
+        soryntel_thermo::sim::mass_balance::preset_rougher_flotation_mb(),
+        soryntel_thermo::sim::mass_balance::preset_grinding_circuit_mb(),
+    ] {
+        let _ = wb.calculate_dataset(0);
+        let json = serde_json::to_string(&wb).unwrap();
+        let back: soryntel_thermo::sim::mass_balance::MassBalanceWorkbook =
+            serde_json::from_str(&json).unwrap();
+        // Mismos datos de entrada y mismas celdas calculadas (serde_json sin `float_roundtrip`
+        // puede variar el último ULP de algún f64, por eso no se compara el texto).
+        assert_eq!(back.datasets[0].values, wb.datasets[0].values);
+        assert_eq!(back.solutions.len(), wb.solutions.len());
+        for (a, b) in back.solutions.iter().zip(&wb.solutions) {
+            assert_eq!(a.as_ref().map(|s| s.cells.len()), b.as_ref().map(|s| s.cells.len()));
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
