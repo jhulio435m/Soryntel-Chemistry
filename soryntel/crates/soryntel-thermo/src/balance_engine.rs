@@ -313,6 +313,18 @@ pub struct BalanceWorkbook {
     pub circular_converged: bool,
 }
 
+/// Reset the energy/exergy results of a species row.
+fn clear_computed_energy(sp: &mut SpeciesRow) {
+    sp.hc_per_kmol = 0.0;
+    sp.tot_h_per_kmol = 0.0;
+    sp.heat_content = 0.0;
+    sp.total_h = 0.0;
+    sp.ts = 0.0;
+    sp.g = 0.0;
+    sp.ex_phys = 0.0;
+    sp.ex_tot = 0.0;
+}
+
 fn atomic_weight(el: &str) -> f64 {
     crate::species::awdb_atomic_weight(el).unwrap_or(0.0)
 }
@@ -376,14 +388,20 @@ pub fn evaluate_workbook(
                                 0.0
                             };
 
-                            if let Ok(pt) = evaluate_balance_point_si(
+                            let point = evaluate_balance_point_si(
                                 repo,
                                 &species_rec,
                                 t_k,
                                 sp.pressure_bar,
                                 wb.h2o_pressure_corr,
                                 false,
-                            ) {
+                            );
+                            if let Err(e) = &point {
+                                // Never keep the results of a previous evaluation (BUG-B10).
+                                clear_computed_energy(sp);
+                                sp.warning = Some(format!("No se pudo evaluar {}: {e}", sp.formula));
+                            }
+                            if let Ok(pt) = point {
                                 sp.hc_per_kmol = pt.h_cont_mj_kmol * e_factor;
                                 sp.tot_h_per_kmol = pt.h_tot_mj_kmol * e_factor;
                                 sp.heat_content = sp.amount_kmol * sp.hc_per_kmol;
@@ -395,7 +413,14 @@ pub fn evaluate_workbook(
                                 sp.warning = pt.ex_chem_error.clone();
                             }
                         } else {
+                            // Species not in the catalog: drop stale results of the previous
+                            // formula so they do not enter the IN/OUT totals (BUG-B10).
                             sp.missing_in_db = true;
+                            sp.mw = 0.0;
+                            sp.amount_kg = 0.0;
+                            sp.amount_nm3 = 0.0;
+                            clear_computed_energy(sp);
+                            sp.warning = Some(format!("{} no está en la base de datos", sp.formula));
                         }
 
                         s_kmol += sp.amount_kmol;
@@ -607,6 +632,23 @@ pub fn solve_adiabatic_temperature(
         return Err(SoryntelError::BalanceError(
             "No output species in selected balance area".into(),
         ));
+    }
+
+    // Every output species must exist: an adiabatic temperature computed without one of
+    // them would be silently wrong (BUG-B09).
+    if let Some((missing, _, _)) = out_species
+        .iter()
+        .find(|(f, kmol, _)| *kmol > 0.0 && repo.get_species(f).is_none())
+    {
+        return Err(SoryntelError::SpeciesNotFound(missing.clone()));
+    }
+    if let Some(missing) = area
+        .in_streams
+        .iter()
+        .flat_map(|s| s.species.iter())
+        .find(|sp| sp.amount_kmol > 0.0 && sp.missing_in_db)
+    {
+        return Err(SoryntelError::SpeciesNotFound(missing.formula.clone()));
     }
 
     let eval_f = |t_k: f64| -> Result<f64, SoryntelError> {

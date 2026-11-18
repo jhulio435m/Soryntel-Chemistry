@@ -545,7 +545,6 @@ fn o2_balance(out_formulas: &[&str]) -> BalanceWorkbook {
 }
 
 #[test]
-#[ignore = "BUG-B09: la temperatura adiabática ignora en silencio especies de salida ausentes del catálogo"]
 fn b09_adiabatic_temperature_fails_on_missing_output_species() {
     let repo = Repo(BTreeMap::from([("O2(g)".to_string(), o2())]));
     let wb = o2_balance(&["O2(g)", "Xx2(g)"]);
@@ -555,7 +554,6 @@ fn b09_adiabatic_temperature_fails_on_missing_output_species() {
 }
 
 #[test]
-#[ignore = "BUG-B10: evaluate_workbook conserva valores calculados obsoletos de una especie que ya no está en el catálogo"]
 fn b10_evaluate_workbook_clears_stale_values_of_missing_species() {
     let repo = Repo(BTreeMap::from([("O2(g)".to_string(), o2())]));
     let mut wb = o2_balance(&["O2(g)"]);
