@@ -15,6 +15,7 @@ use crate::excel_grid::{
 };
 use crate::ui_common::{
     draw_dashed_line, draw_rotated_y_title, format_tick, is_organic_formula, nice_ticks,
+    parse_user_number,
     render_chart_tabs, ChartTabAction, ELEMENT_GRID_4COL,
 };
 
@@ -245,15 +246,35 @@ impl PhaseStabilityModuleState {
         }
 
         let is_pp = self.is_pp_mode();
-        let x_min = self.x_min_str.trim().parse::<f64>().unwrap_or(-45.0);
-        let x_max = self.x_max_str.trim().parse::<f64>().unwrap_or(5.0);
-        let y_min = self.y_min_str.trim().parse::<f64>().unwrap_or(-80.0);
-        let y_max = self.y_max_str.trim().parse::<f64>().unwrap_or(5.0);
+        let parse_field = |label: &str, text: &str| {
+            parse_user_number(text).map_err(|e| format!("{label}: {e}"))
+        };
+        let bounds = (|| -> Result<(f64, f64, f64, f64), String> {
+            Ok((
+                parse_field("X min", &self.x_min_str)?,
+                parse_field("X max", &self.x_max_str)?,
+                parse_field("Y min", &self.y_min_str)?,
+                parse_field("Y max", &self.y_max_str)?,
+            ))
+        })();
+        // Con auto-escala en modo p–p los límites los calcula el dominio y no se exigen.
+        let (x_min, x_max, y_min, y_max) = match bounds {
+            Ok(b) => b,
+            Err(_) if is_pp && self.auto_scale => (-45.0, 5.0, -80.0, 5.0),
+            Err(e) => {
+                self.last_error = Some(e);
+                return;
+            }
+        };
+        if !(is_pp && self.auto_scale) && (x_min >= x_max || y_min >= y_max) {
+            self.last_error = Some("Cada eje necesita mín < máx.".into());
+            return;
+        }
 
-        let fixed_temp_val = match self.fixed_temp_str.trim().parse::<f64>() {
+        let fixed_temp_val = match parse_user_number(&self.fixed_temp_str) {
             Ok(v) => v,
-            Err(_) if is_pp => {
-                self.last_error = Some("Invalid fixed temperature.".into());
+            Err(e) if is_pp => {
+                self.last_error = Some(format!("Temperatura fija: {e}"));
                 return;
             }
             Err(_) => 300.0,
@@ -263,7 +284,7 @@ impl PhaseStabilityModuleState {
         let fixed_gas = if is_pp {
             None
         } else {
-            let p_val = match self.fixed_gas_p_str.trim().parse::<f64>() {
+            let p_val = match parse_user_number(&self.fixed_gas_p_str) {
                 Ok(v) if v > 0.0 => v,
                 _ => {
                     self.last_error =
@@ -607,23 +628,23 @@ impl PhaseStabilityModuleState {
                 TemperatureUnit::Kelvin => TemperatureUnit::Celsius,
             };
             self.temp_unit = new;
-            if let Ok(v) = self.fixed_temp_str.trim().parse::<f64>() {
+            if let Ok(v) = parse_user_number(&self.fixed_temp_str) {
                 let k = old.to_kelvin(v);
                 self.fixed_temp_str = format!("{:.2}", new.from_kelvin(k));
             }
             if self.x_axis_choice == "Temperature" {
-                if let Ok(v) = self.x_min_str.trim().parse::<f64>() {
+                if let Ok(v) = parse_user_number(&self.x_min_str) {
                     self.x_min_str = format!("{:.2}", new.from_kelvin(old.to_kelvin(v)));
                 }
-                if let Ok(v) = self.x_max_str.trim().parse::<f64>() {
+                if let Ok(v) = parse_user_number(&self.x_max_str) {
                     self.x_max_str = format!("{:.2}", new.from_kelvin(old.to_kelvin(v)));
                 }
             }
             if self.y_axis_choice == "Temperature" {
-                if let Ok(v) = self.y_min_str.trim().parse::<f64>() {
+                if let Ok(v) = parse_user_number(&self.y_min_str) {
                     self.y_min_str = format!("{:.2}", new.from_kelvin(old.to_kelvin(v)));
                 }
-                if let Ok(v) = self.y_max_str.trim().parse::<f64>() {
+                if let Ok(v) = parse_user_number(&self.y_max_str) {
                     self.y_max_str = format!("{:.2}", new.from_kelvin(old.to_kelvin(v)));
                 }
             }
@@ -1040,7 +1061,6 @@ mod bug_repro_area_c {
     }
 
     #[test]
-    #[ignore = "BUG-C03: un límite de eje con coma decimal (\"0,5\") se sustituye en silencio por -45"]
     fn comma_decimal_axis_limit_is_not_replaced_silently() {
         let db = ThermoDatabase::with_open_defaults();
         let mut st = prepared_state(&db);
@@ -1058,7 +1078,6 @@ mod bug_repro_area_c {
     }
 
     #[test]
-    #[ignore = "BUG-C02: 'inf' o '1e400' en un límite de eje llega al diagrama y nice_ticks no termina (cuelgue/OOM)"]
     fn non_finite_axis_limit_is_rejected_before_drawing() {
         let db = ThermoDatabase::with_open_defaults();
         let mut st = prepared_state(&db);
