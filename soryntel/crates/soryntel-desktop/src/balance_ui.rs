@@ -3045,4 +3045,20 @@ mod tests {
             state.copied_stream_ref
         );
     }
+
+    #[test]
+    #[ignore = "BUG-C15: la pérdida de calor enviada desde Heat Loss a un área inexistente se descarta sin aviso"]
+    fn heat_loss_import_to_missing_area_is_reported() {
+        let db = ThermoDatabase::with_open_defaults();
+        let mut state = BalanceModuleState::new(&db);
+        let n = state.wb.areas.len();
+        // Heat Loss ofrece las áreas de SU propio libro por defecto, no las del Balance abierto.
+        let before = state.status_msg.clone();
+        state.set_area_heat_loss_w(n + 2, 1500.0, &db);
+        assert!(
+            !state.status_ok || state.status_msg != before,
+            "importación a «Area {}» con {n} área(s): sin mensaje ni error",
+            n + 3
+        );
+    }
 }
