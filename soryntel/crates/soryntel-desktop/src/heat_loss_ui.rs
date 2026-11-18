@@ -4970,4 +4970,54 @@ mod tests {
         assert!(state.status_ok);
         let _ = std::fs::remove_file(tmp_htr8);
     }
+
+    fn render(state: &mut HeatLossModuleState) {
+        let ctx = egui::Context::default();
+        let mut raw_input = egui::RawInput::default();
+        raw_input.screen_rect = Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1400.0, 900.0)));
+        let _ = ctx.run(raw_input, |ctx| state.ui(ctx, 2));
+    }
+
+    #[test]
+    #[ignore = "BUG-C01: abrir un .htr8 válido en JSON pero con \"sheets\": [] provoca pánico (sheets.len() - 1) en el siguiente frame"]
+    fn htr8_without_sheets_does_not_panic_the_ui() {
+        let mut state = HeatLossModuleState::new();
+        let mut wb = state.wb.clone();
+        wb.sheets.clear();
+        wb.active_sheet = 0;
+        let path = std::env::temp_dir().join(format!("soryntel-c01-{}.htr8", std::process::id()));
+        std::fs::write(&path, HeatLossUseCases::serialize_htr8_workbook(&wb).unwrap()).unwrap();
+        state.load_htr8(path.to_str().unwrap());
+        let _ = std::fs::remove_file(&path);
+        let loaded = state.status_ok;
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| render(&mut state)));
+        assert!(
+            outcome.is_ok() || !loaded,
+            "el archivo se aceptó (\"{}\") y el frame siguiente entró en pánico",
+            state.status_msg
+        );
+    }
+
+    #[test]
+    #[ignore = "BUG-C08: si el recálculo de un .htr8 abierto falla, se anuncia «Cargado» y se conservan los resultados del libro anterior"]
+    fn failed_recalculation_after_open_is_reported_and_clears_old_results() {
+        let mut state = HeatLossModuleState::new();
+        assert!(state.result.is_some());
+        let mut wb = state.wb.clone();
+        // Hoja sin columnas: el solver la rechaza.
+        for sheet in &mut wb.sheets {
+            sheet.columns.clear();
+        }
+        assert!(HeatLossUseCases::solve_heat_loss_workbook(&wb).is_err(), "preparación: el solver debería fallar");
+        let path = std::env::temp_dir().join(format!("soryntel-c08-{}.htr8", std::process::id()));
+        std::fs::write(&path, HeatLossUseCases::serialize_htr8_workbook(&wb).unwrap()).unwrap();
+        state.load_htr8(path.to_str().unwrap());
+        let _ = std::fs::remove_file(&path);
+        assert!(
+            !state.status_ok || state.result.is_none(),
+            "estado «{}» y resultado anterior conservado: {}",
+            state.status_msg,
+            state.result.is_some()
+        );
+    }
 }
