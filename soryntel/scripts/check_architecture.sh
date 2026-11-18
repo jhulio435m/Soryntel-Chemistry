@@ -27,9 +27,9 @@ report_check() {
   fi
 }
 
-core_tree="$(cd "$root" && cargo tree -p soryntel-core -e normal 2>&1)"
+core_tree="$(cd "$root" && cargo tree -q --charset ascii -p soryntel-core -e normal 2>&1)"
 core_status=$?
-core_findings="$(printf '%s\n' "$core_tree" | awk 'NR > 1' | grep -E 'soryntel-[[:alnum:]_-]+' || true)"
+core_findings="$(printf '%s\n' "$core_tree" | grep -E -- '-- ' | grep -E 'soryntel-[[:alnum:]_-]+' || true)"
 if (( core_status != 0 )) || [[ -n "$core_findings" ]]; then
   core_fail=1
   [[ -n "$core_findings" ]] || core_findings="cargo tree falló: $core_tree"
@@ -38,9 +38,9 @@ else
   report_check "a) core sin dependencias soryntel-*" PASS ""
 fi
 
-application_tree="$(cd "$root" && cargo tree -p soryntel-application -e normal 2>&1)"
+application_tree="$(cd "$root" && cargo tree -q --charset ascii -p soryntel-application -e normal 2>&1)"
 application_status=$?
-application_findings="$(printf '%s\n' "$application_tree" | awk 'NR > 1' | grep -E 'soryntel-db|(^|[^[:alnum:]_-])(eframe|egui)(-[[:alnum:]_-]*)?([[:space:]]|$)' || true)"
+application_findings="$(printf '%s\n' "$application_tree" | grep -E -- '-- ' | grep -E 'soryntel-db|(^|[^[:alnum:]_-])(eframe|egui)(-[[:alnum:]_-]*)?([[:space:]]|$)' || true)"
 if (( application_status != 0 )) || [[ -n "$application_findings" ]]; then
   application_fail=1
   [[ -n "$application_findings" ]] || application_findings="cargo tree falló: $application_tree"
