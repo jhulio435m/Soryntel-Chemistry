@@ -89,6 +89,18 @@ fn split_side(side: &str) -> Result<Vec<ParsedTerm>, SoryntelError> {
             b'(' => depth += 1,
             b')' => depth -= 1,
             b'+' if depth == 0 => {
+                // A '+' glued to the previous term and followed by a space, another '+' or the
+                // end is an ionic charge written outside parentheses ("Na+ + e-"). Splitting there
+                // would silently turn Na+ into neutral Na (BUG-B23).
+                let glued = i > 0 && !bytes[i - 1].is_ascii_whitespace() && bytes[i - 1] != b'+';
+                let next = bytes.get(i + 1).copied();
+                let ends_term = matches!(next, None | Some(b' ') | Some(b'\t') | Some(b'+'));
+                if glued && ends_term {
+                    let term = side[start..=i].trim();
+                    return Err(SoryntelError::ParseError(format!(
+                        "Ionic charge outside parentheses in '{term}': use HSC notation, e.g. Na(+a)"
+                    )));
+                }
                 let slice = side[start..i].trim();
                 if !slice.is_empty() {
                     terms.push(parse_term(slice)?);
@@ -613,5 +625,14 @@ mod tests {
         let (eq, parsed) = balance_reaction("Ni + CO(g) = Ni(CO)4(g)", 1.0).unwrap();
         assert_eq!(eq, "Ni + 4CO(g) = Ni(CO)4(g)");
         verify_balance(&parsed).unwrap();
+    }
+
+    #[test]
+    fn ionic_charge_outside_parentheses_is_rejected() {
+        let err = parse_input("Na+ + e- = Na").unwrap_err();
+        assert!(err.to_string().contains("Na(+a)"), "{err}");
+        assert!(parse_input("Na(+a) + e- = Na").is_ok());
+        assert!(parse_input("H2+O2=H2O").is_ok());
+        assert!(parse_input("2H2 + O2 = 2H2O").is_ok());
     }
 }
