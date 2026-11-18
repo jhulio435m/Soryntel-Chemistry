@@ -2900,4 +2900,33 @@ mod tests {
         state.save_db_review_to_owndb(&mut db).unwrap();
         let _ = std::fs::remove_file(&test_owndb);
     }
+
+    #[test]
+    #[ignore = "BUG-C11: tras borrar la última fila seleccionada, Cortar (Ctrl+X) vacía la fila 1, que no estaba seleccionada"]
+    fn cut_with_stale_selection_does_not_clear_unrelated_row() {
+        let db = ThermoDatabase::with_open_defaults();
+        let mut state = EstimateModuleState::new(&db);
+        let ctx = egui::Context::default();
+        state.rows = vec![EstimateRow::new("CaO"), EstimateRow::new("MgO"), EstimateRow::new("SiO2")];
+        state.select_single(2);
+        // Menú contextual «Eliminar fila» sobre la fila 3: la acción delete_at quita la fila
+        // pero no ajusta selected_row / selected_rows (ui, rama `action.delete_at`).
+        state.rows.remove(2);
+        assert!(state.selected_rows.contains(&2), "preparación: la selección queda obsoleta");
+        state.cut_selected_rows(&ctx);
+        let formulas: Vec<&str> = state.rows.iter().map(|r| r.formula.as_str()).collect();
+        assert_eq!(formulas, ["CaO", "MgO"], "Cortar con selección obsoleta borró otra fila");
+    }
+
+    #[test]
+    #[ignore = "BUG-C12: sin OwnDB cargada, «Guardar en OwnDB» escribe en el directorio temporal y la especie no se carga en el siguiente arranque"]
+    fn owndb_default_path_is_not_in_temp_dir() {
+        let db = ThermoDatabase::with_open_defaults();
+        let state = EstimateModuleState::new(&db);
+        assert!(
+            !std::path::Path::new(&state.own_db_path).starts_with(std::env::temp_dir()),
+            "OwnDB por defecto: {}",
+            state.own_db_path
+        );
+    }
 }
