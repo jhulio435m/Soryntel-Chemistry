@@ -125,6 +125,20 @@ fn heat_loss_send_outcome(
     }
 }
 
+/// Lanza un módulo en su ranura solo si no hay ya un proceso vivo en ella: así nunca se
+/// pierde el `Child` de una ventana abierta (que «Cerrar todo» no podría cerrar).
+/// Devuelve `true` si se lanzó un proceso nuevo.
+fn launch_into_slot(
+    slot: &mut Option<std::process::Child>,
+    spawn: impl FnOnce() -> Option<std::process::Child>,
+) -> bool {
+    if is_child_running(slot) {
+        return false;
+    }
+    *slot = spawn();
+    slot.is_some()
+}
+
 fn kill_child(slot: &mut Option<std::process::Child>) {
     if let Some(mut child) = slot.take() {
         let _ = child.kill();
@@ -1542,7 +1556,7 @@ impl SoryntelDesktopApp {
                 if should_kill {
                     kill_child(slot);
                 } else {
-                    *slot = spawn_module_window(mode_arg, custom.as_deref());
+                    launch_into_slot(slot, || spawn_module_window(mode_arg, custom.as_deref()));
                 }
             }
         }
@@ -1577,7 +1591,7 @@ impl SoryntelDesktopApp {
     fn launch_module_by_key(&mut self, mode_arg: &str) {
         let custom = self.custom_db_arg.clone();
         if let Some(slot) = self.module_slot_mut(mode_arg) {
-            *slot = spawn_module_window(mode_arg, custom.as_deref());
+            launch_into_slot(slot, || spawn_module_window(mode_arg, custom.as_deref()));
         }
     }
 
@@ -1612,6 +1626,27 @@ impl SoryntelDesktopApp {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn launching_a_running_module_keeps_the_tracked_child() {
+        let spawn = || std::process::Command::new("sleep").arg("30").spawn().ok();
+        let mut slot = None;
+        assert!(launch_into_slot(&mut slot, spawn));
+        let first = slot.as_ref().unwrap().id();
+        let mut spawned_again = false;
+        assert!(!launch_into_slot(&mut slot, || {
+            spawned_again = true;
+            spawn()
+        }));
+        assert!(!spawned_again, "no se lanza un segundo proceso del mismo módulo");
+        assert_eq!(slot.as_ref().unwrap().id(), first);
+        kill_child(&mut slot);
+        assert!(slot.is_none());
+        // Tras cerrarse, el módulo puede volver a abrirse.
+        assert!(launch_into_slot(&mut slot, spawn));
+        kill_child(&mut slot);
+    }
 
     #[test]
     fn heat_loss_send_checks_target_area_before_sending() {
