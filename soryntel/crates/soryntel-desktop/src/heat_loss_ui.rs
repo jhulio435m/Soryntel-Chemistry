@@ -2183,7 +2183,7 @@ impl HeatLossModuleState {
                                 let qf = sheet_res
                                     .as_ref()
                                     .and_then(|sr| sr.columns.get(i))
-                                    .map(|c| c.heat_flux_w_m2 * q_unit.from_watts_factor())
+                                    .map(|c| c.heat_flux_w_m2 * q_unit.flux_from_w_m2_factor())
                                     .unwrap_or(0.0);
                                 text_cell(
                                     ui,
