@@ -32,3 +32,7 @@ OwnDB:
 3. `<Documentos>/Soryntel/Databases/OWNDB6.HSC`.
 
 Una ruta de los pasos 1 y 2 de MainDB (o 1 de OwnDB) que no carga no recurre a los siguientes. Si no se encuentra MainDB, el escritorio avisa de que solo está disponible el catálogo abierto e indica estas ubicaciones. Para crear una OwnDB nueva, el escritorio usa `<directorio del ejecutable>/Databases/OWNDB6.HSC`. No hay rutas fijas de ninguna máquina concreta ni rutas relativas al directorio de trabajo.
+
+## Actualización
+
+El [ADR 0007](0007-soryntel-db.md) añade SoryntelDB bajo MainDB: OwnDB > MainDB > SoryntelDB > OpenDefault. MainDB pasa a ser una base externa opcional y su ausencia ya no genera aviso. El aviso del escritorio se refiere ahora a SoryntelDB.
