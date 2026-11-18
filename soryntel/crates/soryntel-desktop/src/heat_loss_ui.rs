@@ -298,6 +298,8 @@ impl HeatLossModuleState {
             Err(e) => {
                 self.status_msg = format!("Error: {e}");
                 self.status_ok = false;
+                // Sin resultados obsoletos: no se muestran ni se exportan los del estado anterior.
+                self.result = None;
             }
         }
     }
@@ -322,25 +324,44 @@ impl HeatLossModuleState {
     }
 
     pub fn load_htr8(&mut self, path: &str) {
-        match std::fs::read_to_string(path) {
-            Ok(raw) => match HeatLossUseCases::deserialize_htr8_workbook(&raw) {
-                Ok(wb) => {
-                    self.wb = wb;
-                    self.selected_col = 0;
-                    self.recalculate();
+        // Carga atómica: se valida y se resuelve el libro antes de sustituir el estado. Si
+        // algo falla, el libro y los resultados anteriores quedan intactos.
+        let loaded = std::fs::read_to_string(path)
+            .map_err(|e| format!("Error leyendo {path}: {e}"))
+            .and_then(|raw| HeatLossUseCases::deserialize_htr8_workbook(&raw))
+            .and_then(|mut wb| {
+                validate_heat_loss_workbook(&mut wb)?;
+                let res = HeatLossUseCases::solve_heat_loss_workbook(&wb)
+                    .map_err(|e| format!("El libro {path} no se puede calcular: {e}"))?;
+                Ok((wb, res))
+            });
+        match loaded {
+            Ok((wb, res)) => {
+                self.wb = wb;
+                self.result = Some(res);
+                self.reset_derived_state();
+                self.recalculate();
+                if self.status_ok {
                     self.status_msg = format!("📂 Cargado {path}");
-                    self.status_ok = true;
                 }
-                Err(e) => {
-                    self.status_msg = e;
-                    self.status_ok = false;
-                }
-            },
+            }
             Err(e) => {
-                self.status_msg = format!("Error leyendo {path}: {e}");
+                self.status_msg = e;
                 self.status_ok = false;
             }
         }
+    }
+
+    /// Reinicia el estado que depende del libro abierto (selección, diagramas y exportación).
+    fn reset_derived_state(&mut self) {
+        self.selected_col = 0;
+        self.profile_series.clear();
+        self.profile_total_w = 0.0;
+        self.sweep_points.clear();
+        self.opt_points.clear();
+        self.opt_best = None;
+        self.pending_export_w = None;
+        self.export_target_area = 0;
     }
 
     pub fn export_xlsx(&mut self, path: &str) {
@@ -361,7 +382,7 @@ impl HeatLossModuleState {
     fn load_preset(&mut self, wb: HeatLossWorkbook) {
         self.file_path_input = wb.title.clone();
         self.wb = wb;
-        self.selected_col = 0;
+        self.reset_derived_state();
         self.recalculate();
     }
 
@@ -4932,6 +4953,21 @@ impl HeatLossModuleState {
     }
 }
 
+/// Comprueba que un libro abierto se puede mostrar: al menos una hoja, cada hoja con al
+/// menos una columna y la hoja activa dentro de rango (se ajusta si no lo está).
+pub(crate) fn validate_heat_loss_workbook(wb: &mut HeatLossWorkbook) -> Result<(), String> {
+    if wb.sheets.is_empty() {
+        return Err("El libro .htr8 no contiene hojas.".into());
+    }
+    if let Some(idx) = wb.sheets.iter().position(|s| s.columns.is_empty()) {
+        return Err(format!("La hoja {} del libro .htr8 no tiene columnas.", idx + 1));
+    }
+    if wb.active_sheet >= wb.sheets.len() {
+        wb.active_sheet = 0;
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -4979,7 +5015,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "BUG-C01: abrir un .htr8 válido en JSON pero con \"sheets\": [] provoca pánico (sheets.len() - 1) en el siguiente frame"]
     fn htr8_without_sheets_does_not_panic_the_ui() {
         let mut state = HeatLossModuleState::new();
         let mut wb = state.wb.clone();
@@ -4999,7 +5034,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "BUG-C08: si el recálculo de un .htr8 abierto falla, se anuncia «Cargado» y se conservan los resultados del libro anterior"]
     fn failed_recalculation_after_open_is_reported_and_clears_old_results() {
         let mut state = HeatLossModuleState::new();
         assert!(state.result.is_some());
