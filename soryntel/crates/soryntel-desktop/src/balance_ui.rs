@@ -159,6 +159,15 @@ impl BalanceModuleState {
                 self.active_tab = ActiveSheetTab::In(0);
                 self.selected_stream_idx = Some(0);
                 self.selected_row_idx = Some(0);
+                // Estado derivado del libro anterior: diagramas, stream copiado y modales.
+                self.selected_user_cell = None;
+                self.copied_stream_ref = None;
+                self.temp_bal_modal = None;
+                self.diagram_result = None;
+                self.show_diagram_window = false;
+                self.diagram_apply_bounds = false;
+                self.diagram_auto_scale = true;
+                self.diagram_reset_counter = self.diagram_reset_counter.wrapping_add(1);
             }
             Err(e) => {
                 self.status_msg = format!("Error evaluando preset: {e}");
@@ -219,10 +228,21 @@ impl BalanceModuleState {
         match std::fs::read_to_string(path)
             .map_err(|e| soryntel_core::SoryntelError::DatabaseError(e.to_string()))
             .and_then(|raw| BalanceUseCases::deserialize_bal8_workbook(&raw))
+            .and_then(|wb| {
+                if wb.areas.is_empty() {
+                    Err(soryntel_core::SoryntelError::DatabaseError(
+                        "el libro no contiene áreas de balance".into(),
+                    ))
+                } else {
+                    Ok(wb)
+                }
+            })
         {
             Ok(wb) => {
                 self.load_preset(wb, db);
-                self.status_msg = format!("Workbook cargado desde {path}");
+                if self.status_ok {
+                    self.status_msg = format!("Workbook cargado desde {path}");
+                }
             }
             Err(e) => {
                 self.status_msg = format!("Error abriendo .bal8: {e}");
@@ -3024,7 +3044,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "BUG-C09: abrir otro .bal8 conserva el diagrama, el stream copiado y el modal de Temp. Balance del libro anterior"]
     fn opening_bal8_resets_state_of_previous_workbook() {
         let db = ThermoDatabase::with_open_defaults();
         let mut state = BalanceModuleState::new(&db);
@@ -3044,6 +3063,17 @@ mod tests {
             state.show_diagram_window,
             state.copied_stream_ref
         );
+
+        // Un libro sin áreas se rechaza y el abierto queda intacto.
+        let areas_before = state.wb.areas.len();
+        let mut empty = state.wb.clone();
+        empty.areas.clear();
+        let path = std::env::temp_dir().join(format!("soryntel-c09b-{}.bal8", std::process::id()));
+        std::fs::write(&path, BalanceUseCases::serialize_bal8_workbook(&empty).unwrap()).unwrap();
+        state.load_bal8(path.to_str().unwrap(), &db);
+        let _ = std::fs::remove_file(&path);
+        assert!(!state.status_ok);
+        assert_eq!(state.wb.areas.len(), areas_before);
     }
 
     #[test]
