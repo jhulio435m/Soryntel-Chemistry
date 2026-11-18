@@ -71,7 +71,6 @@ fn a30_parentesis_anidados_profundos_no_abortan() {
 
 // A31: MW del electrón es 0.
 #[test]
-#[ignore = "BUG-A31: molar_mass excluye explícitamente el ajuste del electrón libre; mw(\"e-\") = 0"]
 fn a31_mw_del_electron() {
     let m = mw("e-").unwrap();
     assert!((m - 0.000548579909).abs() < 1e-9, "mw(e-) = {m}");
@@ -95,7 +94,6 @@ fn a33_notacion_hsc_de_iones() {
 
 // A34: subíndice 0 aceptado: "C0" es una especie válida de MW 0.
 #[test]
-#[ignore = "BUG-A34: parse_optional_number acepta 0; 'C0'/'H0' producen especies de masa 0"]
 fn a34_subindice_cero_se_rechaza() {
     assert!(parse_species("C0").is_err(), "C0 aceptado con mw {:?}", mw("C0"));
 }
@@ -124,7 +122,6 @@ fn a35_reabrir_sqlite_conserva_ediciones() {
 
 // A36: H/S/G fuera del rango de datos se extrapolan sin error ni aviso.
 #[test]
-#[ignore = "BUG-A36: integrate_species_intervals extrapola por debajo de t_min y por encima de t_max sin señalarlo"]
 fn a36_temperatura_fuera_de_rango_se_senala() {
     let e = ChemEngine::in_memory().unwrap();
     // H2O(l) sólo tiene datos 273.15..373.15 K; -100 °C es agua líquida extrapolada.
@@ -148,4 +145,19 @@ fn a32_balanceo_de_iones_y_variantes_de_carga() {
     assert_eq!(sulfate.composition.get("O"), Some(&4.0));
     let balanced = bal("Fe2+ + Ce4+ = Fe3+ + Ce3+", 1.0).unwrap();
     assert_eq!(balanced, "Fe2+ + Ce4+ = Fe3+ + Ce3+");
+}
+
+#[test]
+fn a37_el_azufre_entre_parentesis_no_es_una_fase() {
+    let species = parse_species("Fe(S)").unwrap();
+    assert_eq!(species.composition.get("S"), Some(&1.0));
+    assert_eq!(parse_species("Fe(s)").unwrap().composition.get("S"), None);
+}
+
+#[test]
+fn a38_json_de_mineral_corrupto_se_informa() {
+    let db = chem_addin_core::db::ChemDatabase::open_in_memory().unwrap();
+    assert!(db.get_mineral("Pyrite").unwrap().is_some());
+    db.connection().execute("UPDATE minerals SET elements_wt_json = 'broken' WHERE name = 'Pyrite'", []).unwrap();
+    assert!(db.get_mineral("Pyrite").is_err());
 }

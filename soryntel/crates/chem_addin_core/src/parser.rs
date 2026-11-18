@@ -6,7 +6,7 @@ use std::collections::BTreeMap;
 use std::sync::LazyLock;
 
 static PHASE_SUFFIX_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"(?i)\((aq|ia|a|g|l|s)\)$").expect("valid phase regex"));
+    LazyLock::new(|| Regex::new(r"\((aq|ia|a|g|l|s)\)$").expect("valid phase regex"));
 static LEADING_COEFF_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"^(\d+(?:\.\d+)?(?:/\d+(?:\.\d+)?)?)(?:\s*\*?\s*|\s+)([A-Za-z(\[].*)$")
         .expect("valid coeff regex")
@@ -90,7 +90,7 @@ impl ParsedSpecies {
             mw += aw * count;
         }
         // Adjust for lost/gained electrons cleanly when ionic.
-        if self.charge != 0 && !(self.composition.is_empty() && self.charge == -1) {
+        if self.charge != 0 {
             let me = atomic_weight("e-").unwrap_or(0.00054858);
             mw -= (self.charge as f64) * me;
         }
@@ -398,12 +398,14 @@ fn extract_charge(s: &str) -> Result<(&str, i32)> {
                 let sign = if suffix.starts_with('-') { -1 } else { 1 };
                 if suffix.len() == 1 {
                     // A monatomic ion uses the full trailing digit run (Fe2+). For
-                    // a polyatomic ion the final digit is its charge, e.g. SO42-.
+                    // a polyatomic ion with consecutive digits, the final digit is
+                    // its charge (SO42-); a lone subscript stays in NH4+.
                     // Brackets disambiguate subscripts and multidigit charges.
                     let stem = base.trim_end_matches(|ch: char| ch.is_ascii_digit());
                     let digits = &base[stem.len()..];
-                    if !digits.is_empty() && !stem.is_empty() {
-                        let split = if atomic_weight(stem).is_some() { stem.len() } else { base.len() - 1 };
+                    let monatomic = atomic_weight(stem).is_some();
+                    if !digits.is_empty() && (monatomic || digits.len() > 1) {
+                        let split = if monatomic { stem.len() } else { base.len() - 1 };
                         let magnitude = base[split..].parse::<i32>()
                             .map_err(|_| ChemAddinError::InvalidFormula(s.into()))?;
                         if magnitude == 0 {
@@ -600,7 +602,7 @@ fn parse_optional_number(bytes: &[u8], mut i: usize, full_ctx: &str) -> Result<(
     let val: f64 = slice
         .parse()
         .map_err(|_| ChemAddinError::InvalidFormula(full_ctx.to_string()))?;
-    if !val.is_finite() || val < 0.0 {
+    if !val.is_finite() || val <= 0.0 {
         return Err(ChemAddinError::InvalidFormula(full_ctx.to_string()));
     }
     Ok((val, i))

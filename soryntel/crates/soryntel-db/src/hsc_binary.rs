@@ -140,7 +140,8 @@ pub fn infer_charge(formula: &str) -> i32 {
         let (base, suffix) = formula.split_at(index);
         if !base.is_empty() && !base.ends_with(['(', '[', '*']) {
             if suffix == "+" || suffix == "-" {
-                // A bare sign after a polyatomic formula leaves its subscripts intact (NH4+).
+                // A lone subscript remains in NH4+. A longer trailing run
+                // reserves its final digit for the charge (SO42-).
                 let element = base.trim_end_matches(|ch: char| ch.is_ascii_digit());
                 let magnitude = if !element.is_empty()
                     && element.as_bytes()[0].is_ascii_uppercase()
@@ -149,6 +150,8 @@ pub fn infer_charge(formula: &str) -> i32 {
                     && element.len() < base.len()
                 {
                     base[element.len()..].parse::<i32>().unwrap_or(0)
+                } else if base.len() - element.len() > 1 {
+                    i32::from(base.as_bytes()[base.len() - 1] - b'0')
                 } else {
                     1
                 };
@@ -414,10 +417,23 @@ pub fn build_empty_hsc_bytes() -> Vec<u8> {
 /// Validate all fixed-width fields before building bytes for a persistent write.
 pub fn serialize_datasets_checked(datasets: &[SpeciesDataset]) -> Result<Vec<u8>, SoryntelError> {
     let mut invalid = std::collections::BTreeSet::new();
+    let mut previous = HashMap::<&str, (usize, f64)>::new();
     for ds in datasets {
         let sp = &ds.species;
         let meta = &ds.metadata;
-        if sp.intervals.is_empty() {
+        if let (Some(first), Some(last)) = (sp.intervals.first(), sp.intervals.last()) {
+            // HSC has no dataset index. Readers infer a boundary from a
+            // temperature jump greater than 1 K in the stored f32 values.
+            let discontinuity = |a: f64, b: f64| (f64::from(a as f32) - f64::from(b as f32)).abs() > 1.0;
+            let preserves_identity = match previous.insert(&sp.formula, (ds.dataset_index, last.t_max)) {
+                Some((index, end)) => index.checked_add(1) == Some(ds.dataset_index)
+                    && discontinuity(end, first.t_min),
+                None => ds.dataset_index == 0,
+            };
+            if !preserves_identity || sp.intervals.windows(2).any(|pair| discontinuity(pair[0].t_max, pair[1].t_min)) {
+                invalid.insert(format!("{} (dataset boundaries cannot be preserved in HSC)", sp.formula));
+            }
+        } else {
             invalid.insert(format!("{} (no intervals)", sp.formula));
         }
         if sp.phase == Phase::AqueousIon && (sp.charge == 0 || infer_charge(&sp.formula) != sp.charge) {
@@ -465,6 +481,8 @@ pub fn serialize_datasets_checked(datasets: &[SpeciesDataset]) -> Result<Vec<u8>
     Ok(serialize_datasets_to_hsc(datasets))
 }
 
+/// Legacy byte encoder used by fixture and compatibility callers.
+/// For persistent writes use [`serialize_datasets_checked`] to reject lossy fields.
 pub fn serialize_datasets_to_hsc(datasets: &[SpeciesDataset]) -> Vec<u8> {
     let mut out = Vec::new();
     for ds in datasets {
@@ -545,7 +563,7 @@ pub fn discover_companion_ref(hsc_path: &Path) -> Option<PathBuf> {
     candidates.into_iter().find(|p| p.exists())
 }
 
-/// Generate a companion HSC `*.CAT` index file next to `hsc_path` (102 alphabetical element buckets).
+/// Generate a companion HSC `*.CAT` index file next to `hsc_path` (26 alphabetical element buckets).
 pub fn write_catalogue_file(hsc_path: &Path, datasets: &[SpeciesDataset]) -> Result<PathBuf, SoryntelError> {
     // Compute 1-based record start offsets for each dataset
     let mut flat: Vec<(String, usize)> = Vec::new();
@@ -567,7 +585,10 @@ pub fn write_catalogue_file(hsc_path: &Path, datasets: &[SpeciesDataset]) -> Res
     for prefix in BUCKETS {
         let pos = flat
             .iter()
-            .find(|(k, _)| k.starts_with(prefix))
+            .find(|(key, _)| {
+                key.strip_prefix(prefix)
+                    .is_some_and(|rest| !rest.as_bytes().first().is_some_and(u8::is_ascii_lowercase))
+            })
             .map(|(_, r)| *r)
             .unwrap_or(1);
         lines.push(format!(" {pos}"));

@@ -204,7 +204,6 @@ fn a09_ida_y_vuelta_con_y_dieresis() {
 
 // A10: la solubilidad con caracteres no ASCII se pierde ("-") al guardar y releer.
 #[test]
-#[ignore = "BUG-A10: solubilidad se codifica en CP1252 pero se decodifica como ASCII imprimible o '-'"]
 fn a10_ida_y_vuelta_de_solubilidad_no_ascii() {
     let mut d = ds(one_interval("Al2O3", "x", 298.15, 1000.0), 0);
     d.metadata.solubility = "0,1 g/L 20°C".into();
@@ -271,7 +270,6 @@ fn a14_registro_con_temperaturas_nan_se_descarta() {
 
 // A15: el orden de la vista resuelta (get_species_at, export CSV/JSON) depende del HashMap.
 #[test]
-#[ignore = "BUG-A15: rebuild_resolved itera open_defaults (HashMap): orden no determinista"]
 fn a15_orden_de_open_defaults_es_determinista() {
     let order = |db: &ThermoDatabase| -> Vec<String> {
         (0..db.species_count()).map(|i| db.get_species_at(i).unwrap().formula).collect()
@@ -292,7 +290,6 @@ fn ref_record(key: &str, citation: &str) -> Vec<u8> {
 
 // A16: la búsqueda parcial de citas elige una entrada al azar (iteración de HashMap).
 #[test]
-#[ignore = "BUG-A16: lookup_citations con prefijo devuelve una clave arbitraria del HashMap"]
 fn a16_lookup_citations_por_prefijo_es_determinista() {
     let tmp = TempDir::new("a16");
     let path = tmp.path("MainDB6.REF");
@@ -313,7 +310,6 @@ fn a16_lookup_citations_por_prefijo_es_determinista() {
 
 // A17: cargar otro MainDB sin .REF mantiene las referencias del anterior.
 #[test]
-#[ignore = "BUG-A17: load_external_hsc_readonly no limpia references al cambiar de MainDB"]
 fn a17_recargar_main_sin_ref_limpia_referencias() {
     let tmp = TempDir::new("a17");
     let d1 = tmp.path("one");
@@ -338,7 +334,6 @@ fn a17_recargar_main_sin_ref_limpia_referencias() {
 
 // A18: la selección de dataset activo sobrevive a recargar otro archivo.
 #[test]
-#[ignore = "BUG-A18: active_dataset_choice no se reinicia al cargar un MainDB/OwnDB nuevo"]
 fn a18_recargar_own_reinicia_dataset_activo() {
     let tmp = TempDir::new("a18");
     let p = tmp.path("own.HSC");
@@ -352,7 +347,6 @@ fn a18_recargar_own_reinicia_dataset_activo() {
 
 // A19: errores al escribir el .CAT se ignoran (`let _ =`) y save informa éxito.
 #[test]
-#[ignore = "BUG-A19: save_own_hsc/merge/convert ignoran el error de write_catalogue_file"]
 fn a19_error_al_escribir_cat_se_propaga() {
     let tmp = TempDir::new("a19");
     let hsc = tmp.path("own.HSC");
@@ -386,17 +380,20 @@ fn a21_ida_y_vuelta_de_ion_sin_sufijo_hsc() {
 
 // A22: coeficientes finitos en f64 pero fuera de rango f32 se escriben como ±inf.
 #[test]
-#[ignore = "BUG-A22: write_f32 comprueba finitud en f64; 1e40 se guarda como +inf"]
 fn a22_valores_fuera_de_rango_f32() {
     let mut sp = one_interval("Al2O3", "x", 298.15, 1000.0);
     sp.intervals[0].kelley.d = 1e40;
-    let back = roundtrip(&[ds(sp, 0)]);
-    assert!(back[0].species.intervals[0].kelley.d.is_finite());
+    let tmp = TempDir::new("a22");
+    let path = tmp.path("own.HSC");
+    let mut db = ThermoDatabase::default();
+    db.insert_species(sp);
+    let error = db.save_own_hsc(&path).unwrap_err().to_string();
+    assert!(error.contains("numeric"), "{error}");
+    assert!(!path.exists());
 }
 
 // A23: la búsqueda por nombre no ignora mayúsculas fuera de ASCII.
 #[test]
-#[ignore = "BUG-A23: search_advanced usa to_ascii_lowercase: 'óxido' no encuentra 'Óxido'"]
 fn a23_busqueda_insensible_a_mayusculas_unicode() {
     let mut db = ThermoDatabase::default();
     db.insert_species(one_interval("Al2O3", "Óxido de aluminio", 298.15, 1000.0));
@@ -447,4 +444,93 @@ fn a03_csv_conserva_limites_de_datasets_contiguos() {
     let datasets = db.get_all_datasets_for(DbSource::Own, "Al2O3");
     assert_eq!(datasets.len(), 2);
     assert_eq!(datasets[1].species.name, "alternativo");
+}
+
+#[test]
+fn a27_ref_ilegible_no_reemplaza_main_activo() {
+    let temp = TempDir::new("a27");
+    let previous = temp.path("previous.HSC");
+    let next = temp.path("next.HSC");
+    write(&previous, &two_alt_datasets("Al2O3"));
+    write(&next, &two_alt_datasets("ZnO"));
+    std::fs::create_dir(next.with_extension("REF")).unwrap();
+    let mut db = ThermoDatabase::default();
+    db.load_main_hsc(&previous).unwrap();
+    let error = db.load_main_hsc(&next).unwrap_err().to_string();
+    assert!(error.contains("next.REF"), "{error}");
+    assert_eq!(db.status_summary().main_path.as_deref(), Some(previous.as_path()));
+}
+
+#[test]
+fn a29_rechaza_centinela_aun_con_temperaturas_validas() {
+    let bytes = serialize_datasets_to_hsc(&[ds(one_interval("0", "", 298.15, 1000.0), 0)]);
+    let (records, total) = parse_hsc_binary_records(&bytes).unwrap();
+    assert_eq!(total, 1);
+    assert!(records.is_empty());
+}
+
+#[test]
+fn a39_csv_conserva_precision_para_temperatura_y_entalpia() {
+    let mut species = one_interval("Al2O3", "x", 298.123456, 1000.0);
+    species.intervals[0].h_or_delta_h_tr = -1_624_325.987_654;
+    let expected = species.intervals[0].clone();
+    let csv = export_datasets_csv(&[ds(species, 0)]);
+    let datasets = import_datasets_csv(&csv, DbSource::Own).unwrap();
+    let interval = &datasets[0].species.intervals[0];
+    assert_eq!(interval.t_min, expected.t_min);
+    assert!((interval.h_or_delta_h_tr - expected.h_or_delta_h_tr).abs() < 1e-8);
+}
+
+#[test]
+fn a26_cat_distingue_carbono_de_calcio() {
+    let temp = TempDir::new("a26");
+    let cat = write_catalogue_file(&temp.path("own.HSC"), &[
+        ds(one_interval("CaO", "", 298.15, 1000.0), 0),
+        ds(one_interval("CO", "", 298.15, 1000.0), 0),
+    ]).unwrap();
+    let data = std::fs::read_to_string(cat).unwrap();
+    let offsets: Vec<_> = data.split_whitespace().collect();
+    assert_eq!((&offsets[2], &offsets[3]), (&"2", &"1"));
+}
+
+#[test]
+fn a28_hsc_rechaza_limites_de_dataset_ambiguos() {
+    let first = ds(one_interval("Al2O3", "primario", 298.15, 500.0), 0);
+    let second = ds(one_interval("Al2O3", "alternativo", 500.0, 900.0), 1);
+    let error = soryntel_db::hsc_binary::serialize_datasets_checked(&[first, second])
+        .unwrap_err().to_string();
+    assert!(error.contains("dataset boundaries"), "{error}");
+}
+
+#[test]
+fn a01_merge_solo_reemplaza_el_indice_en_conflicto() {
+    let temp = TempDir::new("merge-index");
+    let source = temp.path("source.HSC");
+    let target = temp.path("target.HSC");
+    write(&target, &two_alt_datasets("Al2O3"));
+    write(&source, &[ds(one_interval("Al2O3", "reemplazo", 298.15, 450.0), 0)]);
+    let (count, conflicts) =
+        ThermoDatabase::merge_hsc_files(&source, &target, &BTreeMap::new(), false).unwrap();
+    assert_eq!(count, 2);
+    assert_eq!(conflicts.len(), 1);
+    let mut db = ThermoDatabase::default();
+    db.load_own_hsc(target).unwrap();
+    assert_eq!(db.get_all_datasets_for(DbSource::Own, "Al2O3")[0].species.name, "reemplazo");
+}
+
+#[test]
+fn a02_editar_alternativo_conserva_el_primario() {
+    let temp = TempDir::new("edit-index");
+    let path = temp.path("own.HSC");
+    write(&path, &two_alt_datasets("Al2O3"));
+    let mut db = ThermoDatabase::default();
+    db.load_own_hsc(path).unwrap();
+    let original = db.get_all_datasets_for(DbSource::Own, "Al2O3");
+    assert!(db.select_dataset(DbSource::Own, "Al2O3", 1));
+    let mut replacement = original[1].species.clone();
+    replacement.name = "alternativo editado".into();
+    db.insert_species(replacement);
+    let edited = db.get_all_datasets_for(DbSource::Own, "Al2O3");
+    assert_eq!(edited[0].species.name, original[0].species.name);
+    assert_eq!(edited[1].species.name, "alternativo editado");
 }

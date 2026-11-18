@@ -281,7 +281,11 @@ impl ChemDatabase {
                 |r| {
                     let wt_json: String = r.get(12)?;
                     let elements_wt_pct: BTreeMap<String, f64> =
-                        serde_json::from_str(&wt_json).unwrap_or_default();
+                        serde_json::from_str(&wt_json).map_err(|error| {
+                            rusqlite::Error::FromSqlConversionFailure(
+                                12, rusqlite::types::Type::Text, Box::new(error)
+                            )
+                        })?;
                     Ok(MineralRow {
                         id: r.get(0)?,
                         code: r.get(1)?,
