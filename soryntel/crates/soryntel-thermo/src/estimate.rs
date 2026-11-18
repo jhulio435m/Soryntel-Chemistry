@@ -1036,8 +1036,11 @@ pub fn generate_cp_curve(
         let mut tmp = row.clone();
         tmp.temp_c = t - 273.15;
         evaluate_estimate_row(&mut tmp, repo);
-        let cp = tmp.est_cp_j_molk.unwrap_or(40.0);
-        pts.push((t, cp));
+        // Points without an estimate are left out instead of using a fictitious
+        // 40 J/(mol·K) that the Kelley fit would then reproduce (BUG-B25).
+        if let Some(cp) = tmp.est_cp_j_molk.filter(|v| v.is_finite()) {
+            pts.push((t, cp));
+        }
     }
     pts
 }
@@ -1299,6 +1302,18 @@ pub fn default_fig1_rows() -> Vec<EstimateRow> {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn b25_cp_curve_skips_points_without_estimate() {
+        let row = EstimateRow::new("Xx9");
+        let pts = generate_cp_curve(&row, &EmptyRepo, 298.15, 600.0, 10);
+        let mut ev = row.clone();
+        evaluate_estimate_row(&mut ev, &EmptyRepo);
+        if ev.est_cp_j_molk.is_none() {
+            assert!(pts.is_empty(), "sin estimación no debe haber puntos: {pts:?}");
+        }
+    }
+
     use super::*;
 
     struct EmptyRepo;
