@@ -628,3 +628,55 @@ fn b16_diagram_rejects_non_advancing_or_huge_ranges() {
     let ts: Vec<f64> = ok.series[0].points.iter().map(|p| p.t_k).collect();
     assert_eq!(ts, vec![300.0, 400.0, 500.0]);
 }
+
+// ---------------------------------------------------------------------------
+// B17 — E vs SHE no depende del sentido en que se escribe la semirreacción
+// ---------------------------------------------------------------------------
+
+fn ion(formula: &str, charge: i32, g_kj: f64) -> ChemicalSpecies {
+    ChemicalSpecies {
+        formula: formula.into(),
+        name: formula.into(),
+        phase: Phase::AqueousIon,
+        molecular_weight: 55.845,
+        density_g_cm3: 0.0,
+        charge,
+        intervals: vec![SpeciesThermoInterval {
+            t_min: 298.15,
+            t_max: 573.15,
+            phase: Phase::AqueousIon,
+            kelley: KelleyCoefficients { a: 0.0, b: 0.0, c: 0.0, d: 0.0 },
+            h_or_delta_h_tr: g_kj * 1000.0,
+            s_or_delta_s_tr: 0.0,
+            reference: "test".into(),
+        }],
+    }
+}
+
+#[test]
+fn b17_reduction_potential_is_independent_of_writing_direction() {
+    // Fe3+/Fe2+ con G(Fe2+) - G(Fe3+) = -74,2 kJ y G(e-) = 0: E = 74 200/F = 0,7690 V.
+    let repo = Repo(BTreeMap::from([
+        ("Fe(+3a)".to_string(), ion("Fe(+3a)", 3, -4.7)),
+        ("Fe(+2a)".to_string(), ion("Fe(+2a)", 2, -78.9)),
+        ("e-".to_string(), ion("e-", -1, 0.0)),
+    ]));
+    let e = |input: &str| {
+        let req = soryntel_thermo::CalculationRequest {
+            input: input.into(),
+            t_from: 25.0,
+            t_to: 25.0,
+            t_step: 1.0,
+            temp_unit: TemperatureUnit::Celsius,
+            energy_unit: EnergyUnit::Kilojoules,
+            result_format: ResultFormat::Normal,
+            show_transitions: false,
+            criss_cobble: false,
+        };
+        soryntel_thermo::calculate(&req, &repo).unwrap().reaction_rows[0].e_vs_she_v.unwrap()
+    };
+    let red = e("Fe(+3a) + e- = Fe(+2a)");
+    let ox = e("Fe(+2a) = Fe(+3a) + e-");
+    assert!((red - 74_200.0 / soryntel_core::FARADAY_C_MOL).abs() < 1e-9, "E(red) = {red}");
+    assert!((ox - red).abs() < 1e-12, "oxidación {ox} V frente a reducción {red} V");
+}

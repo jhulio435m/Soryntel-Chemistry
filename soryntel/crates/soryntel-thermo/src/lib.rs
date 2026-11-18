@@ -389,10 +389,11 @@ pub fn calculate(
         .collect();
 
     let mut all_species = Vec::with_capacity(all_terms.len());
-    let mut n_electrons = 0.0f64;
+    // Net stoichiometric number of e- (products positive, reactants negative).
+    let mut nu_electrons = 0.0f64;
     for (term, signed_coeff) in &all_terms {
         if term.is_electron {
-            n_electrons += signed_coeff.abs();
+            nu_electrons += signed_coeff;
         }
         let sp = repo
             .get_species(&term.formula)
@@ -427,8 +428,12 @@ pub fn calculate(
             10.0_f64.powf(log10_k)
         };
 
-        let e_vs_she_v = if n_electrons > 1e-9 {
-            Some(-dg / (n_electrons * FARADAY_C_MOL))
+        // Reduction potential of the couple, independent of the direction in which the
+        // half-reaction is written: for the reduction (ν_e = -z) E = -ΔrG/(zF) (IUPAC Green
+        // Book, Cohen et al. 2007, §2.13); written as oxidation ΔrG changes sign and so does
+        // ν_e, hence E = ΔrG/(ν_e·F) in both cases (BUG-B17).
+        let e_vs_she_v = if nu_electrons.abs() > 1e-9 {
+            Some(dg / (nu_electrons * FARADAY_C_MOL))
         } else {
             None
         };
@@ -453,7 +458,7 @@ pub fn calculate(
     Ok(CalculationResponse {
         normalized_input: soryntel_solver::format_reaction(&parsed),
         is_single_substance: false,
-        has_electrochemical_potential: n_electrons > 1e-9,
+        has_electrochemical_potential: nu_electrons.abs() > 1e-9,
         result_format: req.result_format,
         temp_unit_label: req.temp_unit.label().into(),
         energy_unit_label: req.energy_unit.energy_label().into(),
