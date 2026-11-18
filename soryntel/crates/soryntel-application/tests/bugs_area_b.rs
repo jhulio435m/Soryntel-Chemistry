@@ -39,6 +39,37 @@ fn b07_nacl_mean_activity_coefficient_one_molal() {
     );
 }
 
+/// Diagrama de Ellingham (ΔG) de Al2O3 con OpenDefault, que no trae la
+/// referencia de Al: `sum_element_references` falla y se usa `(0, 0, 0)`, así
+/// que se dibuja G absoluto (-1690,9 kJ/mol a 298,15 K) como si fuera ΔfG
+/// (JANAF: -1582,3 kJ/mol) y sin ningún aviso.
+#[test]
+#[ignore = "BUG-B14: calculate_diagram dibuja G absoluto como ΔG si falta la referencia de un elemento, sin aviso"]
+fn b14_ellingham_diagram_warns_or_uses_formation_gibbs_energy() {
+    use soryntel_thermo::diagrams::{
+        calculate_diagram, DiagramEnergyUnit, DiagramRequest, DiagramSpeciesInput, DiagramType,
+    };
+    let db = ThermoDatabase::with_open_defaults();
+    let req = DiagramRequest {
+        species: vec![DiagramSpeciesInput {
+            formula: "Al2O3".into(),
+            coeff: 1.0,
+            row_index: None,
+            species_override: None,
+        }],
+        diagram_type: DiagramType::DeltaGEllingham,
+        t_min_k: 298.15,
+        t_max_k: 299.15,
+        step_k: 1.0,
+        energy_unit: DiagramEnergyUnit::KiloJoules,
+        per_kg: false,
+    };
+    let res = calculate_diagram(&req, &db).unwrap();
+    let y = res.series.first().and_then(|s| s.points.first()).map(|p| p.y_val);
+    let ok = !res.warnings.is_empty() || y.is_none_or(|v| (v + 1582.3).abs() < 2.0);
+    assert!(ok, "ΔG(Al2O3, 298 K) = {y:?} kJ/mol sin avisos; JANAF ΔfG = -1582,3");
+}
+
 /// `=Species(2, 1e20)` llega por el bridge de Add-ins: `pos as usize` satura a
 /// `usize::MAX` y `pos + 8` desborda (pánico en debug).
 #[test]
