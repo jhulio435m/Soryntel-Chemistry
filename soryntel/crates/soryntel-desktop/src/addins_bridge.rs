@@ -1044,6 +1044,53 @@ mod tests {
     }
 
     #[test]
+    fn concurrent_requests_finish_after_catalog_writer_releases() {
+        use crate::composition::AppServices;
+        use std::sync::mpsc;
+
+        const CLIENTS: usize = 8;
+        let (db, units) = test_db_and_units();
+        let services = AppServices::from_catalog(db);
+        let bridge = BridgeHandle::start(services.shared_catalog(), units, 0).unwrap();
+        let address = std::net::SocketAddr::from(([127, 0, 0, 1], bridge.port()));
+        let writer = services.catalog_mut();
+        let (sent, ready) = mpsc::channel();
+        let (results, replies) = mpsc::channel();
+        let clients: Vec<_> = (0..CLIENTS)
+            .map(|_| {
+                let sent = sent.clone();
+                let results = results.clone();
+                thread::spawn(move || {
+                    let timeout = Duration::from_secs(3);
+                    let mut stream = TcpStream::connect_timeout(&address, timeout).unwrap();
+                    stream.set_read_timeout(Some(timeout)).unwrap();
+                    stream.set_write_timeout(Some(timeout)).unwrap();
+                    stream.write_all(b"GET /health HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n").unwrap();
+                    sent.send(()).unwrap();
+                    let mut response = String::new();
+                    let result = stream.read_to_string(&mut response).map(|_| response);
+                    results.send(result).unwrap();
+                })
+            })
+            .collect();
+        for _ in 0..CLIENTS {
+            ready.recv_timeout(Duration::from_secs(2)).unwrap();
+        }
+        assert!(matches!(
+            replies.recv_timeout(Duration::from_millis(30)),
+            Err(mpsc::RecvTimeoutError::Timeout)
+        ));
+        drop(writer);
+        for _ in 0..CLIENTS {
+            let response = replies.recv_timeout(Duration::from_secs(3)).unwrap().unwrap();
+            assert!(response.starts_with("HTTP/1.1 200"), "{response}");
+        }
+        for client in clients {
+            client.join().unwrap();
+        }
+    }
+
+    #[test]
     fn live_bridge_reads_catalog_updates() {
         use soryntel_application::testing::InMemorySpeciesCatalog;
         use soryntel_core::{ChemicalSpecies, Phase};

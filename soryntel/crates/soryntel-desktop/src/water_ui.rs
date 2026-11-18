@@ -585,7 +585,7 @@ impl WaterModuleState {
                                         needs_recalc = true;
                                     }
                                 } else {
-                                    ui.colored_label(egui::Color32::RED, "Número inválido");
+                                    self.input_error = Some("Número inválido. Se conserva el último resultado válido.".into());
                                 }
                             }
                             egui::ComboBox::from_id_salt("water_amt_unit")
@@ -715,7 +715,7 @@ impl WaterModuleState {
                     self.req.point1.temp = v;
                     needs_recalc = true;
                 } else {
-                    ui.colored_label(egui::Color32::RED, "Número inválido");
+                    self.input_error = Some("Número inválido. Se conserva el último resultado válido.".into());
                 }
             }
             let c2 = if self.result.point2.temp_is_auto {
@@ -742,7 +742,7 @@ impl WaterModuleState {
                     self.req.point2.temp = v;
                     needs_recalc = true;
                 } else {
-                    ui.colored_label(egui::Color32::RED, "Número inválido");
+                    self.input_error = Some("Número inválido. Se conserva el último resultado válido.".into());
                 }
             }
             draw_cell_text(
@@ -820,7 +820,7 @@ impl WaterModuleState {
                         needs_recalc = true;
                     }
                 } else {
-                    ui.colored_label(egui::Color32::RED, "Número inválido");
+                    self.input_error = Some("Número inválido. Se conserva el último resultado válido.".into());
                 }
             }
             let p_c2 = if self.result.point2.pressure_is_auto {
@@ -854,7 +854,7 @@ impl WaterModuleState {
                         needs_recalc = true;
                     }
                 } else {
-                    ui.colored_label(egui::Color32::RED, "Número inválido");
+                    self.input_error = Some("Número inválido. Se conserva el último resultado válido.".into());
                 }
             }
             draw_cell_text(
@@ -964,7 +964,7 @@ impl WaterModuleState {
                         self.req.point1.mixture_pct = v.clamp(0.0, 100.0);
                         needs_recalc = true;
                     } else {
-                        ui.colored_label(egui::Color32::RED, "Número inválido");
+                        self.input_error = Some("Número inválido. Se conserva el último resultado válido.".into());
                     }
                 }
             } else {
@@ -985,7 +985,7 @@ impl WaterModuleState {
                         self.req.point2.mixture_pct = v.clamp(0.0, 100.0);
                         needs_recalc = true;
                     } else {
-                        ui.colored_label(egui::Color32::RED, "Número inválido");
+                        self.input_error = Some("Número inválido. Se conserva el último resultado válido.".into());
                     }
                 }
             } else {
@@ -2018,5 +2018,22 @@ fn format_clean(v: f64, decimals: usize) -> String {
         s.trim_end_matches('0').trim_end_matches('.').to_string()
     } else {
         s
+    }
+}
+
+#[cfg(test)]
+mod area_d_checks {
+    use super::*;
+    use soryntel_db::ThermoDatabase;
+
+    #[test]
+    fn water_outside_numerical_limits_reports_error_and_keeps_result() {
+        let db = ThermoDatabase::with_open_defaults();
+        let mut state = WaterModuleState::new(&db);
+        let previous = state.result.point1.temp_display;
+        state.req.point1.temp = state.req.temp_unit.from_kelvin(2300.0);
+        state.recalculate(&db);
+        assert!(state.input_error.as_deref().is_some_and(|error| error.contains("2273")));
+        assert_eq!(state.result.point1.temp_display, previous);
     }
 }

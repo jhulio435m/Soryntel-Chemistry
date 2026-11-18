@@ -645,8 +645,8 @@ fn cell_literal_for_expr(val: &CellEvalValue, raw: &str) -> String {
             let t = raw.trim();
             if t.is_empty() {
                 "\"\"".into()
-            } else if parse_decimal_input(t).is_some() {
-                t.to_string()
+            } else if let Some(number) = parse_decimal_input(t) {
+                number.to_string()
             } else {
                 format!("\"{}\"", t.replace('"', "\"\""))
             }
@@ -1201,9 +1201,6 @@ impl ExcelAddInsModuleState {
         let (t_val, p_val) = match (t_parsed, p_parsed) {
             (Some(t), Some(p)) => (t, p),
             _ => {
-                self.eq_outputs =
-                    vec![CellEvalValue::Error("#VALUE!".into()); self.eq_species.len()];
-                self.eq_balance.clear();
                 self.status_msg = "StreamEQ #VALUE!: C1 (Temperature) y C2 (Pressure) deben ser numéricos.".into();
                 return;
             }
@@ -1778,11 +1775,16 @@ impl ExcelAddInsModuleState {
                 self.status_msg = format!("Worksheet {cell_ref} actualizado.");
             }
             AddInSheetTab::StreamEq => {
-                if cell_ref == "C1" {
-                    self.eq_temp_raw = val.trim().to_string();
-                    self.recalculate_streameq(db);
-                } else if cell_ref == "C2" {
-                    self.eq_press_raw = val.trim().to_string();
+                if matches!(self.active_sheet_position(&cell_ref), Some((0 | 1, 2))) {
+                    let Some(number) = parse_decimal_input(&val) else {
+                        self.status_msg = format!("StreamEQ {cell_ref}: número inválido.");
+                        return;
+                    };
+                    if self.active_sheet_position(&cell_ref) == Some((0, 2)) {
+                        self.eq_temp_raw = number.to_string();
+                    } else {
+                        self.eq_press_raw = number.to_string();
+                    }
                     self.recalculate_streameq(db);
                 } else if let Some((r, c)) = self.active_sheet_position(&cell_ref) {
                     if r >= 3 {
@@ -1967,8 +1969,10 @@ impl ExcelAddInsModuleState {
         let fname = format!("{}.{}", self.export_filename.trim(), format_ext);
         let full_path = dir.join(fname);
 
-        let t_val = parse_decimal_input(&self.eq_temp_raw).unwrap_or(1500.0);
-        let p_val = parse_decimal_input(&self.eq_press_raw).unwrap_or(1.0);
+        let t_val = parse_decimal_input(&self.eq_temp_raw)
+            .ok_or("StreamEQ C1: temperatura inválida")?;
+        let p_val = parse_decimal_input(&self.eq_press_raw)
+            .ok_or("StreamEQ C2: presión inválida")?;
         let sheets = vec![
             self.build_worksheet_export_sheet(),
             AddinsUseCases::addin_streameq_sheet(
@@ -5030,9 +5034,12 @@ mod tests {
         st.apply_formula_bar(&full_db);
         assert_eq!(st.eq_temp_raw, "1200");
 
+        let previous = st.eq_outputs.clone();
         st.select_cell("C1", "bad_temp".into());
         st.apply_formula_bar(&full_db);
-        assert!(matches!(st.eq_outputs.first(), Some(CellEvalValue::Error(e)) if e == "#VALUE!"));
+        assert_eq!(st.eq_temp_raw, "1200");
+        assert_eq!(st.eq_outputs, previous);
+        assert!(st.status_msg.contains("inválido"));
 
         st.select_cell("C1", "1500".into());
         st.apply_formula_bar(&full_db);

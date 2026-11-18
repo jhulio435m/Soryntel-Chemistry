@@ -117,6 +117,7 @@ pub struct AquaModuleState {
     clipboard_val: String,
     clipboard_row: Option<AquaSpeciesRowBuf>,
     dirty_since_calc: bool,
+    input_error: Option<String>,
     status_msg: String,
 
     // Find & Replace modal
@@ -193,6 +194,7 @@ impl AquaModuleState {
             clipboard_val: String::new(),
             clipboard_row: None,
             dirty_since_calc: false,
+            input_error: None,
             status_msg: "Ready · Preset: Na–S–H2O (40 °C, Fig. 3/4)".to_string(),
 
             show_find: false,
@@ -237,12 +239,13 @@ impl AquaModuleState {
                 parse_decimal_input(&row.temp_buf),
                 parse_decimal_input(&row.amount_buf),
             ) else {
-                self.status_msg = format!("Fila {}: temperatura o cantidad inválida.", index + 7);
+                self.input_error = Some(format!("Fila {}: temperatura o cantidad inválida.", index + 7));
                 return false;
             };
             species.push(AquaSpeciesInput { formula: formula.into(), temp, amount_kmol });
         }
         self.case_file.species = species;
+        self.input_error = None;
         true
     }
 
@@ -299,7 +302,7 @@ impl AquaModuleState {
             return;
         }
         let Some(phase_temp) = parse_decimal_input(&self.phase_temp_buf) else {
-            self.status_msg = "Temperatura de fase inválida.".into();
+            self.input_error = Some("Temperatura de fase inválida.".into());
             return;
         };
         if !self.sync_case_from_rows() {
@@ -1258,7 +1261,9 @@ impl AquaModuleState {
                             .color(HSC_BRAND_RED),
                     );
                     ui.add_space(14.0);
-                    if self.dirty_since_calc {
+                    if let Some(error) = &self.input_error {
+                        ui.colored_label(HSC_BRAND_RED, error);
+                    } else if self.dirty_since_calc {
                         ui.label(
                             egui::RichText::new("● Inputs modified — click Calculate")
                                 .size(11.0)
@@ -1278,13 +1283,19 @@ impl AquaModuleState {
                             .size(10.5)
                             .color(HSC_MUTED_TEXT),
                         );
-                        if let Some(w) = self.calc_result.warnings.first() {
+                        if let [first, rest @ ..] = self.calc_result.warnings.as_slice() {
                             ui.add_space(12.0);
+                            let label = if rest.is_empty() {
+                                format!("⚠ {first}")
+                            } else {
+                                format!("⚠ {first} (+{})", rest.len())
+                            };
                             ui.label(
-                                egui::RichText::new(format!("⚠ {w}"))
+                                egui::RichText::new(label)
                                     .size(10.5)
                                     .color(egui::Color32::from_rgb(180, 83, 9)),
-                            );
+                            )
+                            .on_hover_text(self.calc_result.warnings.join("\n"));
                         }
                     });
                 });
@@ -3659,6 +3670,6 @@ mod area_d_regressions {
         assert!(!state.sync_case_from_rows());
         let input = &state.case_file.species[0];
         assert_eq!((input.temp, input.amount_kmol), (40.5, 1.5));
-        assert!(state.status_msg.contains("inválida"));
+        assert!(state.input_error.as_deref().is_some_and(|error| error.contains("inválida")));
     }
 }
