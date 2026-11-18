@@ -76,7 +76,10 @@ pub(crate) fn run() {
                 .and_then(|idx| pos_args.get(idx + 1))
                 .and_then(|p| p.parse::<u16>().ok())
                 .unwrap_or(8765);
-            http::run_server(db, port);
+            if let Err(error) = http::run_server(db, port) {
+                eprintln!("{error}");
+                std::process::exit(1);
+            }
         }
     }
 }

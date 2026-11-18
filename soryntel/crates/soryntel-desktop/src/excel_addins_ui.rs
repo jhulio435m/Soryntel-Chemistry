@@ -1341,7 +1341,7 @@ impl ExcelAddInsModuleState {
         if let Some((a, b)) = t.split_once(':') {
             let a_clean = a.trim().replace('$', "");
             let b_clean = b.trim().replace('$', "");
-            if let (Some((r0, c0)), Some((r1, c1))) = (AddinsUseCases::parse_a1(&a_clean), AddinsUseCases::parse_a1(&b_clean)) {
+            if let (Some((r0, c0)), Some((r1, c1))) = (self.active_sheet_position(&a_clean), self.active_sheet_position(&b_clean)) {
                 let mut vals = Vec::new();
                 for rr in r0.min(r1)..=r0.max(r1) {
                     for cc in c0.min(c1)..=c0.max(c1) {
@@ -1676,28 +1676,61 @@ impl ExcelAddInsModuleState {
         self.formula_bar_text = raw_text;
     }
 
+    fn active_sheet_position(&self, reference: &str) -> Option<(usize, usize)> {
+        let (rows, columns) = match self.active_sheet {
+            AddInSheetTab::Worksheet => (WS_ROWS, WS_COLS),
+            AddInSheetTab::StreamEq => (self.eq_species.len() + 3, 3),
+            AddInSheetTab::Minerals => (self.min_max_row + 1, self.min_max_col + 1),
+            AddInSheetTab::AddInSample => (self.sample_max_row + 1, self.sample_max_col + 1),
+            AddInSheetTab::FunctionsCatalog => return AddinsUseCases::parse_a1(reference),
+        };
+        let position = AddinsUseCases::parse_a1_in_sheet(reference, rows, columns)?;
+        if self.active_sheet == AddInSheetTab::StreamEq
+            && !(position.0 >= 3 || (position.0 < 2 && position.1 == 2))
+        {
+            return None;
+        }
+        Some(position)
+    }
+
+    fn worksheet_edit_position(&mut self) -> Option<(usize, usize)> {
+        let position = AddinsUseCases::parse_a1_in_sheet(&self.active_cell_ref, WS_ROWS, WS_COLS);
+        if position.is_none() {
+            self.status_msg = format!(
+                "Referencia inválida para Worksheet (A1:H24): '{}'.",
+                self.active_cell_ref
+            );
+        }
+        position
+    }
+
     pub fn apply_formula_bar(&mut self, db: &dyn SpeciesCatalogPort) {
         let cell_ref = self.active_cell_ref.trim().to_ascii_uppercase();
         let val = self.formula_bar_text.clone();
         self.active_cell_ref = cell_ref.clone();
 
+        if !matches!(self.active_sheet, AddInSheetTab::Worksheet | AddInSheetTab::FunctionsCatalog)
+            && !(self.active_sheet == AddInSheetTab::AddInSample && cell_ref.starts_with("SCRATCH"))
+            && self.active_sheet_position(&cell_ref).is_none()
+        {
+            self.status_msg = format!("Referencia inválida: '{cell_ref}'.");
+            return;
+        }
+
         match self.active_sheet {
             AddInSheetTab::Worksheet => {
-                if let Some((r, c)) = AddinsUseCases::parse_a1(&cell_ref) {
-                    if r < WS_ROWS && c < WS_COLS {
-                        let stored = val
-                            .trim()
-                            .strip_prefix('{')
-                            .and_then(|s| s.strip_suffix('}'))
-                            .map(|s| s.to_string())
-                            .unwrap_or_else(|| val.clone());
-                        self.ws_raw[r][c] = stored;
-                        self.recalculate_worksheet(db);
-                        self.status_msg = format!("Worksheet {cell_ref} actualizado.");
-                        return;
-                    }
-                }
-                self.status_msg = format!("Referencia inválida para Worksheet (A1:H24): '{cell_ref}'.");
+                let Some((r, c)) = self.worksheet_edit_position() else {
+                    return;
+                };
+                let stored = val
+                    .trim()
+                    .strip_prefix('{')
+                    .and_then(|s| s.strip_suffix('}'))
+                    .map(str::to_string)
+                    .unwrap_or(val);
+                self.ws_raw[r][c] = stored;
+                self.recalculate_worksheet(db);
+                self.status_msg = format!("Worksheet {cell_ref} actualizado.");
             }
             AddInSheetTab::StreamEq => {
                 if cell_ref == "C1" {
@@ -1706,7 +1739,7 @@ impl ExcelAddInsModuleState {
                 } else if cell_ref == "C2" {
                     self.eq_press_raw = val.trim().to_string();
                     self.recalculate_streameq(db);
-                } else if let Some((r, c)) = AddinsUseCases::parse_a1(&cell_ref) {
+                } else if let Some((r, c)) = self.active_sheet_position(&cell_ref) {
                     if r >= 3 {
                         let idx = r - 3;
                         while self.eq_species.len() <= idx {
@@ -1729,7 +1762,7 @@ impl ExcelAddInsModuleState {
                 }
             }
             AddInSheetTab::Minerals => {
-                if let Some((r, c)) = AddinsUseCases::parse_a1(&cell_ref) {
+                if let Some((r, c)) = self.active_sheet_position(&cell_ref) {
                     let is_f = val.trim().starts_with('=') || val.trim().starts_with("{=");
                     let prev_style = self
                         .min_cells
@@ -1758,7 +1791,7 @@ impl ExcelAddInsModuleState {
             AddInSheetTab::AddInSample => {
                 if let Some(idx_str) = cell_ref.strip_prefix("SCRATCH") {
                     if let Ok(n) = idx_str.parse::<usize>() {
-                        if let Some(row) = self.scratch_rows.get_mut(n.saturating_sub(1)) {
+                        if let Some(row) = self.scratch_rows.get_mut(n.checked_sub(1).unwrap_or(usize::MAX)) {
                             row.formula = val;
                             self.recalculate_scratch_rows(db);
                             self.status_msg = format!("{cell_ref} actualizado.");
@@ -1766,7 +1799,7 @@ impl ExcelAddInsModuleState {
                         }
                     }
                 }
-                if let Some((r, c)) = AddinsUseCases::parse_a1(&cell_ref) {
+                if let Some((r, c)) = self.active_sheet_position(&cell_ref) {
                     let is_f = val.trim().starts_with('=') || val.trim().starts_with("{=");
                     let prev_style = self
                         .sample_cells
@@ -1825,9 +1858,9 @@ impl ExcelAddInsModuleState {
     }
 
     pub fn insert_formula_into_worksheet(&mut self, db: &dyn SpeciesCatalogPort, formula: String) {
-        let (r, c) = AddinsUseCases::parse_a1(&self.active_cell_ref)
-            .filter(|&(r, c)| r < WS_ROWS && c < WS_COLS)
-            .unwrap_or((1, 2));
+        let Some((r, c)) = self.worksheet_edit_position() else {
+            return;
+        };
         self.ws_raw[r][c] = formula.clone();
         self.active_sheet = AddInSheetTab::Worksheet;
         self.active_cell_ref = format!("{}{}", AddinsUseCases::col_to_a1(c), r + 1);
@@ -2446,7 +2479,8 @@ impl ExcelAddInsModuleState {
     fn load_cell_into_formula_bar(&mut self) {
         let cell_ref = self.active_cell_ref.trim().to_ascii_uppercase();
         self.active_cell_ref = cell_ref.clone();
-        let Some((r, c)) = AddinsUseCases::parse_a1(&cell_ref) else {
+        let Some((r, c)) = self.active_sheet_position(&cell_ref) else {
+            self.status_msg = format!("Referencia inválida: '{cell_ref}'.");
             return;
         };
         self.formula_bar_text = match self.active_sheet {
@@ -3722,9 +3756,9 @@ impl ExcelAddInsModuleState {
                     self.status_msg = format!("Añadida especie '{sp_name}' a StreamEQ.");
                 }
                 PickerTarget::WorksheetActiveCell => {
-                    let (r, c) = AddinsUseCases::parse_a1(&self.active_cell_ref)
-                        .filter(|&(r, c)| r < WS_ROWS && c < WS_COLS)
-                        .unwrap_or((1, 0));
+                    let Some((r, c)) = self.worksheet_edit_position() else {
+                        return;
+                    };
                     self.ws_raw[r][c] = sp_name.clone();
                     self.formula_bar_text = sp_name.clone();
                     self.active_sheet = AddInSheetTab::Worksheet;
@@ -5062,11 +5096,10 @@ mod area_d_regressions {
     use soryntel_db::ThermoDatabase;
 
     #[test]
-    #[ignore = "BUG-D03: una referencia inválida sobrescribe C2 al insertar una fórmula"]
     fn invalid_reference_does_not_overwrite_worksheet() {
         let db = ThermoDatabase::with_open_defaults();
         let mut overwritten = Vec::new();
-        for reference in ["A0", "ZZZZ0"] {
+        for reference in ["A0", "ZZZZ0", "I1", "A25", "", "AAAAAAAAAAAAAAAAAAAAAAAAAAAA1"] {
             let mut state = ExcelAddInsModuleState::default();
             state.ensure_initialized(&db);
             state.ws_raw[1][2] = "42".into();

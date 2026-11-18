@@ -26,33 +26,45 @@ struct ErrorResp {
     error: String,
 }
 
-pub(crate) fn run_server(db: Arc<dyn SpeciesCatalogPort + Send + Sync>, port: u16) {
+pub(crate) fn run_server(db: Arc<dyn SpeciesCatalogPort + Send + Sync>, port: u16) -> std::io::Result<()> {
     let addr = format!("127.0.0.1:{port}");
-    let listener = TcpListener::bind(&addr).expect("No se pudo abrir el servidor HTTP");
+    let listener = TcpListener::bind(&addr)
+        .map_err(|error| std::io::Error::new(error.kind(), format!("No se pudo abrir el servidor HTTP en {addr}: {error}")))?;
+    let addr = listener.local_addr()?;
     println!("Soryntel Chemistry (Módulo 01: Ecuaciones de reacción) listo en: http://{addr}");
     println!(
         "Especies cargadas: {}. Presiona Ctrl+C para salir.",
         db.species_count()
     );
 
-    for stream in listener.incoming().flatten() {
+    loop {
+        let (stream, _) = match listener.accept() {
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+            result => result?,
+        };
         let db_ref = Arc::clone(&db);
-        std::thread::spawn(move || handle_client(stream, db_ref.as_ref()));
+        if let Err(error) = std::thread::Builder::new().spawn(move || {
+            if let Err(error) = handle_client(stream, db_ref.as_ref()) {
+                eprintln!("Error de E/S en el servidor HTTP ({addr}): {error}");
+            }
+        }) {
+            eprintln!("No se pudo atender una conexión HTTP ({addr}): {error}");
+        }
     }
 }
 
-fn handle_client(mut stream: TcpStream, db: &dyn SpeciesCatalogPort) {
+fn handle_client(mut stream: TcpStream, db: &dyn SpeciesCatalogPort) -> std::io::Result<()> {
     let mut buf = [0u8; 65536];
-    let n = match stream.read(&mut buf) {
-        Ok(n) if n > 0 => n,
-        _ => return,
-    };
+    let n = stream.read(&mut buf)?;
+    if n == 0 {
+        return Ok(());
+    }
     let (status, content_type, resp_body) = dispatch(&String::from_utf8_lossy(&buf[..n]), db);
     let response = format!(
         "HTTP/1.1 {status}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{resp_body}",
         resp_body.len()
     );
-    let _ = stream.write_all(response.as_bytes());
+    stream.write_all(response.as_bytes())
 }
 pub(crate) fn dispatch(
     request: &str,

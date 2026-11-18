@@ -24,16 +24,16 @@ impl Drop for Fixture {
 }
 
 #[test]
-#[ignore = "BUG-D01: el CLI entra en pánico cuando el puerto está ocupado"]
 fn occupied_port_exits_without_panicking() {
     let occupied = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+    let addr = occupied.local_addr().unwrap();
     let output = Command::new(env!("CARGO_BIN_EXE_soryntel-app"))
-        .args(["--port", &occupied.local_addr().unwrap().port().to_string()])
+        .args(["--port", &addr.port().to_string()])
         .output()
         .unwrap();
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        !output.status.success() && !stderr.contains("panicked"),
+        !output.status.success() && !stderr.contains("panicked") && stderr.contains(&addr.to_string()),
         "exit {:?}, stderr: {stderr}",
         output.status.code()
     );
