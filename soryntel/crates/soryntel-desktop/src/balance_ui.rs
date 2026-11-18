@@ -2092,7 +2092,7 @@ impl BalanceModuleState {
                                 cw,
                                 egui::Color32::WHITE,
                                 col,
-                                val.parse::<f64>().is_ok(),
+                                crate::ui_common::parse_user_number(&val).is_ok(),
                                 bold,
                                 sel,
                             )
@@ -2973,9 +2973,17 @@ impl BalanceModuleState {
                     let txt = self.formula_bar_text.trim().to_string();
                     if txt.starts_with('=') {
                         sp.amount_formula = Some(txt);
-                    } else if let Ok(v) = txt.parse::<f64>() {
-                        sp.amount_formula = None;
-                        sp.amount_kmol = v.max(0.0);
+                    } else {
+                        match crate::ui_common::parse_user_number(&txt) {
+                            Ok(v) => {
+                                sp.amount_formula = None;
+                                sp.amount_kmol = v.max(0.0);
+                            }
+                            Err(e) => {
+                                self.status_msg = format!("Cantidad no válida: {e}");
+                                self.status_ok = false;
+                            }
+                        }
                     }
                 }
             } else if let Some(st) = streams.get_mut(s_idx) {

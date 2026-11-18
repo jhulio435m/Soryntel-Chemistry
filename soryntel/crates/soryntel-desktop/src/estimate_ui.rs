@@ -347,7 +347,7 @@ impl EstimateModuleState {
             }
             let mut r = EstimateRow::new(formula);
             if let Some(t_str) = parts.next() {
-                if let Ok(v) = t_str.trim().parse::<f64>() {
+                if let Ok(v) = crate::ui_common::parse_user_number(t_str) {
                     r.temp_c = v;
                 }
             }
@@ -642,7 +642,7 @@ impl EstimateModuleState {
                 }
                 let mut r = EstimateRow::new(formula);
                 if let Some(temp_s) = parts.next() {
-                    if let Ok(v) = temp_s.trim().parse::<f64>() {
+                    if let Ok(v) = crate::ui_common::parse_user_number(temp_s) {
                         r.temp_c = v;
                     }
                 }

@@ -2135,7 +2135,7 @@ fn render_measurement_data_page(ui: &mut egui::Ui, state: &mut MassBalanceWindow
                                 if let Some(map) = target_map {
                                     if val_str.trim().is_empty() {
                                         map.remove(&k);
-                                    } else if let Ok(vnum) = val_str.trim().replace(',', ".").parse::<f64>() {
+                                    } else if let Ok(vnum) = crate::ui_common::parse_user_number(&val_str) {
                                         map.insert(k, vnum);
                                         ds.estimated_cells.remove(&k);
                                     }
@@ -2505,7 +2505,7 @@ fn render_edit_sd_page(ui: &mut egui::Ui, state: &mut MassBalanceWindowState, h:
                             if let Some(ds) = state.workbook.datasets.get_mut(ds_idx) {
                                 if edit_str.trim().is_empty() {
                                     ds.sd_override.remove(&k);
-                                } else if let Ok(vnum) = edit_str.trim().replace(',', ".").parse::<f64>() {
+                                } else if let Ok(vnum) = crate::ui_common::parse_user_number(&edit_str) {
                                     ds.sd_override.insert(k, vnum.max(1e-6));
                                 }
                             }
@@ -4267,7 +4267,7 @@ fn paste_sd_tsv(wb: &mut MassBalanceWorkbook, text: &str, frac_idx: usize) -> us
         for (ci, c) in r.iter().enumerate().skip(1) {
             if let (Some(vid), Ok(val)) = (
                 col_vids.get(ci).copied().flatten(),
-                c.replace(',', ".").parse::<f64>(),
+                crate::ui_common::parse_user_number(c),
             ) {
                 ds.sd_override.insert(
                     CellKey {
