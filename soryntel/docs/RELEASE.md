@@ -1,14 +1,16 @@
 # Publicación de instaladores con SoryntelDB
 
-Configura estos secretos de GitHub Actions en el fork que publica las versiones:
+El workflow descarga el archivo `soryntel.sdb` del release indicado por `SORYNTEL_SDB_RELEASE` en el repositorio privado `jhulio435m/soryntel-data`. Configura estos secretos de GitHub Actions en el fork que publica las versiones:
 
 | Secreto | Valor |
 | --- | --- |
-| `AWS_ROLE_ARN` | ARN del rol de IAM que asume GitHub Actions mediante OIDC. |
-| `AWS_REGION` | Región de AWS del bucket privado. |
-| `SORYNTEL_SDB_S3_URI` | URI `s3://<bucket>/<ruta>/soryntel.sdb` del objeto privado. |
+| `SORYNTEL_SDB_TOKEN` | Token de acceso personal de grano fino, limitado a `jhulio435m/soryntel-data` con permiso de lectura de Contents. |
 | `SORYNTEL_SDB_SHA256` | SHA-256 del archivo, expresado como 64 dígitos hexadecimales. |
 
-El rol de IAM debe confiar en el proveedor OIDC de GitHub Actions, con audiencia `sts.amazonaws.com` y un sujeto limitado al repositorio que publica y a sus referencias `refs/tags/v*`. Concede al rol `s3:GetObject` sobre el objeto privado. Consulta la [configuración de OIDC en AWS](https://docs.github.com/en/actions/how-tos/secure-your-work/security-harden-deployments/oidc-in-aws).
+Una ejecución sobre una etiqueta falla si falta un secreto, si la descarga falla o si el archivo no supera la comprobación de integridad. Desde una rama, `workflow_dispatch` emite un aviso y genera paquetes sin la base en esos casos. En el repositorio de la aplicación, el archivo verificado se distribuye únicamente dentro de los paquetes, junto con su [licencia de datos](../../LICENSE-DATA.md).
 
-Una ejecución sobre una etiqueta falla si falta un secreto, si AWS rechaza la asunción del rol o si la descarga no pasa la comprobación de integridad. Desde una rama, `workflow_dispatch` emite un aviso y genera paquetes sin la base si falta un secreto o AWS rechaza la asunción. El archivo verificado se distribuye únicamente dentro de los paquetes, junto con su [licencia de datos](../../LICENSE-DATA.md).
+## Actualizar la base
+
+1. Publica un release con una etiqueta nueva en el repositorio privado `jhulio435m/soryntel-data` y adjunta el archivo como `soryntel.sdb`.
+2. Actualiza `SORYNTEL_SDB_RELEASE` en [release.yml](../../.github/workflows/release.yml) con la nueva etiqueta. Calcula el hash del archivo adjunto con `sha256sum soryntel.sdb` y actualiza el secreto `SORYNTEL_SDB_SHA256` antes de publicar la versión de la aplicación.
+3. Renueva el token antes de su vencimiento y reemplaza el valor de `SORYNTEL_SDB_TOKEN` en el fork que ejecuta el workflow.
