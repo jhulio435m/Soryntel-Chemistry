@@ -362,16 +362,21 @@ pub fn evaluate_workbook(
                     let mut s_th = 0.0;
 
                     for sp in stream.species.iter_mut() {
+                        let mut formula_warning = None;
                         if let Some(ref tf) = sp.temp_formula {
-                            if let Ok(val) = eval_formula_expr(tf, &cell_map, &elem_vars) {
-                                sp.temp_display = val;
+                            match eval_formula_expr(tf, &cell_map, &elem_vars) {
+                                Ok(val) => sp.temp_display = val,
+                                Err(e) => formula_warning = Some(format!("Fórmula de temperatura: {e}")),
                             }
                         }
                         if let Some(ref af) = sp.amount_formula {
-                            if let Ok(val) = eval_formula_expr(af, &cell_map, &elem_vars) {
-                                let clamped = val.max(0.0);
-                                max_delta = max_delta.max((clamped - sp.amount_kmol).abs());
-                                sp.amount_kmol = clamped;
+                            match eval_formula_expr(af, &cell_map, &elem_vars) {
+                                Ok(val) => {
+                                    let clamped = val.max(0.0);
+                                    max_delta = max_delta.max((clamped - sp.amount_kmol).abs());
+                                    sp.amount_kmol = clamped;
+                                }
+                                Err(e) => formula_warning = Some(format!("Fórmula de cantidad: {e}")),
                             }
                         }
 
@@ -421,6 +426,9 @@ pub fn evaluate_workbook(
                             sp.amount_nm3 = 0.0;
                             clear_computed_energy(sp);
                             sp.warning = Some(format!("{} no está en la base de datos", sp.formula));
+                        }
+                        if formula_warning.is_some() {
+                            sp.warning = formula_warning;
                         }
 
                         s_kmol += sp.amount_kmol;
@@ -680,6 +688,11 @@ where
 {
     let mut fa = f(a)?;
     let mut fb = f(b)?;
+    if !fa.is_finite() || !fb.is_finite() {
+        return Err(SoryntelError::TargetNotBracketed(format!(
+            "Non-finite objective at the bounds: f({a})={fa}, f({b})={fb}"
+        )));
+    }
     if fa * fb > 0.0 {
         return Err(SoryntelError::TargetNotBracketed(format!(
             "No sign change in [{a}, {b}]: f(a)={fa:.4}, f(b)={fb:.4}"
@@ -722,6 +735,11 @@ where
         };
 
         let fs = f(s)?;
+        if !fs.is_finite() {
+            return Err(SoryntelError::TargetNotBracketed(format!(
+                "Non-finite objective f({s})={fs}"
+            )));
+        }
         d = c;
         c = b;
         fc = fb;
@@ -737,7 +755,10 @@ where
             std::mem::swap(&mut fa, &mut fb);
         }
     }
-    Ok(b)
+    // 100 iterations without meeting the tolerance: report it instead of returning `b` (BUG-B19).
+    Err(SoryntelError::CircularConvergenceFailed(format!(
+        "Brent did not converge in 100 iterations (last x = {b}, f = {fb:.3e})"
+    )))
 }
 
 /// Set a workbook cell value by reference string (e.g. "IN1!D11", "IN1!STREAM:GAS:TEMP", "IN1!EXTRA_HEAT").
@@ -761,13 +782,27 @@ pub fn set_cell_value(wb: &mut BalanceWorkbook, cell_ref: &str, val: f64) -> Res
         return Ok(());
     }
 
-    let is_out = sheet_upper.starts_with("OUT");
-    let area_num: usize = sheet_upper
-        .trim_start_matches("IN")
-        .trim_start_matches("OUT")
-        .parse()
-        .unwrap_or(1);
-    let area_idx = area_num.saturating_sub(1);
+    // Only `INn` / `OUTn` (or bare `IN` / `OUT` for area 1) address balance areas; any other
+    // sheet name is an error instead of silently writing into IN1 (BUG-B08).
+    let sheet_trim = sheet_upper.trim();
+    let (is_out, suffix) = if let Some(rest) = sheet_trim.strip_prefix("OUT") {
+        (true, rest)
+    } else if let Some(rest) = sheet_trim.strip_prefix("IN") {
+        (false, rest)
+    } else {
+        return Err(SoryntelError::InvalidCellReference(cell_ref.into()));
+    };
+    let area_num: usize = if suffix.is_empty() {
+        1
+    } else {
+        suffix
+            .parse()
+            .map_err(|_| SoryntelError::InvalidCellReference(cell_ref.into()))?
+    };
+    if area_num == 0 {
+        return Err(SoryntelError::InvalidCellReference(cell_ref.into()));
+    }
+    let area_idx = area_num - 1;
     let area = wb
         .areas
         .get_mut(area_idx)
@@ -867,7 +902,14 @@ pub fn get_cell_value(wb: &BalanceWorkbook, cell_ref: &str) -> Result<f64, Soryn
 
     // BALANCE1!H4 -> Total H Balance of Area 1
     if sheet_upper.starts_with("BALANCE") {
-        let area_num: usize = sheet_upper.trim_start_matches("BALANCE").parse().unwrap_or(1);
+        let suffix = sheet_upper.trim_start_matches("BALANCE");
+        let area_num: usize = if suffix.is_empty() {
+            1
+        } else {
+            suffix
+                .parse()
+                .map_err(|_| SoryntelError::InvalidCellReference(cell_ref.into()))?
+        };
         let idx = area_num.saturating_sub(1);
         if let Some(sum) = wb.summaries.get(idx) {
             return match loc_part.to_uppercase().as_str() {
@@ -876,7 +918,8 @@ pub fn get_cell_value(wb: &BalanceWorkbook, cell_ref: &str) -> Result<f64, Soryn
                 "G4" | "HEAT_CONTENT" => Ok(sum.balance_totals.heat_content),
                 "H4" | "TOTAL_H" => Ok(sum.balance_totals.total_h),
                 "EXERGY" => Ok(sum.balance_totals.ex_tot),
-                _ => Ok(sum.balance_totals.total_h),
+                // An unknown cell is an error, not the total H balance (BUG-B20).
+                _ => Err(SoryntelError::InvalidCellReference(cell_ref.into())),
             };
         }
     }
@@ -1181,10 +1224,11 @@ impl<'a> FormulaParser<'a> {
                 let rhs = self.parse_power()?;
                 lhs = if op == b'*' {
                     lhs * rhs
-                } else if rhs.abs() > 1e-18 {
+                } else if rhs != 0.0 {
                     lhs / rhs
                 } else {
-                    0.0
+                    // Like Excel's #DIV/0!: an error, never a silent 0 (BUG-B21).
+                    return Err(SoryntelError::FormulaSyntaxError("#DIV/0!: división por cero".into()));
                 };
             } else {
                 break;
@@ -2488,6 +2532,18 @@ pub fn build_balance_export_sheets(
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn b19_brent_reports_non_convergence_and_nan() {
+        // Discontinuous sign change (no root): the iteration cannot meet |f| < 1e-9.
+        let r = brent_root(|x| Ok(if x < 1.0 { -1.0 } else { 1.0 }), 0.0, 3.0, 1e-300);
+        assert!(r.is_err(), "{r:?}");
+        let r = brent_root(|_| Ok(f64::NAN), 0.0, 1.0, 1e-9);
+        assert!(r.is_err(), "{r:?}");
+        let r = brent_root(|x| Ok(x - 2.0), 0.0, 5.0, 1e-12).unwrap();
+        assert!((r - 2.0).abs() < 1e-9);
+    }
+
     use super::*;
 
     #[test]

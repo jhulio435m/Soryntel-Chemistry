@@ -247,10 +247,9 @@ pub fn solve_target(
         fb = fb_new;
     }
 
+    // The tolerance was not met within `max_iter` iterations: report it (BUG-B19).
     let (_, actual) = evaluate_objective(base, spec, b)?;
-    Ok(TargetResult {
-        solution_value: b,
-        achieved_goal_value: actual,
-        iterations: max_iter,
-    })
+    Err(SoryntelError::TargetNotBracketed(format!(
+        "Iteration did not converge in {max_iter} iterations (last value {b}, goal value {actual})."
+    )))
 }

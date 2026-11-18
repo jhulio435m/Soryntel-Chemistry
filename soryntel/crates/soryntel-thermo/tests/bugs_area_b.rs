@@ -486,7 +486,6 @@ fn b07_pitzer_a_phi_at_25c() {
 // ---------------------------------------------------------------------------
 
 #[test]
-#[ignore = "BUG-B08: set_cell_value con hoja inexistente escribe en el área 1 en lugar de fallar"]
 fn b08_set_cell_value_rejects_unknown_sheet() {
     let mut wb = preset_h2o();
     let before = wb.areas[0].in_streams[0].species[0].amount_kmol;
@@ -679,4 +678,30 @@ fn b17_reduction_potential_is_independent_of_writing_direction() {
     let ox = e("Fe(+2a) = Fe(+3a) + e-");
     assert!((red - 74_200.0 / soryntel_core::FARADAY_C_MOL).abs() < 1e-9, "E(red) = {red}");
     assert!((ox - red).abs() < 1e-12, "oxidación {ox} V frente a reducción {red} V");
+}
+
+// ---------------------------------------------------------------------------
+// B20 / B21 — Balance: celdas BALANCE desconocidas y división por cero
+// ---------------------------------------------------------------------------
+
+#[test]
+fn b20_unknown_balance_cell_is_an_error() {
+    let repo = Repo(BTreeMap::from([("O2(g)".to_string(), o2())]));
+    let mut wb = o2_balance(&["O2(g)"]);
+    evaluate_workbook(&mut wb, &repo).unwrap();
+    assert!(soryntel_thermo::balance_engine::get_cell_value(&wb, "BALANCE1!H4").is_ok());
+    assert!(soryntel_thermo::balance_engine::get_cell_value(&wb, "BALANCE1!XYZ").is_err());
+    assert!(soryntel_thermo::balance_engine::get_cell_value(&wb, "BALANCEX!H4").is_err());
+}
+
+#[test]
+fn b21_division_by_zero_in_amount_formula_is_reported() {
+    let repo = Repo(BTreeMap::from([("O2(g)".to_string(), o2())]));
+    let mut wb = o2_balance(&["O2(g)"]);
+    wb.areas[0].in_streams[0].species[0].amount_formula = Some("=1/0".into());
+    evaluate_workbook(&mut wb, &repo).unwrap();
+    let sp = &wb.areas[0].in_streams[0].species[0];
+    // Antes: cantidad 0 kmol sin aviso. Ahora se conserva el valor y se avisa.
+    assert_eq!(sp.amount_kmol, 1.0);
+    assert!(sp.warning.as_deref().unwrap_or("").contains("DIV/0"), "{:?}", sp.warning);
 }
