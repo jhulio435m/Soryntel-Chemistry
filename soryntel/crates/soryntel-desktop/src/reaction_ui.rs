@@ -69,6 +69,9 @@ pub struct ReactionModuleState {
     pub file_path_buf: String,
     pub request_open_browser: bool,
     pub plot_reset_counter: u64,
+    /// `true` cuando el último cálculo falló: los resultados guardados ya no corresponden a
+    /// los parámetros visibles y no se muestran ni se exportan.
+    pub results_stale: bool,
 }
 
 impl ReactionModuleState {
@@ -109,13 +112,34 @@ impl ReactionModuleState {
             file_path_buf: crate::ui_common::temp_file_path(DEFAULT_REA8_PATH),
             request_open_browser: false,
             plot_reset_counter: 0,
+            results_stale: false,
         };
         state.run_calculate(db);
         state
     }
 
     pub fn active_sheet(&self) -> Option<&ReactionCollectedSheet> {
+        if self.results_stale {
+            return None;
+        }
         self.sheets.get(self.active_sheet_idx)
+    }
+
+    /// Cambia la unidad de temperatura convirtiendo Desde/Hasta/Paso para que representen las
+    /// mismas temperaturas, y recalcula.
+    pub fn change_temp_unit(&mut self, new_unit: TemperatureUnit, db: &dyn SpeciesCatalogPort) {
+        self.convert_temperature_range(self.temp_unit, new_unit);
+        self.temp_unit = new_unit;
+        self.run_calculate(db);
+    }
+
+    fn convert_temperature_range(&mut self, old: TemperatureUnit, new: TemperatureUnit) {
+        if old == new {
+            return;
+        }
+        self.t_from = new.from_kelvin(old.to_kelvin(self.t_from));
+        self.t_to = new.from_kelvin(old.to_kelvin(self.t_to));
+        self.t_step = old.step_to_kelvin(self.t_step) / new.step_to_kelvin(1.0);
     }
 
     pub fn active_response(&self) -> Option<&CalculationResponse> {
@@ -170,6 +194,7 @@ impl ReactionModuleState {
 
                 self.status_msg = format!("Cálculo completado: {}", resp.normalized_input);
                 self.status_ok = true;
+                self.results_stale = false;
 
                 if self.collect_data && !self.sheets.is_empty() {
                     let next_num = self.sheets.len() + 1;
@@ -197,6 +222,7 @@ impl ReactionModuleState {
             Err(e) => {
                 self.status_msg = format!("Error: {e}");
                 self.status_ok = false;
+                self.results_stale = true;
             }
         }
     }
@@ -700,6 +726,7 @@ impl ReactionModuleState {
 
                 ui.menu_button(t!("review.016"), |ui| {
                     let mut recalc = false;
+                    let prev_unit = self.temp_unit;
                     ui.label(egui::RichText::new(t!("common.052")).strong());
                     recalc |= ui
                         .radio_value(
@@ -718,6 +745,10 @@ impl ReactionModuleState {
                             "°F (Fahrenheit)",
                         )
                         .changed();
+                    if self.temp_unit != prev_unit {
+                        let new_unit = self.temp_unit;
+                        self.convert_temperature_range(prev_unit, new_unit);
+                    }
                     ui.separator();
                     ui.label(egui::RichText::new(t!("review.017")).strong());
                     recalc |= ui
@@ -892,8 +923,7 @@ impl ReactionModuleState {
                             .clicked()
                             && self.temp_unit != u
                         {
-                            self.temp_unit = u;
-                            self.run_calculate(db);
+                            self.change_temp_unit(u, db);
                         }
                     }
                     for eu in [EnergyUnit::Kilojoules, EnergyUnit::Kilocalories] {
@@ -2111,20 +2141,28 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "BUG-C06: cambiar °C→K no convierte Desde/Hasta; 0 K falla y la tabla sigue mostrando resultados en °C"]
     fn switching_temperature_unit_keeps_results_consistent() {
         let db = ThermoDatabase::with_open_defaults();
         let mut state = ReactionModuleState::new(&db);
         assert!(state.status_ok, "{}", state.status_msg);
         // Mismo camino que el botón «K» de la barra: cambia la unidad y recalcula.
-        state.temp_unit = TemperatureUnit::Kelvin;
-        state.run_calculate(&db);
+        state.change_temp_unit(TemperatureUnit::Kelvin, &db);
+        assert!((state.t_from - 273.15).abs() < 1e-9 && (state.t_to - 2273.15).abs() < 1e-9);
+        state.change_temp_unit(TemperatureUnit::Fahrenheit, &db);
+        assert!((state.t_from - 32.0).abs() < 1e-9 && (state.t_step - 180.0).abs() < 1e-9);
+        state.change_temp_unit(TemperatureUnit::Kelvin, &db);
         let label = state.active_response().map(|r| r.temp_unit_label.clone());
         assert!(
             state.status_ok && label.as_deref() == Some("K"),
             "estado={:?} «{}», tabla en {label:?} con t_from={} {:?}",
             state.status_ok, state.status_msg, state.t_from, state.temp_unit
         );
+        // Un cálculo fallido invalida lo mostrado en lugar de dejar la hoja anterior.
+        state.t_from = 0.0;
+        state.run_calculate(&db);
+        assert!(!state.status_ok);
+        assert!(state.active_response().is_none(), "resultados obsoletos visibles tras un error");
+        assert!(state.build_chart_svg().is_none());
     }
 
     #[test]
