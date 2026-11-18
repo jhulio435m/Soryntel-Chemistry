@@ -721,7 +721,7 @@ pub fn build_heat_loss_export_sheets(
             ));
             r_qflx.push(format!(
                 "{:.3}",
-                cr.map(|c| c.heat_flux_w_m2 * q_u.from_watts_factor()).unwrap_or(0.0)
+                cr.map(|c| c.heat_flux_w_m2 * q_u.flux_from_w_m2_factor()).unwrap_or(0.0)
             ));
             r_area.push(format!("{:.3}", cr.map(|c| c.surface_area_m2).unwrap_or(0.0)));
             r_cum.push(format!(

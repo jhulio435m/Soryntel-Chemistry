@@ -435,7 +435,6 @@ fn b05_mass_balance_workbook_serializes_to_json() {
 // ---------------------------------------------------------------------------
 
 #[test]
-#[ignore = "BUG-B06: el flujo de calor en BTU/(h·ft²) se exporta como BTU/(h·m²) (falta 0,092903 m²/ft²)"]
 fn b06_heat_flux_in_btu_per_h_ft2_uses_area_factor() {
     use soryntel_thermo::heat_loss::{model::build_heat_loss_export_sheets, presets, solve_workbook};
     use soryntel_thermo::spreadsheet_export::ExportCellValue;
