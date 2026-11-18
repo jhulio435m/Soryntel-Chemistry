@@ -73,7 +73,6 @@ fn b14_ellingham_diagram_warns_or_uses_formation_gibbs_energy() {
 /// `=Species(2, 1e20)` llega por el bridge de Add-ins: `pos as usize` satura a
 /// `usize::MAX` y `pos + 8` desborda (pánico en debug).
 #[test]
-#[ignore = "BUG-B13: =Species(db, pos) desborda usize con pos enorme (pánico en debug)"]
 fn b13_species_addin_does_not_overflow_on_huge_position() {
     let catalog = InMemorySpeciesCatalog::new();
     let r = catch_unwind(AssertUnwindSafe(|| {
@@ -85,4 +84,15 @@ fn b13_species_addin_does_not_overflow_on_huge_position() {
         Ok(other) => panic!("esperado un error de celda, obtenido {other:?}"),
         Err(_) => panic!("eval_formula_string entró en pánico"),
     }
+}
+
+/// Referencia A1 con demasiadas letras: la conversión de columna desbordaba usize.
+#[test]
+fn b13_a1_reference_with_huge_column_does_not_overflow() {
+    let catalog = InMemorySpeciesCatalog::new();
+    let r = catch_unwind(AssertUnwindSafe(|| {
+        let mut units = AddInUnits::default();
+        eval_formula_string(&catalog, &mut units, "=ZZZZZZZZZZZZZZZZZZZZ1+1", |_, _| String::new())
+    }));
+    assert!(r.is_ok(), "eval_formula_string entró en pánico");
 }
