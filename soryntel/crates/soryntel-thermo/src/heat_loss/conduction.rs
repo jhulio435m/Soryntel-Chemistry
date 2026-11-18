@@ -12,6 +12,9 @@ pub struct ConductionResult {
     pub profile_points: Vec<(f64, f64)>,
 }
 
+/// Upper bound for the number of sublayers of a solid layer (`calculation_grid`).
+pub const MAX_CALCULATION_GRID: usize = 10_000;
+
 /// Evaluate thermal resistance and discretized temperature profile across a solid layer
 /// using `grid_steps` sublayers (Eq. 9) and geometry shape factor `S` (Eqs. 10-12).
 pub fn evaluate_solid_layer(
@@ -25,10 +28,15 @@ pub fn evaluate_solid_layer(
     k_fixed_val: f64,
     solid_data: Option<&SolidConductivityData>,
 ) -> Result<ConductionResult, SoryntelError> {
-    if thickness_m <= 0.0 {
+    if !(thickness_m.is_finite() && thickness_m > 0.0) {
         return Err(SoryntelError::HeatLossError(
             "Solid layer thickness must be > 0".into(),
         ));
+    }
+    if grid_steps > MAX_CALCULATION_GRID {
+        return Err(SoryntelError::HeatLossError(format!(
+            "Calculation grid must be between 1 and {MAX_CALCULATION_GRID} sublayers (got {grid_steps})"
+        )));
     }
     let m = grid_steps.max(1);
     let dx = thickness_m / (m as f64);

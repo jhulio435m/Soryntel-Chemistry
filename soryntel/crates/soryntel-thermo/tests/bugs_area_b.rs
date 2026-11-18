@@ -426,7 +426,6 @@ fn b10_evaluate_workbook_clears_stale_values_of_missing_species() {
 // ---------------------------------------------------------------------------
 
 #[test]
-#[ignore = "BUG-B15: calculation_grid sin cota provoca 'capacity overflow' (o agota la memoria) en evaluate_solid_layer"]
 fn b15_heat_loss_rejects_unbounded_calculation_grid() {
     use soryntel_thermo::heat_loss::{model::ColumnType, presets, solve_workbook};
     let mut wb = presets::preset_simple_case();
