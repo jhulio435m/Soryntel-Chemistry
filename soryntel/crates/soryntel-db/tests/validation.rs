@@ -1,3 +1,5 @@
+mod common;
+
 use approx::assert_relative_eq;
 use soryntel_core::{EnergyUnit, ResultFormat, TemperatureUnit};
 use soryntel_db::ThermoDatabase;
@@ -68,20 +70,16 @@ fn test_mg_vaporization_with_melting_transition() {
     assert_relative_eq!(r1100.log10_k, 0.031, epsilon = 0.01);
 }
 
-fn load_full_test_db() -> Option<ThermoDatabase> {
+fn load_full_test_db(test: &str) -> Option<ThermoDatabase> {
+    let p = common::test_maindb(test)?;
     let mut db = ThermoDatabase::with_open_defaults();
-    let p = "/home/nando/Descargas/HSC6/Databases/Maindb6.HSC";
-    if std::path::Path::new(p).exists() {
-        db.load_external_hsc_readonly(p, false).ok()?;
-        Some(db)
-    } else {
-        None
-    }
+    db.load_external_hsc_readonly(&p, false).ok()?;
+    Some(db)
 }
 
 #[test]
 fn test_butane_adiabatic_flame() {
-    let Some(db) = load_full_test_db() else {
+    let Some(db) = load_full_test_db("test_butane_adiabatic_flame") else {
         return;
     };
     let mut wb = soryntel_thermo::balance_engine::preset_butane();
@@ -101,7 +99,7 @@ fn test_butane_adiabatic_flame() {
 
 #[test]
 fn test_cusmelt_heat_balance() {
-    let Some(db) = load_full_test_db() else {
+    let Some(db) = load_full_test_db("test_cusmelt_heat_balance") else {
         return;
     };
     let mut wb = soryntel_thermo::balance_engine::preset_cusmelt();
@@ -119,7 +117,7 @@ fn test_cusmelt_heat_balance() {
 
 #[test]
 fn test_cuconv1_formula_and_element_balance() {
-    let Some(db) = load_full_test_db() else {
+    let Some(db) = load_full_test_db("test_cuconv1_formula_and_element_balance") else {
         return;
     };
     let mut wb = soryntel_thermo::balance_engine::preset_cuconv1();
@@ -140,7 +138,7 @@ fn test_cuconv1_formula_and_element_balance() {
 
 #[test]
 fn test_h2o_evaporator_pressure_corr() {
-    let Some(db) = load_full_test_db() else {
+    let Some(db) = load_full_test_db("test_h2o_evaporator_pressure_corr") else {
         return;
     };
     let mut wb = soryntel_thermo::balance_engine::preset_h2o();
@@ -151,12 +149,11 @@ fn test_h2o_evaporator_pressure_corr() {
 
 #[test]
 fn test_s1_maindb6_and_ref_decode() {
-    let hsc_path = "/home/nando/Descargas/HSC6/Databases/Maindb6.HSC";
-    if !std::path::Path::new(hsc_path).exists() {
+    let Some(hsc_path) = common::test_maindb("test_s1_maindb6_and_ref_decode") else {
         return;
-    }
+    };
     let mut db = ThermoDatabase::with_open_defaults();
-    let (unique_sp, total_recs) = db.load_main_hsc(hsc_path).unwrap();
+    let (unique_sp, total_recs) = db.load_main_hsc(&hsc_path).unwrap();
     assert_eq!(total_recs, 36_537);
     assert_eq!(unique_sp, 21_089); // 21,089 chemical formulas + deleted/sentinel '0' tail slots in Maindb6.HSC
 
@@ -205,9 +202,8 @@ fn test_s2_owndb_binary_roundtrip_and_precedence() {
     let own_path = tmp_dir.join("OWN_TEST.HSC");
 
     let mut db = ThermoDatabase::with_open_defaults();
-    let main_hsc = "/home/nando/Descargas/HSC6/Databases/Maindb6.HSC";
-    if std::path::Path::new(main_hsc).exists() {
-        db.load_main_hsc(main_hsc).unwrap();
+    if let Some(main_hsc) = common::test_maindb("test_s2_owndb_binary_roundtrip_and_precedence (sigue sin MainDB)") {
+        db.load_main_hsc(&main_hsc).unwrap();
     }
 
     // Save modified FeS2 in OwnDB (-42.500 kcal/mol instead of -40.989 kcal/mol)
@@ -299,12 +295,11 @@ fn test_s2_owndb_binary_roundtrip_and_precedence() {
 
 #[test]
 fn test_s3_s4_maindb6_stoichiometry_and_organic() {
-    let hsc_path = "/home/nando/Descargas/HSC6/Databases/Maindb6.HSC";
-    if !std::path::Path::new(hsc_path).exists() {
+    let Some(hsc_path) = common::test_maindb("test_s3_s4_maindb6_stoichiometry_and_organic") else {
         return;
-    }
+    };
     let mut db = ThermoDatabase::with_open_defaults();
-    db.load_main_hsc(hsc_path).unwrap();
+    db.load_main_hsc(&hsc_path).unwrap();
 
     let filters = soryntel_thermo::species::PhaseFilterFlags::default();
     let fay = db.search_stoichiometry("SiO4FeFe", false, None, &filters, 50).unwrap();

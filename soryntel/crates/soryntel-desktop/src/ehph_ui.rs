@@ -259,8 +259,7 @@ pub struct EhPhModuleState {
     default_label_font_size: f32,
     default_label_bold: bool,
     show_font_dialog: bool,
-    show_file_modal: bool,
-    file_modal_is_save: bool,
+    /// Archivo `.eph8` actual (vacío hasta abrir o guardar uno).
     file_path_buf: String,
     show_help_modal: bool,
     // Combiner state
@@ -334,9 +333,7 @@ impl EhPhModuleState {
             default_label_font_size: 12.5,
             default_label_bold: false,
             show_font_dialog: false,
-            show_file_modal: false,
-            file_modal_is_save: true,
-            file_path_buf: "/home/nando/.gemini/antigravity/scratch/diagram.eph8".to_string(),
+            file_path_buf: String::new(),
             show_help_modal: false,
             combiner_datasets: vec![25.0, 50.0, 75.0]
                 .into_iter()
@@ -759,6 +756,59 @@ impl EhPhModuleState {
         self.draw_current(db);
     }
 
+    fn current_file(&self) -> Option<std::path::PathBuf> {
+        let path = self.file_path_buf.trim();
+        (!path.is_empty()).then(|| std::path::PathBuf::from(path))
+    }
+
+    /// Abre o guarda un `.eph8` con el diálogo nativo; la ruta elegida pasa a ser la actual
+    /// si la operación termina sin error.
+    fn choose_eph8(&mut self, db: &dyn SpeciesCatalogPort, save: bool) {
+        let title = if save { "Save Eh-pH Diagram (.eph8)" } else { "Open Eh-pH Diagram (.eph8)" };
+        let current = self.current_file();
+        let suggested = current
+            .as_deref()
+            .and_then(|p| p.file_stem())
+            .map(|stem| crate::storage::suggested_file_name(&stem.to_string_lossy(), "eph8"))
+            .unwrap_or_else(|| "diagram.eph8".to_string());
+        let Some(path) = crate::storage::choose_file(save, title, "eph8", &suggested, current.as_deref()) else {
+            return;
+        };
+        let path = path.to_string_lossy().into_owned();
+        if save {
+            self.save_eph8(&path);
+        } else {
+            self.open_eph8(db, &path);
+        }
+        if self.status_error.is_none() {
+            self.file_path_buf = path;
+        }
+    }
+
+    /// Pide la ruta de exportación con el diálogo nativo (carpeta del diagrama actual o de
+    /// documentos). Sin página activa muestra el error y no abre el diálogo.
+    fn choose_export_path(&mut self, title: &str, extension: &str, suggested: &str) -> Option<String> {
+        if self.active_chart_page().is_none() {
+            self.status_error = Some("No chart page to export.".to_string());
+            return None;
+        }
+        let current = self.current_file();
+        crate::storage::choose_file(true, title, extension, suggested, current.as_deref())
+            .map(|path| path.to_string_lossy().into_owned())
+    }
+
+    fn export_active_svg_dialog(&mut self) {
+        if let Some(path) = self.choose_export_path("Export Active Chart SVG", "svg", "ehph_chart.svg") {
+            self.export_active_svg(&path);
+        }
+    }
+
+    fn export_active_csv_dialog(&mut self) {
+        if let Some(path) = self.choose_export_path("Export Active Table CSV", "csv", "ehph_table.csv") {
+            self.export_active_csv(&path);
+        }
+    }
+
     fn save_eph8(&mut self, path: &str) {
         let sf = self.build_save_file();
         match serde_json::to_string_pretty(&sf) {
@@ -917,14 +967,12 @@ impl EhPhModuleState {
                             ui.close_menu();
                         }
                         if ui.button("Open (.eph8)...").clicked() {
-                            self.file_modal_is_save = false;
-                            self.show_file_modal = true;
                             ui.close_menu();
+                            self.choose_eph8(db, false);
                         }
                         if ui.button("Save (.eph8)...").clicked() {
-                            self.file_modal_is_save = true;
-                            self.show_file_modal = true;
                             ui.close_menu();
+                            self.choose_eph8(db, true);
                         }
                         ui.separator();
                         if ui.button("Example: CUS25.eph8 (Cu-S-H2O, 25 °C)").clicked() {
@@ -941,12 +989,12 @@ impl EhPhModuleState {
                         }
                         ui.separator();
                         if ui.button("Export Active Chart SVG...").clicked() {
-                            self.export_active_svg("/home/nando/.gemini/antigravity/scratch/ehph_chart.svg");
                             ui.close_menu();
+                            self.export_active_svg_dialog();
                         }
                         if ui.button("Export Active Table CSV...").clicked() {
-                            self.export_active_csv("/home/nando/.gemini/antigravity/scratch/ehph_table.csv");
                             ui.close_menu();
+                            self.export_active_csv_dialog();
                         }
                     });
                     ui.menu_button(crate::i18n::text("common.019"), |ui| {
@@ -1049,7 +1097,7 @@ impl EhPhModuleState {
         if self.show_print_dialog {
             self.ui_print_dialog(ctx);
         }
-        self.ui_extra_modals(ctx, db);
+        self.ui_extra_modals(ctx);
     }
 
     fn ui_diagram_view(&mut self, ctx: &egui::Context, db: &dyn SpeciesCatalogPort) {
@@ -1979,7 +2027,7 @@ impl EhPhModuleState {
                 self.draw_current(db);
             }
             if ui.button(crate::i18n::text("common.031")).clicked() {
-                self.export_active_csv("/home/nando/.gemini/antigravity/scratch/ehph_table.csv");
+                self.export_active_csv_dialog();
             }
         });
         ui.add_space(4.0);
@@ -2503,10 +2551,10 @@ impl EhPhModuleState {
                 ui.separator();
                 ui.horizontal(|ui| {
                     if ui.button("Export SVG...").clicked() {
-                        self.export_active_svg("/home/nando/.gemini/antigravity/scratch/ehph_chart.svg");
+                        self.export_active_svg_dialog();
                     }
                     if ui.button("Export CSV...").clicked() {
-                        self.export_active_csv("/home/nando/.gemini/antigravity/scratch/ehph_table.csv");
+                        self.export_active_csv_dialog();
                     }
                     if ui.button(crate::i18n::text("common.004")).clicked() {
                         self.show_print_dialog = false;
@@ -2518,7 +2566,7 @@ impl EhPhModuleState {
         }
     }
 
-    fn ui_extra_modals(&mut self, ctx: &egui::Context, db: &dyn SpeciesCatalogPort) {
+    fn ui_extra_modals(&mut self, ctx: &egui::Context) {
         if let Some(sp) = self.species_modal.clone() {
             let mut open = true;
             let tk = self.t_k();
@@ -2708,40 +2756,6 @@ impl EhPhModuleState {
                 });
             if !open {
                 self.show_font_dialog = false;
-            }
-        }
-
-        if self.show_file_modal {
-            let mut open = self.show_file_modal;
-            let title = if self.file_modal_is_save {
-                "Save Eh-pH Diagram (.eph8)"
-            } else {
-                "Open Eh-pH Diagram (.eph8)"
-            };
-            let mut action = false;
-            egui::Window::new(title).open(&mut open).default_width(420.0).show(ctx, |ui| {
-                ui.label(crate::i18n::text("common.085"));
-                ui.text_edit_singleline(&mut self.file_path_buf);
-                ui.horizontal(|ui| {
-                    let lbl = if self.file_modal_is_save { "Save" } else { "Open" };
-                    if ui.button(lbl).clicked() {
-                        action = true;
-                    }
-                    if ui.button(crate::i18n::text("common.000")).clicked() {
-                        self.show_file_modal = false;
-                    }
-                });
-            });
-            if action {
-                let p = self.file_path_buf.trim().to_string();
-                if self.file_modal_is_save {
-                    self.save_eph8(&p);
-                } else {
-                    self.open_eph8(db, &p);
-                }
-                self.show_file_modal = false;
-            } else if !open {
-                self.show_file_modal = false;
             }
         }
 
@@ -3029,10 +3043,9 @@ mod tests {
 
     #[test]
     fn maindb6_cus25_and_s_cu_h2o_if_present() {
-        let path = "/home/nando/Descargas/HSC6/Databases/Maindb6.HSC";
-        if !std::path::Path::new(path).exists() {
+        let Some(path) = crate::test_support::test_maindb("maindb6_cus25_and_s_cu_h2o_if_present") else {
             return;
-        }
+        };
         let mut db = SpeciesDb::with_open_defaults();
         db.load_main_hsc(path).expect("Maindb6 opens");
         let mut st = EhPhModuleState::new(&db);

@@ -11,13 +11,9 @@ use std::{
 /// Resuelve OwnDB > MainDB > OpenDefault, igual que el escritorio.
 /// Antes OpenDefault tenía prioridad sobre MainDB en el CLI.
 pub(crate) fn catalog(custom_main: Option<&str>) -> Arc<dyn SpeciesCatalogPort + Send + Sync> {
-    let locator = DatabaseDirLocator::new(
-        DatabaseDirLocator::beside_executable()
-            .dirs()
-            .iter()
-            .cloned()
-            .chain([PathBuf::from("/home/nando/Descargas/HSC6/Databases")]),
-    );
+    // Rutas (ADR 0003): `--hsc-db` > `SORYNTEL_MAIN_DB` > `<exe>/Databases` > carpeta de
+    // datos del usuario; OwnDB igual con `SORYNTEL_OWN_DB`.
+    let locator = DatabaseDirLocator::standard();
     let main = resolve_main_path(
         custom_main.map(Path::new),
         std::env::var_os("SORYNTEL_MAIN_DB")

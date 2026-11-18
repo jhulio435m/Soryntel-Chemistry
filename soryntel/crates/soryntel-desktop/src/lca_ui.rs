@@ -557,15 +557,17 @@ fn render_classic_lca(
             let is_gabi = state.classic.active_db == LcaDatabaseKind::GaBi;
             if ribbon_tile_button(ui, "💾", "To EcoSpold\nv1.0 (GaBi)", false, is_gabi).clicked() {
                 match SimulationUseCases::sim_lca_classic_ecospold_xml(&mut state.classic) {
-                    Ok(xml) => {
-                        let out_path = "/tmp/soryntel_ecospold_v1.xml";
-                        let saved = crate::storage::write_atomic(out_path, xml.as_bytes()).is_ok();
-                        state.export_last_saved_path = saved.then(|| out_path.to_string());
-                        state.export_modal_title = "EcoSpold v1.0 export succeeded!".to_string();
-                        state.export_modal_body = xml;
-                        state.show_export_modal = true;
-                        state.classic_tab = ClassicTab::Normalized;
-                    }
+                    Ok(xml) => match save_export("To EcoSpold v1.0", "xml", "soryntel_ecospold_v1.xml", xml.as_bytes()) {
+                        Ok(Some(out_path)) => {
+                            state.export_last_saved_path = Some(out_path);
+                            state.export_modal_title = "EcoSpold v1.0 export succeeded!".to_string();
+                            state.export_modal_body = xml;
+                            state.show_export_modal = true;
+                            state.classic_tab = ClassicTab::Normalized;
+                        }
+                        Ok(None) => {}
+                        Err(e) => state.beta_error_modal = Some(e),
+                    },
                     Err(e) => state.beta_error_modal = Some(e),
                 }
             }
@@ -575,19 +577,21 @@ fn render_classic_lca(
                     for action in ["To Active Database", "To Empty File..."] {
                         if ui.button(action).clicked() {
                             match SimulationUseCases::sim_lca_classic_jsonld_zip(&mut state.classic) {
-                                Ok(bytes) => {
-                                    let out_path = "/tmp/soryntel_openlca_jsonld.zip";
-                                    let saved = crate::storage::write_atomic(out_path, &bytes).is_ok();
-                                    state.export_last_saved_path = saved.then(|| out_path.to_string());
-                                    state.export_modal_title = "JSON-LD export succeeded!".to_string();
-                                    state.export_modal_body = format!(
-                                        "Export target: {action}\nArchive size: {} bytes\nSaved: {out_path}\nProcess category: HSC\nNormalized flows exported: {}",
-                                        bytes.len(),
-                                        state.classic.normalized.len()
-                                    );
-                                    state.show_export_modal = true;
-                                    state.classic_tab = ClassicTab::Normalized;
-                                }
+                                Ok(bytes) => match save_export("To JSON-LD (OpenLCA)", "zip", "soryntel_openlca_jsonld.zip", &bytes) {
+                                    Ok(Some(out_path)) => {
+                                        state.export_modal_title = "JSON-LD export succeeded!".to_string();
+                                        state.export_modal_body = format!(
+                                            "Export target: {action}\nArchive size: {} bytes\nSaved: {out_path}\nProcess category: HSC\nNormalized flows exported: {}",
+                                            bytes.len(),
+                                            state.classic.normalized.len()
+                                        );
+                                        state.export_last_saved_path = Some(out_path);
+                                        state.show_export_modal = true;
+                                        state.classic_tab = ClassicTab::Normalized;
+                                    }
+                                    Ok(None) => {}
+                                    Err(e) => state.beta_error_modal = Some(e),
+                                },
                                 Err(e) => state.beta_error_modal = Some(e),
                             }
                             ui.close_menu();
@@ -597,17 +601,19 @@ fn render_classic_lca(
             });
             if ribbon_tile_button(ui, "XLS", "To Excel", false, true).clicked() {
                 match SimulationUseCases::sim_lca_classic_xlsx(&mut state.classic) {
-                    Ok(bytes) => {
-                        let out_path = "/tmp/soryntel_lca_classic.xlsx";
-                        let saved = crate::storage::write_atomic(out_path, &bytes).is_ok();
-                        state.export_last_saved_path = saved.then(|| out_path.to_string());
-                        state.export_modal_title = "Excel Export Succeeded".to_string();
-                        state.export_modal_body = format!(
-                            "Exported 6 sheets (Input Streams, Output Streams, Manual Input Streams, Manual Output Streams, Indicator Streams, Normalized Streams) ({} bytes) to {out_path}.",
-                            bytes.len()
-                        );
-                        state.show_export_modal = true;
-                    }
+                    Ok(bytes) => match save_export("To Excel", "xlsx", "soryntel_lca_classic.xlsx", &bytes) {
+                        Ok(Some(out_path)) => {
+                            state.export_modal_title = "Excel Export Succeeded".to_string();
+                            state.export_modal_body = format!(
+                                "Exported 6 sheets (Input Streams, Output Streams, Manual Input Streams, Manual Output Streams, Indicator Streams, Normalized Streams) ({} bytes) to {out_path}.",
+                                bytes.len()
+                            );
+                            state.export_last_saved_path = Some(out_path);
+                            state.show_export_modal = true;
+                        }
+                        Ok(None) => {}
+                        Err(e) => state.beta_error_modal = Some(e),
+                    },
                     Err(e) => state.beta_error_modal = Some(e),
                 }
             }
@@ -1422,16 +1428,20 @@ fn render_beta_lca(
             }
             if ribbon_tile_button(ui, "XLS", "Export to\nExcel", false, true).clicked() {
                 let bytes = SimulationUseCases::sim_lca_beta_xlsx(&state.beta);
-                let out_path = "/tmp/LCA_exports.xlsx";
-                let _ = crate::storage::write_atomic(out_path, &bytes);
-                state.export_last_saved_path = Some(out_path.to_string());
-                state.export_modal_title = "Export to Excel Succeeded".to_string();
-                state.export_modal_body = format!(
-                    "Saved workbook to {out_path} ({} bytes) including Inputs, Outputs, Results, and {} custom/saved/external sheets.",
-                    bytes.len(),
-                    state.beta.custom_sheets.len()
-                );
-                state.show_export_modal = true;
+                match save_export("Export to Excel", "xlsx", "LCA_exports.xlsx", &bytes) {
+                    Ok(Some(out_path)) => {
+                        state.export_modal_title = "Export to Excel Succeeded".to_string();
+                        state.export_modal_body = format!(
+                            "Saved workbook to {out_path} ({} bytes) including Inputs, Outputs, Results, and {} custom/saved/external sheets.",
+                            bytes.len(),
+                            state.beta.custom_sheets.len()
+                        );
+                        state.export_last_saved_path = Some(out_path);
+                        state.show_export_modal = true;
+                    }
+                    Ok(None) => {}
+                    Err(e) => state.beta_error_modal = Some(e),
+                }
             }
         });
 
@@ -2758,6 +2768,18 @@ fn render_shared_lca_modals(ctx: &egui::Context, project: &SimProject, state: &m
         state.show_help_modal = open;
     }
 
+}
+
+/// Pide la ruta con el diálogo nativo (carpeta de documentos del usuario) y escribe
+/// `bytes`. `Ok(None)` si el usuario cancela; `Err` con el mensaje para la interfaz si falla
+/// la escritura.
+fn save_export(title: &str, extension: &str, suggested: &str, bytes: &[u8]) -> Result<Option<String>, String> {
+    let Some(path) = crate::storage::choose_file(true, title, extension, suggested, None) else {
+        return Ok(None);
+    };
+    crate::storage::write_atomic(&path, bytes)
+        .map(|()| Some(path.display().to_string()))
+        .map_err(|e| format!("Export failed ({}): {e}", path.display()))
 }
 
 #[cfg(test)]

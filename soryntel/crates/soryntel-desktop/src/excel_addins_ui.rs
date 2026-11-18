@@ -4929,16 +4929,10 @@ mod tests {
 
     fn test_db_enriched() -> ThermoDatabase {
         let mut db = ThermoDatabase::with_open_defaults();
-        for p in [
-            "/home/nando/HSC6/Maindb6.HSC",
-            "/home/nando/Documentos/HSC-REA/Maindb6.HSC",
-            "../../Maindb6.HSC",
-        ] {
-            if std::path::Path::new(p).exists() {
-                let _ = db.load_external_hsc_readonly(p, false);
-                if db.len() > 100 {
-                    return db;
-                }
+        if let Some(p) = crate::test_support::test_maindb("excel_addins_ui::tests (usa el respaldo sintético)") {
+            let _ = db.load_external_hsc_readonly(&p, false);
+            if db.len() > 100 {
+                return db;
             }
         }
         // Fallback determinista para entornos sin Maindb6.HSC: clona plantilla CO(g)/Al2O3

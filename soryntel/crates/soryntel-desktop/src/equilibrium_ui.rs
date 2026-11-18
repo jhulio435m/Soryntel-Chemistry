@@ -4574,12 +4574,11 @@ mod tests {
 
     #[test]
     fn test_na2so4_preset_3d_sweep_with_maindb6() {
-        let hsc_path = "/home/nando/Descargas/HSC6/Databases/Maindb6.HSC";
-        if !std::path::Path::new(hsc_path).exists() {
+        let Some(hsc_path) = crate::test_support::test_maindb("test_na2so4_preset_3d_sweep_with_maindb6") else {
             return;
-        }
+        };
         let mut db = ThermoDatabase::with_open_defaults();
-        db.load_main_hsc(hsc_path).unwrap();
+        db.load_main_hsc(&hsc_path).unwrap();
         let mut state = EquilibriumUiState::default();
         state.load_preset_na2so4();
         state.run_calculate(&db);
@@ -4640,12 +4639,11 @@ mod tests {
         assert!(state.params.pressure_range.steps >= 2);
         assert!((state.params.pressure_range.final_val - state.params.pressure_range.initial).abs() > 1.0);
 
-        let hsc_path = "/home/nando/Descargas/HSC6/Databases/Maindb6.HSC";
-        if !std::path::Path::new(hsc_path).exists() {
+        let Some(hsc_path) = crate::test_support::test_maindb("test_switching_1d_preset_to_2d_produces_valid_3d_grid") else {
             return;
-        }
+        };
         let mut db = ThermoDatabase::with_open_defaults();
-        db.load_main_hsc(hsc_path).unwrap();
+        db.load_main_hsc(&hsc_path).unwrap();
         state.load_preset_nico();
         state.params.num_indep_vars = 2;
         state.ensure_2d_sweep_defaults();

@@ -179,8 +179,7 @@ pub struct DiagramsModuleState {
     show_db_browser: bool,
     db_query: String,
     db_matches: Vec<ChemicalSpecies>,
-    show_file_modal: bool,
-    file_modal_is_save: bool,
+    /// Archivo `.dia8` actual (vacío hasta abrir o guardar uno).
     file_path_buf: String,
     show_help_modal: bool,
 }
@@ -231,9 +230,7 @@ impl DiagramsModuleState {
             show_db_browser: false,
             db_query: "Fe".to_string(),
             db_matches: CatalogUseCases::search_species(db, "Fe", 40),
-            show_file_modal: false,
-            file_modal_is_save: true,
-            file_path_buf: "/home/nando/.gemini/antigravity/scratch/diagram.dia8".to_string(),
+            file_path_buf: String::new(),
             show_help_modal: false,
         };
         st.recalculate(db);
@@ -406,6 +403,63 @@ impl DiagramsModuleState {
             show_po2_lines: self.show_po2_lines,
             show_curve_labels: self.show_curve_labels,
             line_width: self.line_width,
+        }
+    }
+
+    fn current_file(&self) -> Option<std::path::PathBuf> {
+        let path = self.file_path_buf.trim();
+        (!path.is_empty()).then(|| std::path::PathBuf::from(path))
+    }
+
+    /// Abre o guarda un `.dia8` con el diálogo nativo; la ruta elegida pasa a ser la actual
+    /// si la operación termina sin error.
+    fn choose_dia8(&mut self, db: &dyn SpeciesWorkspacePort, save: bool) {
+        let title = if save {
+            "Save Thermochemical Diagram (.dia8)"
+        } else {
+            "Open Thermochemical Diagram (.dia8)"
+        };
+        let current = self.current_file();
+        let suggested = current
+            .as_deref()
+            .and_then(|p| p.file_stem())
+            .map(|stem| crate::storage::suggested_file_name(&stem.to_string_lossy(), "dia8"))
+            .unwrap_or_else(|| "diagram.dia8".to_string());
+        let Some(path) = crate::storage::choose_file(save, title, "dia8", &suggested, current.as_deref()) else {
+            return;
+        };
+        let path = path.to_string_lossy().into_owned();
+        if save {
+            self.save_dia8(&path);
+        } else {
+            self.open_dia8(db, &path);
+        }
+        if self.status_error.is_none() {
+            self.file_path_buf = path;
+        }
+    }
+
+    /// Pide la ruta de exportación con el diálogo nativo (carpeta del diagrama actual o de
+    /// documentos). Sin resultados calculados muestra el error y no abre el diálogo.
+    fn choose_export_path(&mut self, title: &str, extension: &str, suggested: &str) -> Option<String> {
+        if self.result.is_none() {
+            self.status_error = Some("No calculated diagram data to export.".to_string());
+            return None;
+        }
+        let current = self.current_file();
+        crate::storage::choose_file(true, title, extension, suggested, current.as_deref())
+            .map(|path| path.to_string_lossy().into_owned())
+    }
+
+    fn export_chart_svg_dialog(&mut self) {
+        if let Some(path) = self.choose_export_path("Export Chart SVG", "svg", "diagram_chart.svg") {
+            self.export_chart_svg(&path);
+        }
+    }
+
+    fn export_ydata_csv_dialog(&mut self) {
+        if let Some(path) = self.choose_export_path("Export Y-data CSV", "csv", "diagram_ydata.csv") {
+            self.export_ydata_csv(&path);
         }
     }
 
@@ -603,14 +657,12 @@ impl DiagramsModuleState {
                 ui.horizontal_wrapped(|ui| {
                     ui.menu_button(crate::i18n::text("common.001"), |ui| {
                         if ui.button("Open (.dia8)...").clicked() {
-                            self.file_modal_is_save = false;
-                            self.show_file_modal = true;
                             ui.close_menu();
+                            self.choose_dia8(db, false);
                         }
                         if ui.button("Save (.dia8)...").clicked() {
-                            self.file_modal_is_save = true;
-                            self.show_file_modal = true;
                             ui.close_menu();
+                            self.choose_dia8(db, true);
                         }
                         ui.separator();
                         if ui.button("Example: Ellingham Oxides (Fig. 2–4)").clicked() {
@@ -673,12 +725,12 @@ impl DiagramsModuleState {
                         }
                         ui.separator();
                         if ui.button("Export Chart SVG...").clicked() {
-                            self.export_chart_svg("/home/nando/.gemini/antigravity/scratch/diagram_chart.svg");
                             ui.close_menu();
+                            self.export_chart_svg_dialog();
                         }
                         if ui.button("Export Y-data CSV...").clicked() {
-                            self.export_ydata_csv("/home/nando/.gemini/antigravity/scratch/diagram_ydata.csv");
                             ui.close_menu();
+                            self.export_ydata_csv_dialog();
                         }
                     });
                     ui.menu_button(crate::i18n::text("common.019"), |ui| {
@@ -748,7 +800,7 @@ impl DiagramsModuleState {
                         self.rows.push(DiagramRow::empty());
                     }
                     if self.sheet_tab == DataSheetTab::YData && ui.small_button(crate::i18n::text("common.031")).clicked() {
-                        self.export_ydata_csv("/home/nando/.gemini/antigravity/scratch/diagram_ydata.csv");
+                        self.export_ydata_csv_dialog();
                     }
                 });
                 ui.separator();
@@ -987,7 +1039,7 @@ impl DiagramsModuleState {
         if self.show_db_browser {
             self.ui_db_browser(ctx, db);
         }
-        self.ui_extra_modals(ctx, db);
+        self.ui_extra_modals(ctx);
     }
 
     fn ui_xdata_grid(&mut self, ui: &mut egui::Ui, db: &dyn SpeciesWorkspacePort) {
@@ -1428,41 +1480,7 @@ impl DiagramsModuleState {
         }
     }
 
-    fn ui_extra_modals(&mut self, ctx: &egui::Context, db: &dyn SpeciesWorkspacePort) {
-        if self.show_file_modal {
-            let mut open = self.show_file_modal;
-            let title = if self.file_modal_is_save {
-                "Save Thermochemical Diagram (.dia8)"
-            } else {
-                "Open Thermochemical Diagram (.dia8)"
-            };
-            let mut action = false;
-            egui::Window::new(title).open(&mut open).default_width(420.0).show(ctx, |ui| {
-                ui.label(crate::i18n::text("common.085"));
-                ui.text_edit_singleline(&mut self.file_path_buf);
-                ui.horizontal(|ui| {
-                    let lbl = if self.file_modal_is_save { "Save" } else { "Open" };
-                    if ui.button(lbl).clicked() {
-                        action = true;
-                    }
-                    if ui.button(crate::i18n::text("common.000")).clicked() {
-                        self.show_file_modal = false;
-                    }
-                });
-            });
-            if action {
-                let p = self.file_path_buf.trim().to_string();
-                if self.file_modal_is_save {
-                    self.save_dia8(&p);
-                } else {
-                    self.open_dia8(db, &p);
-                }
-                self.show_file_modal = false;
-            } else if !open {
-                self.show_file_modal = false;
-            }
-        }
-
+    fn ui_extra_modals(&mut self, ctx: &egui::Context) {
         if self.show_help_modal {
             let mut open = self.show_help_modal;
             egui::Window::new("H, S, C and G Diagrams Guide (HSC Ch. 19)")
@@ -1570,10 +1588,9 @@ mod tests {
 
     #[test]
     fn maindb6_ellingham_and_heat_content_presets_if_present() {
-        let path = "/home/nando/Descargas/HSC6/Databases/Maindb6.HSC";
-        if !std::path::Path::new(path).exists() {
+        let Some(path) = crate::test_support::test_maindb("maindb6_ellingham_and_heat_content_presets_if_present") else {
             return;
-        }
+        };
         let mut db = ThermoDatabase::with_open_defaults();
         db.load_main_hsc(path).expect("Maindb6 opens");
         let st = DiagramsModuleState::new(&db);

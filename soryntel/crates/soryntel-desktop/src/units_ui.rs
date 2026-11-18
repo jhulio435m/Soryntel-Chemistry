@@ -558,10 +558,11 @@ impl UnitsModuleState {
                 }
             }
         }
-        let path = format!(
-            "/tmp/soryntel_units_{}.csv",
-            self.active_sheet.label().to_ascii_lowercase()
-        );
+        let suggested = format!("soryntel_units_{}.csv", self.active_sheet.label().to_ascii_lowercase());
+        let Some(path) = crate::storage::choose_file(true, "Export CSV", "csv", &suggested, None) else {
+            return;
+        };
+        let path = path.display().to_string();
         match crate::storage::write_atomic(&path, out) {
             Ok(()) => self.status_msg = format!("Exported {} sheet to {path}", self.active_sheet.label()),
             Err(e) => self.status_msg = format!("CSV export failed: {e}"),

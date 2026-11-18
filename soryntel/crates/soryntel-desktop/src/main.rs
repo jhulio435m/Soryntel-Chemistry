@@ -8,6 +8,8 @@ rust_i18n::i18n!("locales", fallback = "es");
 
 mod i18n;
 mod storage;
+#[cfg(test)]
+mod test_support;
 mod addins_bridge;
 mod aqua_ui;
 mod module_link;

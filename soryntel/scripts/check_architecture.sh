@@ -177,7 +177,90 @@ else
   report_check "f) adaptador de BD del CLI solo en composition.rs" PASS ""
 fi
 
+paths_fail=0
+paths_findings="$(python3 - "$root" <<'PY'
+from pathlib import Path
+import sys
+
+root = Path(sys.argv[1])
+needles = ('"/home/', '"/tmp/')
+
+def code_only(line, in_block):
+    """Devuelve (código sin comentarios, sigue dentro de /* */). Respeta literales."""
+    out, i, in_str = [], 0, False
+    while i < len(line):
+        c = line[i]
+        if in_block:
+            if line.startswith("*/", i):
+                in_block, i = False, i + 2
+            else:
+                i += 1
+            continue
+        if in_str:
+            out.append(c)
+            if c == "\\":
+                out.append(line[i + 1:i + 2])
+                i += 2
+                continue
+            if c == '"':
+                in_str = False
+            i += 1
+            continue
+        if line.startswith("//", i):
+            break
+        if line.startswith("/*", i):
+            in_block, i = True, i + 2
+            continue
+        if c == '"':
+            in_str = True
+        elif c == "'" and line[i + 2:i + 3] == "'":
+            # Literal de carácter de un solo símbolo ('"'): no abre una cadena.
+            out.append(line[i:i + 3])
+            i += 3
+            continue
+        out.append(c)
+        i += 1
+    return "".join(out), in_block
+
+for path in sorted((root / "crates").glob("*/src/**/*.rs")):
+    lines = path.read_text(errors="replace").splitlines()
+    cfg_depth = 0
+    cfg_pending = False
+    in_block = False
+    for number, line in enumerate(lines, 1):
+        if cfg_depth:
+            cfg_depth += line.count("{") - line.count("}")
+            if cfg_depth <= 0:
+                cfg_depth = 0
+            continue
+        if "#[cfg(test)]" in line:
+            depth = line.count("{") - line.count("}")
+            if depth > 0:
+                cfg_depth = depth
+            else:
+                cfg_pending = True
+            continue
+        if cfg_pending:
+            depth = line.count("{") - line.count("}")
+            if depth > 0:
+                cfg_depth = depth
+            cfg_pending = False
+            continue
+        code, in_block = code_only(line, in_block)
+        if any(needle in code for needle in needles):
+            print(f"{path.relative_to(root)}:{number}: {line.strip()}")
+PY
+)" || paths_fail=1
+if (( paths_fail )); then
+  report_check "g) sin rutas fijas \"/home/ ni \"/tmp/ en src fuera de #[cfg(test)] y comentarios" FAIL "No se pudo completar la inspección."
+elif [[ -n "$paths_findings" ]]; then
+  paths_fail=1
+  report_check "g) sin rutas fijas \"/home/ ni \"/tmp/ en src fuera de #[cfg(test)] y comentarios" FAIL "$paths_findings"
+else
+  report_check "g) sin rutas fijas \"/home/ ni \"/tmp/ en src fuera de #[cfg(test)] y comentarios" PASS ""
+fi
+
 if [[ "$mode" == "report" ]]; then exit 0; fi
-if (( core_fail || application_fail || cli_fail )); then exit 1; fi
+if (( core_fail || application_fail || cli_fail || paths_fail )); then exit 1; fi
 if [[ "$mode" == "strict" ]] && (( ui_fail || facade_fail || domain_fail )); then exit 1; fi
 exit 0

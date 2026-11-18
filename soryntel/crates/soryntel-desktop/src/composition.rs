@@ -5,6 +5,8 @@ use soryntel_application::use_cases::{
     AddinsUseCases, AquaUseCases, BalanceUseCases, CatalogUseCases, EquilibriumUseCases,
     HeatLossUseCases, MiscUseCases, ReactionUseCases, SimulationUseCases, WaterUseCases,
 };
+use soryntel_core::DatabaseLocatorPort;
+use soryntel_db::adapters::{DatabaseDirLocator, OWN_DB_FILE};
 use soryntel_db::ThermoDatabase;
 use std::ops::{Deref, DerefMut};
 use std::path::{Path, PathBuf};
@@ -29,29 +31,19 @@ pub struct AppServices {
 #[allow(dead_code)]
 impl AppServices {
     pub fn load(custom_main_db: Option<&str>) -> Self {
-        let executable_db_dir = executable_db_dir();
-        // Precedencia de MainDB (ADR 0003): `--hsc-db` > `SORYNTEL_MAIN_DB` > ruta por
-        // defecto. Una ruta configurada explícitamente que no carga no recurre a la ruta por
-        // defecto: el error se muestra en la interfaz para que el usuario corrija la
-        // configuración en lugar de trabajar sin saberlo con otra base.
-        let main_db_path = custom_main_db.map(PathBuf::from)
+        // Precedencia de MainDB (ADR 0003): `--hsc-db` > `SORYNTEL_MAIN_DB` >
+        // `<exe>/Databases/Maindb6.HSC` > carpeta de datos del usuario. Una ruta configurada
+        // explícitamente que no carga no recurre a las rutas por defecto: el error se muestra
+        // en la interfaz para que el usuario corrija la configuración en lugar de trabajar
+        // sin saberlo con otra base.
+        let locator = DatabaseDirLocator::standard();
+        let main_db_path = custom_main_db
+            .map(PathBuf::from)
             .or_else(|| std::env::var_os("SORYNTEL_MAIN_DB").map(PathBuf::from))
-            .or_else(|| {
-                default_database_path(
-                    executable_db_dir.as_deref(),
-                    "Maindb6.HSC",
-                    "/home/nando/Descargas/HSC6/Databases/Maindb6.HSC",
-                )
-            });
+            .or_else(|| locator.default_main_db());
         let own_db_path = std::env::var_os("SORYNTEL_OWN_DB")
             .map(PathBuf::from)
-            .or_else(|| {
-                default_database_path(
-                    executable_db_dir.as_deref(),
-                    "OWNDB6.HSC",
-                    "/home/nando/Descargas/HSC6/Databases/OWNDB6.HSC",
-                )
-            });
+            .or_else(|| locator.default_own_db());
         Self::load_from_paths(main_db_path.as_deref(), own_db_path.as_deref())
     }
 
@@ -67,7 +59,8 @@ impl AppServices {
         } else {
             warnings.push(
                 "No se encontró MainDB: solo está disponible el catálogo abierto incluido. \
-                 Use --hsc-db, SORYNTEL_MAIN_DB o Databases/Maindb6.HSC junto al ejecutable."
+                 Use --hsc-db, SORYNTEL_MAIN_DB, Databases/Maindb6.HSC junto al ejecutable o \
+                 Soryntel/Databases/Maindb6.HSC en la carpeta de documentos."
                     .to_string(),
             );
         }
@@ -209,19 +202,13 @@ fn executable_db_dir() -> Option<PathBuf> {
 
 /// Ruta de OwnDB que usa el escritorio cuando no hay ninguna cargada, con la misma búsqueda
 /// que el arranque: `SORYNTEL_OWN_DB`, un `OWNDB6.HSC` existente junto al ejecutable o en la
-/// ruta heredada y, si no hay ninguno, `<exe>/Databases/OWNDB6.HSC` para crearlo. Nunca
-/// devuelve el directorio temporal, que el arranque no consulta.
+/// carpeta de datos del usuario y, si no hay ninguno, `<exe>/Databases/OWNDB6.HSC` para
+/// crearlo. Nunca devuelve el directorio temporal, que el arranque no consulta.
 pub fn default_own_db_path() -> Option<PathBuf> {
     std::env::var_os("SORYNTEL_OWN_DB")
         .map(PathBuf::from)
-        .or_else(|| {
-            default_database_path(
-                executable_db_dir().as_deref(),
-                "OWNDB6.HSC",
-                "/home/nando/Descargas/HSC6/Databases/OWNDB6.HSC",
-            )
-        })
-        .or_else(|| executable_db_dir().map(|dir| dir.join("OWNDB6.HSC")))
+        .or_else(|| DatabaseDirLocator::standard().default_own_db())
+        .or_else(|| executable_db_dir().map(|dir| dir.join(OWN_DB_FILE)))
 }
 
 /// Prepara el archivo OwnDB donde se persistirá una especie nueva y devuelve su ruta.
@@ -264,21 +251,6 @@ pub fn prepare_own_db_target(
 pub fn persist_own_db(admin: &mut dyn SpeciesDatabaseAdminPort, path: &Path) -> Result<usize, String> {
     CatalogUseCases::save_own_db(admin, path)
         .map_err(|e| format!("No se pudo guardar OwnDB {}: {e}", path.display()))
-}
-
-fn default_database_path(
-    executable_db_dir: Option<&Path>,
-    file_name: &str,
-    legacy_path: &str,
-) -> Option<PathBuf> {
-    executable_db_dir
-        .map(|dir| dir.join(file_name))
-        .filter(|path| path.exists())
-        .or_else(|| {
-            Path::new(legacy_path)
-                .exists()
-                .then(|| PathBuf::from(legacy_path))
-        })
 }
 
 #[cfg(test)]
