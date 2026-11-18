@@ -8,6 +8,7 @@ use soryntel_application::models::species_converter::{
     ConversionMethod, ConverterInputEntry, ConverterOutputSpec, SpeciesConverterRequest,
     SpeciesConverterResult, SpeciesTypeFilter,
 };
+use crate::ui_common::{parse_user_number, NumberFields};
 use crate::excel_grid::{
     header_cell, row_num_cell, section_cell, text_cell, EXCEL_ALT_ROW_BG, EXCEL_GRID_BORDER,
     EXCEL_READONLY_BG,
@@ -198,14 +199,17 @@ impl SpeciesConverterModuleState {
         s
     }
 
-    fn build_request(&self, sheet: &ConverterSheet) -> SpeciesConverterRequest {
+    /// Construye la petición del solver. Falla si algún campo numérico no es válido: nunca
+    /// se sustituye un texto erróneo por un valor por defecto.
+    fn build_request(&self, sheet: &ConverterSheet) -> Result<SpeciesConverterRequest, String> {
+        let fields = NumberFields::default();
         let inputs = sheet
             .inputs
             .iter()
             .filter(|r| !r.formula.trim().is_empty())
             .map(|r| ConverterInputEntry {
                 formula: r.formula.trim().to_string(),
-                wt_pct: r.wt_pct_str.trim().parse::<f64>().unwrap_or(0.0),
+                wt_pct: fields.or(&r.wt_pct_str, 0.0),
             })
             .collect();
 
@@ -218,25 +222,26 @@ impl SpeciesConverterModuleState {
                 target_wt_pct: if r.target_str.trim().is_empty() {
                     None
                 } else {
-                    r.target_str.trim().parse::<f64>().ok()
+                    Some(fields.req(&r.target_str))
                 },
-                weight_coeff: r.weight_str.trim().parse::<f64>().unwrap_or(1.0),
+                weight_coeff: fields.or(&r.weight_str, 1.0),
             })
             .collect();
 
-        SpeciesConverterRequest {
+        let req = SpeciesConverterRequest {
             inputs,
             outputs,
             method: self.method,
             exact_o: self.exact_o,
             exact_h: self.exact_h,
             set_norm_limit: self.set_norm_limit,
-            norm_limit: self.norm_limit_str.trim().parse::<f64>().unwrap_or(0.0001),
-            small_meas_limit: self.small_meas_limit_str.trim().parse::<f64>().unwrap_or(0.5),
-            element_balance_limit_pct: self.element_limit_str.trim().parse::<f64>().unwrap_or(99.0),
+            norm_limit: fields.or(&self.norm_limit_str, 0.0001),
+            small_meas_limit: fields.or(&self.small_meas_limit_str, 0.5),
+            element_balance_limit_pct: fields.or(&self.element_limit_str, 99.0),
             stability_type: self.stability_type,
-            stability_weighting_coef: self.stability_coef_str.trim().parse::<f64>().unwrap_or(80.0),
-        }
+            stability_weighting_coef: fields.or(&self.stability_coef_str, 80.0),
+        };
+        fields.check().map(|_| req)
     }
 
     fn initialize_active(&mut self) {
@@ -247,7 +252,13 @@ impl SpeciesConverterModuleState {
         if sheet.is_summary {
             return;
         }
-        let req = self.build_request(sheet);
+        let req = match self.build_request(sheet) {
+            Ok(req) => req,
+            Err(e) => {
+                self.status_msg = Some(e);
+                return;
+            }
+        };
         match MiscUseCases::initialize_species_converter(&req.inputs) {
             Ok((calc_elems, in_tot)) => {
                 let sheet = &mut self.sheets[self.active_sheet];
@@ -275,7 +286,13 @@ impl SpeciesConverterModuleState {
         if sheet.is_summary {
             return;
         }
-        let req = self.build_request(sheet);
+        let req = match self.build_request(sheet) {
+            Ok(req) => req,
+            Err(e) => {
+                self.status_msg = Some(e);
+                return;
+            }
+        };
         match MiscUseCases::convert_species(catalog, &req) {
             Ok(res) => {
                 self.sheets[self.active_sheet].result = Some(res);
@@ -292,7 +309,13 @@ impl SpeciesConverterModuleState {
         if sheet.is_summary {
             return;
         }
-        let req = self.build_request(sheet);
+        let req = match self.build_request(sheet) {
+            Ok(req) => req,
+            Err(e) => {
+                self.status_msg = Some(e);
+                return;
+            }
+        };
         let mut outs = req.outputs.clone();
         if let Err(e) = MiscUseCases::fix_species_balance(&req.inputs, &mut outs) {
             self.status_msg = Some(e.to_string());
@@ -695,7 +718,7 @@ impl SpeciesConverterModuleState {
                 sheet
                     .inputs
                     .iter()
-                    .map(|r| r.wt_pct_str.trim().parse::<f64>().unwrap_or(0.0))
+                    .map(|r| parse_user_number(&r.wt_pct_str).unwrap_or(0.0))
                     .sum()
             });
         let calc_in_total = result_clone
@@ -922,7 +945,7 @@ impl SpeciesConverterModuleState {
             .inputs
             .iter()
             .filter_map(|r| {
-                let v = r.wt_pct_str.trim().parse::<f64>().unwrap_or(0.0);
+                let v = parse_user_number(&r.wt_pct_str).unwrap_or(0.0);
                 if !r.formula.trim().is_empty() && v > 0.0 {
                     Some((r.formula.trim().to_string(), v))
                 } else {
@@ -933,7 +956,7 @@ impl SpeciesConverterModuleState {
         draw_pie_chart(ui, "Input analysis", &in_slices);
         ui.add_space(10.0);
 
-        let small_lim = self.small_meas_limit_str.trim().parse::<f64>().unwrap_or(0.5);
+        let small_lim = parse_user_number(&self.small_meas_limit_str).unwrap_or(0.5);
         let mut out_slices: Vec<(String, f64)> = Vec::new();
         let mut others = 0.0;
         if let Some(res) = &sheet.result {
@@ -967,7 +990,7 @@ impl SpeciesConverterModuleState {
             return;
         };
 
-        let thresh = self.element_limit_str.trim().parse::<f64>().unwrap_or(99.0);
+        let thresh = parse_user_number(&self.element_limit_str).unwrap_or(99.0);
         egui::ScrollArea::both().show(ui, |ui| {
             egui::Grid::new("sc_elem_balance_grid")
                 .spacing([0.0, 0.0])
@@ -1074,14 +1097,19 @@ mod bug_repro_area_c {
     use soryntel_db::ThermoDatabase;
 
     #[test]
-    #[ignore = "BUG-C13: un % en peso con coma decimal (\"12,5\") se envía como 0 % sin avisar"]
     fn comma_decimal_weight_percent_is_not_sent_as_zero() {
         let db = ThermoDatabase::with_open_defaults();
         let mut st = SpeciesConverterModuleState::new(&db);
         let idx = st.sheets.iter().position(|s| !s.is_summary).expect("hoja de entrada");
         st.sheets[idx].inputs[0].wt_pct_str = "12,5".into();
-        let req = st.build_request(&st.sheets[idx]);
+        let req = st.build_request(&st.sheets[idx]).unwrap();
         let sent = req.inputs[0].wt_pct;
         assert!((sent - 12.5).abs() < 1e-9, "el usuario escribió 12,5 % y se envía {sent} %");
+        // Un texto no numérico se rechaza en lugar de enviarse como 0 %.
+        st.sheets[idx].inputs[0].wt_pct_str = "doce".into();
+        assert!(st.build_request(&st.sheets[idx]).is_err());
+        st.sheets[idx].outputs[0].weight_str = "x".into();
+        st.sheets[idx].inputs[0].wt_pct_str = "12,5".into();
+        assert!(st.build_request(&st.sheets[idx]).is_err());
     }
 }
