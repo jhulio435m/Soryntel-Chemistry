@@ -21,6 +21,10 @@ echo "Instalando Soryntel Chemistry en ${BIN_DIR}..."
 mkdir -p "${BIN_DIR}" "${APP_SHARE}" "${ICON_PNG_DIR}" "${ICON_SVG_DIR}" "${LIB_DIR}/Databases"
 
 install -m 755 "${APP_DIR}/soryntel-desktop" "${LIB_DIR}/soryntel-desktop"
+if [[ -f "${APP_DIR}/Databases/soryntel.sdb" ]]; then
+    install -m 644 "${APP_DIR}/Databases/soryntel.sdb" "${LIB_DIR}/Databases/soryntel.sdb"
+    install -m 644 "${APP_DIR}/LICENSE-DATA.md" "${LIB_DIR}/LICENSE-DATA.md"
+fi
 install -m 644 "${APP_DIR}/soryntel-icon.png" "${ICON_PNG_DIR}/soryntel-chemistry.png"
 install -m 644 "${APP_DIR}/soryntel-icon.svg" "${ICON_SVG_DIR}/soryntel-chemistry.svg"
 

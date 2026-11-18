@@ -22,9 +22,11 @@ case "${TARGETS}" in
 esac
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+SORYNTEL_SDB_DIR="$(realpath -m -- "${SORYNTEL_SDB_DIR:-${ROOT_DIR}/Databases}")"
+export SORYNTEL_SDB_DIR
 VERSION="$(awk '/^\[workspace.package\]/{f=1;next} /^\[/{f=0} f && /^version *=/{gsub(/[" ]/,"",$0); split($0,a,"="); print a[2]; exit}' "${ROOT_DIR}/Cargo.toml")"
 [[ -n "${VERSION}" ]] || { echo "No se pudo leer la versión de Cargo.toml" >&2; exit 1; }
-DIST_DIR="${DIST_DIR:-${ROOT_DIR}/dist}"
+DIST_DIR="$(realpath -m -- "${DIST_DIR:-${ROOT_DIR}/dist}")"
 STAGE_DIR="$(mktemp -d)"
 trap 'rm -rf "${STAGE_DIR}"' EXIT
 
@@ -33,6 +35,14 @@ cd "${ROOT_DIR}"
 echo "==> Soryntel Chemistry ${VERSION} (${TARGETS})"
 
 want() { [[ "${TARGETS}" == all || "${TARGETS}" == "$1" ]]; }
+
+stage_data() {
+    local stage="$1"
+    if [[ -f "${SORYNTEL_SDB_DIR}/soryntel.sdb" ]]; then
+        install -Dm644 "${SORYNTEL_SDB_DIR}/soryntel.sdb" "${stage}/Databases/soryntel.sdb"
+        install -m644 "${ROOT_DIR}/../LICENSE-DATA.md" "${stage}/LICENSE-DATA.md"
+    fi
+}
 
 build_linux() {
     echo "==> Linux: compilando (x86_64-unknown-linux-gnu)..."
@@ -45,6 +55,7 @@ build_linux() {
     strip "${stage}/soryntel-desktop" || true
     cp packaging/linux/install.sh packaging/linux/uninstall.sh packaging/linux/soryntel-chemistry.desktop "${stage}/"
     cp packaging/soryntel-icon.png packaging/soryntel-icon.svg "${stage}/"
+    stage_data "${stage}"
     chmod 755 "${stage}/soryntel-desktop" "${stage}/install.sh" "${stage}/uninstall.sh"
 
     echo "==> Linux: empaquetando .tar.gz y .run..."
@@ -75,14 +86,17 @@ build_windows() {
     fi
 
     echo "==> Windows: instalador NSIS..."
-    makensis -V2 -DAPP_VERSION="${VERSION}" packaging/windows/soryntel.nsi
+    makensis -V2 -DAPP_VERSION="${VERSION}" -DSORYNTEL_SDB_DIR="${SORYNTEL_SDB_DIR}" \
+        -DOUTPUT_DIR="${DIST_DIR}" packaging/windows/soryntel.nsi
 
     echo "==> Windows: ZIP portable..."
     local name="Soryntel-Chemistry-${VERSION}-win64"
     mkdir -p "${STAGE_DIR}/${name}/Databases"
     cp "${exe}" "${STAGE_DIR}/${name}/soryntel-desktop.exe"
     cp packaging/soryntel-icon.ico "${STAGE_DIR}/${name}/"
-    (cd "${STAGE_DIR}" && zip -qr "${DIST_DIR}/${name}-portable.zip" "${name}")
+    stage_data "${STAGE_DIR}/${name}"
+    (cd "${STAGE_DIR}" && zip -qr "${name}-portable.zip" "${name}")
+    mv "${STAGE_DIR}/${name}-portable.zip" "${DIST_DIR}/"
 }
 
 build_arch() {

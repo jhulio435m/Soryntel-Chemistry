@@ -10,7 +10,16 @@ options=('!strip' '!debug')
 
 package() {
     local repo_root="${SRCDEST:-$(cd "${startdir}/../../.." && pwd)}"
-    install -Dm755 "${repo_root}/target/release/soryntel-desktop" "${pkgdir}/usr/bin/soryntel-desktop"
+    local app_dir="${pkgdir}/usr/lib/soryntel-chemistry"
+    local db_dir="${SORYNTEL_SDB_DIR:-${repo_root}/Databases}"
+    install -Dm755 "${repo_root}/target/release/soryntel-desktop" "${app_dir}/soryntel-desktop"
+    install -d "${pkgdir}/usr/bin"
+    ln -s ../lib/soryntel-chemistry/soryntel-desktop "${pkgdir}/usr/bin/soryntel-desktop"
+    if [[ -f "${db_dir}/soryntel.sdb" ]]; then
+        license+=('LicenseRef-SoryntelDB')
+        install -Dm644 "${db_dir}/soryntel.sdb" "${app_dir}/Databases/soryntel.sdb"
+        install -Dm644 "${repo_root}/../LICENSE-DATA.md" "${pkgdir}/usr/share/licenses/${pkgname}/LICENSE-DATA.md"
+    fi
     install -Dm644 "${repo_root}/packaging/linux/soryntel-chemistry.desktop" "${pkgdir}/usr/share/applications/soryntel-chemistry.desktop"
     install -Dm644 "${repo_root}/packaging/soryntel-icon.png" "${pkgdir}/usr/share/icons/hicolor/256x256/apps/soryntel-chemistry.png"
     install -Dm644 "${repo_root}/packaging/soryntel-icon.svg" "${pkgdir}/usr/share/icons/hicolor/scalable/apps/soryntel-chemistry.svg"
