@@ -41,4 +41,37 @@ mod tests {
         assert_eq!(fs::read_dir(&dir).unwrap().count(), 2);
         fs::remove_dir_all(dir).unwrap();
     }
+
+    fn scratch_dir(tag: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("soryntel-{tag}-{}-{}", std::process::id(), SEQUENCE.fetch_add(1, Ordering::Relaxed)));
+        fs::create_dir(&dir).unwrap();
+        dir
+    }
+
+    #[cfg(unix)]
+    #[test]
+    #[ignore = "BUG-C18: guardar sobre un enlace simbólico sustituye el enlace por un archivo y el destino real no se actualiza"]
+    fn saving_through_symlink_updates_link_target() {
+        let dir = scratch_dir("c18");
+        let real = dir.join("real.bal8");
+        let link = dir.join("enlace.bal8");
+        fs::write(&real, "v1").unwrap();
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+        write_atomic(&link, "v2").unwrap();
+        let link_still_link = fs::symlink_metadata(&link).unwrap().file_type().is_symlink();
+        let real_content = fs::read_to_string(&real).unwrap();
+        fs::remove_dir_all(&dir).unwrap();
+        assert!(link_still_link && real_content == "v2", "enlace conservado={link_still_link}, destino real=«{real_content}»");
+    }
+
+    #[test]
+    #[ignore = "BUG-C19: un nombre de archivo válido de 240+ bytes no se puede guardar porque el temporal supera NAME_MAX"]
+    fn long_but_valid_file_name_can_be_saved() {
+        let dir = scratch_dir("c19");
+        let path = dir.join(format!("{}.rea8", "a".repeat(245))); // 250 bytes: válido en ext4/NTFS
+        fs::write(&path, "v1").expect("preparación: el sistema admite el nombre");
+        let result = write_atomic(&path, "v2");
+        fs::remove_dir_all(&dir).unwrap();
+        assert!(result.is_ok(), "{result:?}");
+    }
 }
