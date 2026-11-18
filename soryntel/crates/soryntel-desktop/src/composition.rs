@@ -23,16 +23,17 @@ pub struct AppServices {
     simulation: SimulationUseCases,
     addins: AddinsUseCases,
     misc: MiscUseCases,
+    load_warnings: Vec<String>,
 }
 
 #[allow(dead_code)]
 impl AppServices {
     pub fn load(custom_main_db: Option<&str>) -> Self {
-        let mut catalog = ThermoDatabase::with_open_defaults();
-        let executable_db_dir = std::env::current_exe()
-            .ok()
-            .and_then(|path| path.parent().map(|dir| dir.join("Databases")));
-
+        let executable_db_dir = executable_db_dir();
+        // Precedencia de MainDB (ADR 0003): `--hsc-db` > `SORYNTEL_MAIN_DB` > ruta por
+        // defecto. Una ruta configurada explícitamente que no carga no recurre a la ruta por
+        // defecto: el error se muestra en la interfaz para que el usuario corrija la
+        // configuración en lugar de trabajar sin saberlo con otra base.
         let main_db_path = custom_main_db.map(PathBuf::from)
             .or_else(|| std::env::var_os("SORYNTEL_MAIN_DB").map(PathBuf::from))
             .or_else(|| {
@@ -42,12 +43,6 @@ impl AppServices {
                     "/home/nando/Descargas/HSC6/Databases/Maindb6.HSC",
                 )
             });
-        if let Some(path) = main_db_path {
-            if let Err(message) = CatalogUseCases::open_main_db(&mut catalog, &path) {
-                eprintln!("[soryntel-db] Warning: {}: {message}", path.display());
-            }
-        }
-
         let own_db_path = std::env::var_os("SORYNTEL_OWN_DB")
             .map(PathBuf::from)
             .or_else(|| {
@@ -57,13 +52,41 @@ impl AppServices {
                     "/home/nando/Descargas/HSC6/Databases/OWNDB6.HSC",
                 )
             });
-        if let Some(path) = own_db_path {
-            if let Err(message) = CatalogUseCases::open_own_db(&mut catalog, &path) {
-                eprintln!("[soryntel-db] Warning: {}: {message}", path.display());
+        Self::load_from_paths(main_db_path.as_deref(), own_db_path.as_deref())
+    }
+
+    /// Carga el catálogo con las rutas ya resueltas. Los fallos no detienen el arranque:
+    /// quedan en [`Self::load_warnings`] para mostrarlos en la interfaz (además de stderr).
+    pub fn load_from_paths(main_db: Option<&Path>, own_db: Option<&Path>) -> Self {
+        let mut catalog = ThermoDatabase::with_open_defaults();
+        let mut warnings = Vec::new();
+        if let Some(path) = main_db {
+            if let Err(message) = CatalogUseCases::open_main_db(&mut catalog, path) {
+                warnings.push(format!("No se pudo cargar MainDB {}: {message}", path.display()));
+            }
+        } else {
+            warnings.push(
+                "No se encontró MainDB: solo está disponible el catálogo abierto incluido. \
+                 Use --hsc-db, SORYNTEL_MAIN_DB o Databases/Maindb6.HSC junto al ejecutable."
+                    .to_string(),
+            );
+        }
+        if let Some(path) = own_db {
+            if let Err(message) = CatalogUseCases::open_own_db(&mut catalog, path) {
+                warnings.push(format!("No se pudo cargar OwnDB {}: {message}", path.display()));
             }
         }
+        for warning in &warnings {
+            eprintln!("[soryntel-db] Warning: {warning}");
+        }
+        let mut services = Self::from_catalog(catalog);
+        services.load_warnings = warnings;
+        services
+    }
 
-        Self::from_catalog(catalog)
+    /// Avisos de carga de las bases (MainDB/OwnDB) para mostrar en la interfaz.
+    pub fn load_warnings(&self) -> &[String] {
+        &self.load_warnings
     }
 
     pub fn from_catalog(catalog: ThermoDatabase) -> Self {
@@ -79,6 +102,7 @@ impl AppServices {
             simulation: SimulationUseCases,
             addins: AddinsUseCases,
             misc: MiscUseCases,
+            load_warnings: Vec::new(),
         }
     }
 
@@ -265,6 +289,20 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("soryntel-comp-{tag}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         dir
+    }
+
+    #[test]
+    fn database_load_failures_are_kept_for_the_ui() {
+        let services = AppServices::load_from_paths(
+            Some(Path::new("/nonexistent/ñ dir/Maindb6.HSC")),
+            Some(Path::new("/nonexistent/OWNDB6.HSC")),
+        );
+        let warnings = services.load_warnings();
+        assert_eq!(warnings.len(), 2, "{warnings:?}");
+        assert!(warnings[0].contains("MainDB") && warnings[0].contains("ñ dir"));
+        assert!(warnings[1].contains("OwnDB"));
+        let none = AppServices::load_from_paths(None, None);
+        assert_eq!(none.load_warnings().len(), 1, "sin MainDB se avisa de que solo hay catálogo abierto");
     }
 
     #[test]

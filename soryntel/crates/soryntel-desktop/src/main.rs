@@ -529,6 +529,7 @@ struct SoryntelDesktopApp {
     launcher_ui_state: launcher_ui::LauncherUiState,
     /// Último número de áreas publicado para Heat Loss (solo en la ventana Balance).
     published_balance_areas: Option<usize>,
+    db_warnings_dismissed: bool,
 }
 
 impl SoryntelDesktopApp {
@@ -609,6 +610,7 @@ impl SoryntelDesktopApp {
             species_state,
             launcher_ui_state: launcher_ui::LauncherUiState::default(),
             published_balance_areas: None,
+            db_warnings_dismissed: false,
         }
     }
 }
@@ -621,6 +623,7 @@ impl eframe::App for SoryntelDesktopApp {
     }
 
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        self.show_database_warnings(ctx);
         match self.window_mode {
             WindowMode::Reaction => {
                 let import_path = crate::ui_common::temp_file_path("soryntel_import_formula.txt");
@@ -790,6 +793,30 @@ impl eframe::App for SoryntelDesktopApp {
 }
 
 impl SoryntelDesktopApp {
+    /// Banner con los fallos de carga de MainDB/OwnDB (en Windows release no hay consola).
+    fn show_database_warnings(&mut self, ctx: &egui::Context) {
+        if self.db_warnings_dismissed || self.services.load_warnings().is_empty() {
+            return;
+        }
+        egui::TopBottomPanel::top("db_load_warnings")
+            .frame(
+                egui::Frame::none()
+                    .fill(egui::Color32::from_rgb(254, 243, 199))
+                    .inner_margin(egui::Margin::symmetric(10.0, 6.0)),
+            )
+            .show(ctx, |ui| {
+                ui.horizontal_wrapped(|ui| {
+                    ui.label(egui::RichText::new("⚠ Bases de datos").strong().color(egui::Color32::from_rgb(146, 64, 14)));
+                    for warning in self.services.load_warnings() {
+                        ui.label(egui::RichText::new(warning).color(egui::Color32::from_rgb(120, 53, 15)));
+                    }
+                    if ui.small_button("Cerrar aviso").clicked() {
+                        self.db_warnings_dismissed = true;
+                    }
+                });
+            });
+    }
+
     fn show_launcher_ui(&mut self, ctx: &egui::Context) {
         // Poll child processes periodically while launcher is open
         ctx.request_repaint_after(std::time::Duration::from_millis(400));
