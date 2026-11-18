@@ -227,6 +227,11 @@ pub fn render_hsc10_footer(
                     );
                 });
             });
+            ui.label(
+                egui::RichText::new(rust_i18n::t!("nav.sorynteldb_attribution").as_ref())
+                    .size(11.0)
+                    .color(egui::Color32::from_rgb(71, 85, 105)),
+            );
         });
     cmd
 }

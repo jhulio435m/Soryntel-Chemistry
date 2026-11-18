@@ -169,6 +169,7 @@ export default function Home() {
               </h2>
               <p className="mt-4 text-pretty text-[17px] leading-relaxed text-[oklch(0.95_0.006_160/0.7)]">
                 Un ejecutable nativo escrito en Rust, sin runtimes que instalar. Versión {VERSION} para x86‑64.
+                Los instaladores de las nuevas versiones incluyen la base de datos SoryntelDB.
               </p>
             </div>
             <div className="mx-auto mt-12 grid max-w-3xl gap-5 md:grid-cols-2">
