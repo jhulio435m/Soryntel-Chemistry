@@ -10,22 +10,36 @@ use std::collections::{BTreeMap, BTreeSet};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SpeciesRow {
     pub formula: String,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub temp_display: f64,
     pub temp_formula: Option<String>,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub pressure_bar: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub amount_kmol: f64,
     pub amount_formula: Option<String>,
     // Computed outputs (in workbook display energy unit)
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub mw: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub amount_kg: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub amount_nm3: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub heat_content: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub total_h: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub hc_per_kmol: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub tot_h_per_kmol: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub ts: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub g: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub ex_phys: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub ex_tot: f64,
     pub missing_in_db: bool,
 }
@@ -68,13 +82,19 @@ impl SpeciesRow {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StreamGroup {
     pub name: String,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub stream_temp_display: f64,
     pub species: Vec<SpeciesRow>,
     // Computed stream sums
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub sum_kmol: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub sum_kg: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub sum_nm3: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub sum_heat_content: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub sum_total_h: f64,
 }
 
@@ -97,32 +117,49 @@ impl StreamGroup {
 pub struct BalanceArea {
     pub name: String,
     pub in_streams: Vec<StreamGroup>,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub extra_heat: f64, // Extra Heat on INx (display energy unit)
     pub out_streams: Vec<StreamGroup>,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub heat_losses: f64, // Heat Losses on OUTx (display energy unit)
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ElementBalanceRow {
     pub element: String,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub in_kmol: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub out_kmol: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub balance_kmol: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub in_kg: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub out_kg: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub balance_kg: f64,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct SheetTotals {
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub kmol: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub kg: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub nm3: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub heat_content: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub total_h: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub ts: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub g: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub ex_phys: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub ex_tot: f64,
 }
 
@@ -140,17 +177,24 @@ pub struct AreaBalanceSummary {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StreamElementRow {
     pub element: String,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub kmol: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub kg: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub mol_pct: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub wt_pct: f64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StreamComposition {
     pub stream_name: String,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub temp_display: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub total_kmol: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub total_kg: f64,
     pub elements: Vec<StreamElementRow>,
 }
@@ -160,13 +204,18 @@ pub struct TargetRow {
     pub name: String,
     /// e.g. "IN1!D11" or "IN1!STREAM:GAS:TEMP"
     pub var_cell_ref: String,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub test_value: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub min_val: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub max_val: f64,
     pub target_name: String,
     /// e.g. "BALANCE1!H4" (Total H Balance) or "EL1!Cu:IN"
     pub target_cell_ref: String,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub current_target_val: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub goal_value: f64,
     pub max_iterations: usize,
 }
@@ -182,8 +231,11 @@ pub struct DiagramSeriesDef {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DiagramConfig {
     pub title: String,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub x_min: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub x_max: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub x_step: f64,
     pub x_cell_ref: String,
     pub x_label: String,

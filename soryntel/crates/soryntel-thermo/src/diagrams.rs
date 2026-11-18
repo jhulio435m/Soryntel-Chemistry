@@ -96,6 +96,7 @@ impl DiagramEnergyUnit {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DiagramSpeciesInput {
     pub formula: String,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub coeff: f64,
     #[serde(default)]
     pub row_index: Option<usize>,
@@ -108,8 +109,11 @@ pub struct DiagramSpeciesInput {
 pub struct DiagramRequest {
     pub species: Vec<DiagramSpeciesInput>,
     pub diagram_type: DiagramType,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub t_min_k: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub t_max_k: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub step_k: f64,
     pub energy_unit: DiagramEnergyUnit,
     pub per_kg: bool,
@@ -118,7 +122,9 @@ pub struct DiagramRequest {
 /// Single evaluated point on a species curve.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub struct DiagramPoint {
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub t_k: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub y_val: f64,
     pub extrapolated: bool,
 }
@@ -128,10 +134,13 @@ pub struct DiagramPoint {
 pub struct DiagramSeries {
     pub label: String,
     pub formula: String,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub coeff: f64,
     #[serde(default)]
     pub row_index: Option<usize>,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub t_min_db_k: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub t_max_db_k: f64,
     pub points: Vec<DiagramPoint>,
 }

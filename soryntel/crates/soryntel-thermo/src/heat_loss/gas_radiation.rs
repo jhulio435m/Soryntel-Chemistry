@@ -74,11 +74,17 @@ impl OpticalDepthGeometry {
 /// Molar fractions of the 6 radiating gas species (sum <= 1.0; remainder is non-radiating e.g. N2).
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, Default)]
 pub struct GasComposition {
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub x_h2o: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub x_co2: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub x_co: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub x_no: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub x_so2: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub x_ch4: f64,
 }
 
@@ -104,10 +110,15 @@ impl GasComposition {
 /// Input parameters for Gas Mixture Radiation Calculator (Fig. 9).
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub struct GasRadiationInput {
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub t_gas_k: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub t_surface_k: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub pressure_bar: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub optical_depth_m: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub surface_emissivity: f64,
     pub composition: GasComposition,
 }
@@ -117,19 +128,29 @@ pub struct GasRadiationInput {
 pub struct SpectralBandRow {
     pub species: String,
     pub band_name: String,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub nyy_low_cm_1: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub nyy_upp_cm_1: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub f_low: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub f_upp: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub df: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub band_emissivity: f64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GasRadiationResult {
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub gas_emissivity: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub gas_absorptivity: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub heat_flux_w_m2: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub hr_w_m2_k: f64,
     pub bands: Vec<SpectralBandRow>,
     #[serde(default)]
@@ -139,19 +160,33 @@ pub struct GasRadiationResult {
 /// Complete 8-row User Input specification for the Particle Suspension Radiation Calculator (Fig. 10).
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub struct ParticleSuspensionSpec {
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub gas_amount_nm3_h: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub particle_amount_t_h: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub particle_density_g_ml: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub particle_diameter_mm: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub particle_emissivity: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub cube_width_height_m: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub cube_thickness_m: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub tube_diameter_m: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub t_gas_k: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub pressure_bar: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub gas_emissivity_at_gas_temp: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub gas_absorptivity_at_surface_temp: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub t_surface_k: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub surface_emissivity: f64,
 }
 
@@ -180,34 +215,58 @@ impl Default for ParticleSuspensionSpec {
 /// Complete 16-row `Results` table output for the Particle Suspension Radiation Calculator (Fig. 10).
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub struct ParticleSuspensionDetailedResult {
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub gas_flow_m3_h: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub particle_flow_m3_h: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub total_flow_m3_h: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub particles_g_m3: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub particles_ml_m3: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub particles_vol_pct: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub particle_radius_mm: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub particle_cross_section_mm2: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub particle_volume_mm3: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub particle_weight_g: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub particles_per_m3: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub cube_volume_m3: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub particles_in_cube: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub particle_distance_mm: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub gas_speed_m3_s: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub gas_speed_in_tube_m_s: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub cloud_emissivity: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub total_emissivity_gc: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub total_absorptivity_gc: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub heat_flux_kw_m2: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub hr_w_m2_k: f64,
 }
 
 /// Particle suspension inputs (Eqs. 48-53, Fig. 10).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ParticleCloudInput {
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub particle_emissivity: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub number_density_m3: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub cloud_thickness_m: f64,
     /// Pairs `(diameter_m, count_weight)`. If single uniform size, provide `[(d, 1.0)]`.
     pub size_distribution: Vec<(f64, f64)>,

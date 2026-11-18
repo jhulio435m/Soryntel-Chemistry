@@ -407,16 +407,21 @@ pub struct AqueousScaleSummary {
     pub formula: String,
     pub charge: i32,
     /// Conventional molal H+ = 0 entropy at 298.15 K (`J/(mol·K)`).
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub s_conv_298_j: f64,
     /// Third-law absolute entropy scale `S_abs = S_conv - 5.0 * 4.184 * z` (`J/(mol·K)`).
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub s_abs_298_j: f64,
     /// Dilution mixing entropy contribution `R * ln(1 / 55.51) ≈ -33.392 J/(mol·K)` (`-7.981 cal/(mol·K)`).
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub delta_s_mix_j: f64,
     /// Pure-ion mole-fraction scale entropy `S_conv - (-delta_s_mix)` (`J/(mol·K)`).
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub s_pure_ion_298_j: f64,
     /// True iff `Phase == AqueousIon` and `B = C = D = 0` on its sole interval.
     pub criss_cobble_active: bool,
     /// Criss–Cobble `Cp(573.15 K)` in `J/(mol·K)` when active.
+    #[serde(default, with = "soryntel_core::serde_nonfinite::option")]
     pub cp_at_300c_j: Option<f64>,
 }
 
@@ -454,7 +459,9 @@ pub fn analyze_aqueous_scales(species: &ChemicalSpecies) -> Option<AqueousScaleS
 /// Experimental heat-capacity node `(T [K], Cp [J/(mol·K)])`.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub struct CpDataPoint {
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub t_k: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub cp_j: f64,
 }
 
@@ -485,7 +492,9 @@ pub struct CpFitResult {
     pub kelley_si: KelleyCoefficients,
     pub fitted_cp_j: Vec<f64>,
     pub rel_error_pct: Vec<f64>,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub rmse_j: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub max_abs_error_pct: f64,
 }
 
@@ -939,13 +948,20 @@ pub fn convert_cp_function(
 /// $G(T) = h + s\cdot 10^{-3}T + a\cdot 10^{-3}T\ln T + b\cdot 10^{-6}T^2 + c\,T^{-1} + d\cdot 10^{-9}T^3$
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub struct GibbsCoeffsInput {
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub h: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub s: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub a: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub b: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub c: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub d: f64,
     pub is_calories: bool,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub t_ref_k: f64,
 }
 
@@ -967,8 +983,11 @@ impl Default for GibbsCoeffsInput {
 /// Output values of `Convert G(T)` in **SI units** (`J/mol`, `J/(mol·K)`) alongside raw unit factor.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub struct GibbsConvertOutput {
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub h_ref_j: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub s_ref_j: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub g_ref_j: f64,
     pub kelley_si: KelleyCoefficients,
 }

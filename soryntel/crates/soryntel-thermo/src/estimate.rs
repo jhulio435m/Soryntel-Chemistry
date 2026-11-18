@@ -80,33 +80,46 @@ impl FunctionalGroup {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ElementInfo {
     pub symbol: String,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub amount: f64,
     pub charge: i32,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub weight_pct: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub atom_pct: f64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DatabaseRefValues {
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub h_kj_mol: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub s_j_molk: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub cp_j_molk: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub dg_kj_mol: f64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EstimateRow {
     pub formula: String,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub temp_c: f64,
     pub species_type: EstimateSpeciesType,
     pub organic_group: OrganicGroup,
     pub functional_group: FunctionalGroup,
     pub oxidation_set_idx: usize,
     pub available_sets: usize,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub mw: f64,
+    #[serde(default, with = "soryntel_core::serde_nonfinite::option")]
     pub est_h_kj_mol: Option<f64>,
+    #[serde(default, with = "soryntel_core::serde_nonfinite::option")]
     pub est_s_j_molk: Option<f64>,
+    #[serde(default, with = "soryntel_core::serde_nonfinite::option")]
     pub est_cp_j_molk: Option<f64>,
+    #[serde(default, with = "soryntel_core::serde_nonfinite::option")]
     pub est_dg_kj_mol: Option<f64>,
     pub db_vals: Option<DatabaseRefValues>,
     pub elements: Vec<ElementInfo>,

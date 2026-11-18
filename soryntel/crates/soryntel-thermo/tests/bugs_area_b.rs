@@ -213,7 +213,6 @@ fn b03_chemical_exergy_does_not_silently_skip_missing_reference_element() {
 // ---------------------------------------------------------------------------
 
 #[test]
-#[ignore = "BUG-B04: un .rea8 con log K > 308 (K = inf) se serializa como null y no se puede volver a leer"]
 fn b04_rea8_with_infinite_k_roundtrips() {
     // 4Al + 3O2(g) = 2Al2O3 a 298,15 K: log K ≈ 554 (JANAF), K desborda a +inf.
     let al = species_cal("Al", Phase::Solid, 0.0, 6.77, [4.94, 2.96, 0.0, 0.0], 26.98);
@@ -264,6 +263,48 @@ fn b04_rea8_with_infinite_k_roundtrips() {
     let json = soryntel_thermo::serialize_rea8_workbook(&wb).unwrap();
     // Hoy: "invalid type: null, expected f64".
     soryntel_thermo::deserialize_rea8_workbook(&json).expect("el .rea8 guardado debe poder abrirse");
+}
+
+#[test]
+fn b04_bal8_and_exe8_with_non_finite_values_roundtrip() {
+    let mut wb = preset_h2o();
+    wb.areas[0].in_streams[0].species[0].total_h = f64::INFINITY;
+    wb.areas[0].in_streams[0].species[0].ex_phys = f64::NAN;
+    wb.areas[0].extra_heat = f64::NEG_INFINITY;
+    let json = soryntel_thermo::balance_engine::serialize_bal8_workbook(&wb).unwrap();
+    let back = soryntel_thermo::balance_engine::deserialize_bal8_workbook(&json).unwrap();
+    assert_eq!(back.areas[0].in_streams[0].species[0].total_h, f64::INFINITY);
+    assert!(back.areas[0].in_streams[0].species[0].ex_phys.is_nan());
+    assert_eq!(back.areas[0].extra_heat, f64::NEG_INFINITY);
+    // Los archivos antiguos con `null` siguen abriéndose.
+    let legacy = json.replace("\"inf\"", "null");
+    assert!(soryntel_thermo::balance_engine::deserialize_bal8_workbook(&legacy).is_ok());
+
+    let mut ex = soryntel_thermo::exergy::ExergyWorkbook::new_fig2_example();
+    ex.streams[0].temp_k = f64::INFINITY;
+    let json = ex.to_exe8_json().unwrap();
+    let back = soryntel_thermo::exergy::ExergyWorkbook::from_exe8_str(&json).unwrap();
+    assert_eq!(back.streams[0].temp_k, f64::INFINITY);
+}
+
+#[test]
+fn b04_htr8_and_gem9_with_non_finite_inputs_roundtrip() {
+    use soryntel_thermo::heat_loss::{model, presets};
+    let mut wb = presets::preset_simple_case();
+    wb.sheets[0].columns[0].thickness_m = f64::INFINITY;
+    let json = model::serialize_htr8_workbook(&wb).unwrap();
+    let back = model::deserialize_htr8_workbook(&json).unwrap();
+    assert_eq!(back.sheets[0].columns[0].thickness_m, f64::INFINITY);
+
+    let mut params = EquilibriumParams::default();
+    params.temp_range.final_val = f64::INFINITY;
+    let file = soryntel_thermo::equilibrium::EquilibriumWorkbookFile {
+        system: EquilibriumSystem { title: "x".into(), phases: vec![] },
+        params,
+    };
+    let json = file.to_gem9_json().unwrap();
+    let back = soryntel_thermo::equilibrium::EquilibriumWorkbookFile::from_gem9_str(&json).unwrap();
+    assert_eq!(back.params.temp_range.final_val, f64::INFINITY);
 }
 
 // ---------------------------------------------------------------------------

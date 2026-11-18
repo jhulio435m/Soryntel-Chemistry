@@ -1196,13 +1196,18 @@ fn detect_ring_cycles(atoms: &[AtomNode], bonds: &[BondEdge]) -> Vec<Vec<usize>>
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub struct BensonGroupParams {
     pub name: &'static str,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub dh_kcal: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub s_cal: f64,
     /// Cp in cal/(mol·K) at [300, 400, 500, 600, 800, 1000, 1500] K.
     pub cp_cal: [f64; 7],
     /// Joback Tb increment (K) and Tm increment (K) for Liquid/Solid estimation.
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub joback_tb: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub joback_tm: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub joback_cpa: f64,
 }
 
@@ -1289,19 +1294,25 @@ pub fn lookup_benson_group(name: &str) -> Option<&'static BensonGroupParams> {
 pub struct BensonGroupEntry {
     pub group_name: String,
     pub count: usize,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub dh_kcal_each: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub s_cal_each: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub cp_cal_300_each: f64,
     pub is_estimated_fallback: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BensonParamsInput {
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub sigma_tot: f64,
     pub n_opt: usize,
     pub gauche_count: usize,
     pub cis_count: usize,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub ring_strain_kcal: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub ring_entropy_cal: f64,
 }
 
@@ -1322,10 +1333,13 @@ impl Default for BensonParamsInput {
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub struct PhaseThermoSummary {
     /// Enthalpy of formation in J/mol
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub delta_h_f_j: f64,
     /// Entropy in J/(mol·K)
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub s_j_k: f64,
     /// Cp(298.15 K) in J/(mol·K)
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub cp_j_k: f64,
 }
 
@@ -1334,6 +1348,7 @@ pub struct BensonEstimationResult {
     pub formula: String,
     pub common_name: String,
     pub chemical_name: String,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub molecular_weight: f64,
     pub groups: Vec<BensonGroupEntry>,
     pub warnings: Vec<String>,
@@ -1347,7 +1362,9 @@ pub struct BensonEstimationResult {
     pub db_matches: Vec<String>,
     pub gas_kelley: KelleyCoefficients,
     pub cp_grid_j_k: Vec<(f64, f64)>,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub tm_est_k: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub tb_est_k: f64,
 }
 

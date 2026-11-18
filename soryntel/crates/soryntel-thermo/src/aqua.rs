@@ -167,11 +167,17 @@ pub struct OwnBinaryRow {
     pub cation: String,
     pub anion: String,
     pub show_t_params: bool,
+    #[serde(default, with = "soryntel_core::serde_nonfinite::option")]
     pub min_t_c: Option<f64>,
+    #[serde(default, with = "soryntel_core::serde_nonfinite::option")]
     pub max_t_c: Option<f64>,
+    #[serde(default, with = "soryntel_core::serde_nonfinite::option")]
     pub min_m: Option<f64>,
+    #[serde(default, with = "soryntel_core::serde_nonfinite::option")]
     pub max_m: Option<f64>,
+    #[serde(default, with = "soryntel_core::serde_nonfinite::option")]
     pub min_i: Option<f64>,
+    #[serde(default, with = "soryntel_core::serde_nonfinite::option")]
     pub max_i: Option<f64>,
     pub beta0: PitzerTempCurve,
     pub beta1: PitzerTempCurve,
@@ -184,11 +190,17 @@ pub struct OwnThetaRow {
     pub ion_i: String,
     pub ion_j: String,
     pub show_t_params: bool,
+    #[serde(default, with = "soryntel_core::serde_nonfinite::option")]
     pub min_t_c: Option<f64>,
+    #[serde(default, with = "soryntel_core::serde_nonfinite::option")]
     pub max_t_c: Option<f64>,
+    #[serde(default, with = "soryntel_core::serde_nonfinite::option")]
     pub min_m: Option<f64>,
+    #[serde(default, with = "soryntel_core::serde_nonfinite::option")]
     pub max_m: Option<f64>,
+    #[serde(default, with = "soryntel_core::serde_nonfinite::option")]
     pub min_i: Option<f64>,
+    #[serde(default, with = "soryntel_core::serde_nonfinite::option")]
     pub max_i: Option<f64>,
     pub theta: PitzerTempCurve,
 }
@@ -199,11 +211,17 @@ pub struct OwnPsiRow {
     pub ion2: String,
     pub ion3: String,
     pub show_t_params: bool,
+    #[serde(default, with = "soryntel_core::serde_nonfinite::option")]
     pub min_t_c: Option<f64>,
+    #[serde(default, with = "soryntel_core::serde_nonfinite::option")]
     pub max_t_c: Option<f64>,
+    #[serde(default, with = "soryntel_core::serde_nonfinite::option")]
     pub min_m: Option<f64>,
+    #[serde(default, with = "soryntel_core::serde_nonfinite::option")]
     pub max_m: Option<f64>,
+    #[serde(default, with = "soryntel_core::serde_nonfinite::option")]
     pub min_i: Option<f64>,
+    #[serde(default, with = "soryntel_core::serde_nonfinite::option")]
     pub max_i: Option<f64>,
     pub psi: PitzerTempCurve,
 }
@@ -213,11 +231,17 @@ pub struct OwnLambdaRow {
     pub neutral: String,
     pub ion: String,
     pub show_t_params: bool,
+    #[serde(default, with = "soryntel_core::serde_nonfinite::option")]
     pub min_t_c: Option<f64>,
+    #[serde(default, with = "soryntel_core::serde_nonfinite::option")]
     pub max_t_c: Option<f64>,
+    #[serde(default, with = "soryntel_core::serde_nonfinite::option")]
     pub min_m: Option<f64>,
+    #[serde(default, with = "soryntel_core::serde_nonfinite::option")]
     pub max_m: Option<f64>,
+    #[serde(default, with = "soryntel_core::serde_nonfinite::option")]
     pub min_i: Option<f64>,
+    #[serde(default, with = "soryntel_core::serde_nonfinite::option")]
     pub max_i: Option<f64>,
     pub lambda: PitzerTempCurve,
 }
@@ -677,7 +701,9 @@ pub fn parse_ion_charge_tag(formula: &str) -> Option<i32> {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AquaSpeciesInput {
     pub formula: String,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub temp: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub amount_kmol: f64,
 }
 
@@ -1757,6 +1783,7 @@ pub fn analyze_parameter_sets(
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DensityInputRow {
     pub component: String,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub mass_fraction: f64,
 }
 

@@ -182,8 +182,11 @@ fn criss_cobble_eval(species: &ChemicalSpecies, t_k: f64) -> ThermoPointSI {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CalculationRequest {
     pub input: String,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub t_from: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub t_to: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub t_step: f64,
     pub temp_unit: TemperatureUnit,
     pub energy_unit: EnergyUnit,
@@ -194,10 +197,15 @@ pub struct CalculationRequest {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SubstanceRow {
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub temperature: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub cp: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub h: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub s: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub g: f64,
     pub reference: String,
     pub is_transition: bool,
@@ -205,12 +213,19 @@ pub struct SubstanceRow {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ReactionRow {
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub temperature: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub delta_h: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub delta_s: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub delta_g: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub k_eq: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub log10_k: f64,
+    #[serde(default, with = "soryntel_core::serde_nonfinite::option")]
     pub e_vs_she_v: Option<f64>,
 }
 
@@ -218,12 +233,18 @@ pub struct ReactionRow {
 pub struct SpeciesDataRow {
     pub formula: String,
     pub side: String, // "Reactant" or "Product"
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub molar_mass: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub conc_wt_pct: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub mol: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub mass_g: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub volume: f64,
     pub volume_unit: String,
+    #[serde(default, with = "soryntel_core::serde_nonfinite::option")]
     pub extrapolated_from_k: Option<f64>,
 }
 
@@ -669,6 +690,7 @@ pub struct ReactionCollectedSheet {
     pub response: CalculationResponse,
     pub visible_in_plot: bool,
     /// Multiplier for `Input Amounts` (`mol`, `g`, `Volume`) in `Species Data` (default `1.0`).
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub amount_scale: f64,
 }
 
@@ -677,9 +699,13 @@ pub struct ReactionCollectedSheet {
 pub struct ReactionWorkbookFile {
     pub version: String,
     pub formula_input: String,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub smallest_coeff: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub t_from: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub t_to: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub t_step: f64,
     pub temp_unit: TemperatureUnit,
     pub energy_unit: EnergyUnit,

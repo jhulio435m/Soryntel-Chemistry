@@ -175,6 +175,7 @@ pub struct UnitEntry {
     pub name: String,
     pub symbol: String,
     /// Number of this unit equal to 1 base unit of its quantity (`c_base = 1.0`).
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub coef: f64,
 }
 
@@ -192,6 +193,7 @@ pub struct UnitQuantity {
 pub struct ConstantEntry {
     pub name: String,
     pub symbol: String,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub value: f64,
     pub unit: String,
     pub alt_value: Option<(f64, String)>,
@@ -200,7 +202,9 @@ pub struct ConstantEntry {
 /// Grain size row in the `Mesh` sheet.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub struct MeshEntry {
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub mesh: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub mm: f64,
 }
 
@@ -208,23 +212,30 @@ pub struct MeshEntry {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DryAirComponent {
     pub species: String,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub vol_pct: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub wt_pct: f64,
 }
 
 /// Saturated water vapour pressure row in the `H2O` sheet.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub struct H2OVapourRow {
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub temp_c: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub pressure_kn_m2: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub pressure_atm: f64,
 }
 
 /// One row of the `Convert` sheet (`Data 1 | Units 1 | Data 2 | Units 2`).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ConvertRow {
+    #[serde(default, with = "soryntel_core::serde_nonfinite::option")]
     pub data1: Option<f64>,
     pub unit1: String,
+    #[serde(default, with = "soryntel_core::serde_nonfinite::option")]
     pub data2: Option<f64>,
     pub unit2: String,
 }
@@ -232,12 +243,19 @@ pub struct ConvertRow {
 /// Point-wise moist air humidity evaluation result.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub struct AirHumidityPoint {
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub temp_c: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub rh_pct: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub total_p_bar: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub p_sat_bar: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub p_h2o_bar: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub vol_pct: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub g_per_nm3: f64,
 }
 

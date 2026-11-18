@@ -50,7 +50,9 @@ impl PotentialScale {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ElementSpec {
     pub symbol: String,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub molality: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub pressure_bar: f64,
 }
 
@@ -60,17 +62,26 @@ pub struct EhPhRequest {
     pub elements: Vec<ElementSpec>,
     pub main_element: String,
     pub species: Vec<ChemicalSpecies>,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub t_k: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub min_ph: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub max_ph: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub min_eh_v: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub max_eh_v: f64,
     pub potential_scale: PotentialScale,
     pub criss_cobble: bool,
     pub use_davies: bool,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub ionic_strength: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub correction_factor: f64,
+    #[serde(default, with = "soryntel_core::serde_nonfinite::option")]
     pub dielectric_constant: Option<f64>,
+    #[serde(default, with = "soryntel_core::serde_nonfinite::option")]
     pub delta_g_h2o_kcal: Option<f64>,
     pub delta_g_overrides_kcal: BTreeMap<String, f64>,
     pub show_predominance_ions: bool,
@@ -107,9 +118,13 @@ impl Default for EhPhRequest {
 pub struct BoundarySegment {
     pub species_a: String,
     pub species_b: String,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub x1_ph: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub y1_v: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub x2_ph: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub y2_v: f64,
 }
 
@@ -119,8 +134,11 @@ pub struct PredominanceRegion {
     pub area_no: usize,
     pub species: String,
     pub phase: Phase,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub delta_g_kcal_mol: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub label_ph: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub label_eh_v: f64,
     pub cell_count: usize,
 }
@@ -129,6 +147,7 @@ pub struct PredominanceRegion {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SpeciesTableRow {
     pub formula: String,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub delta_g_kcal_mol: f64,
     pub area_no: Option<usize>,
     pub segments: Vec<(f64, f64, f64, f64)>,
@@ -138,9 +157,13 @@ pub struct SpeciesTableRow {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EhPhResult {
     pub title: String,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub t_k: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub dielectric_constant: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub delta_g_h2o_kcal: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub p_sat_h2o_bar: f64,
     pub warnings: Vec<String>,
     pub segments: Vec<BoundarySegment>,

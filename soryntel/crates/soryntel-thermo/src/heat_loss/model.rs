@@ -235,6 +235,7 @@ impl ConvectionGeometry {
 pub struct SolidConductivityData {
     pub name: String,
     pub category: String,
+    #[serde(default, with = "soryntel_core::serde_nonfinite::option")]
     pub density_kg_m3: Option<f64>,
     /// Pairs of `(T_K, k [W/(m·K)])` sorted ascending by temperature.
     pub k_table: Vec<(f64, f64)>,
@@ -255,12 +256,18 @@ impl SolidConductivityData {
 /// Single temperature point of fluid thermophysical properties.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub struct FluidPropertiesPoint {
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub t_k: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub density_kg_m3: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub cp_j_kg_k: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub k_w_m_k: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub mu_pa_s: f64,
     /// Optional volumetric thermal expansion coefficient beta [1/K]. If None, uses 1/T_K (ideal gas).
+    #[serde(default, with = "soryntel_core::serde_nonfinite::option")]
     pub beta_1_k: Option<f64>,
 }
 
@@ -332,7 +339,9 @@ impl FluidPropertyTable {
 /// Term `coeff * v^exponent` for custom `hc(v)` convection function tab.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub struct ConvectionFunctionTerm {
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub coeff: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub exponent: f64,
 }
 
@@ -348,6 +357,7 @@ pub struct ConvectionFunctionPreset {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SurfaceEmissivityData {
     pub name: String,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub emissivity: f64,
     pub measurement_type: String, // "(h)" or "(n)"
     pub temp_range_desc: String,
@@ -360,53 +370,64 @@ pub struct HeatLossColumn {
     pub layer_material: String,
     pub surface_material: String,
     /// Left edge temperature in Kelvin.
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub t_left_k: f64,
     pub t_left_fixed: bool,
     /// Right edge temperature in Kelvin.
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub t_right_k: f64,
     pub t_right_fixed: bool,
     /// Thickness in meters (for SolidLayer and Enclosure).
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub thickness_m: f64,
     /// Calculation grid subdivisions (default 10 for SolidLayer).
     pub calculation_grid: usize,
     /// Thermal conductivity W/(m·K).
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub k_w_m_k: f64,
     pub k_fixed: bool,
     pub solid_data: Option<SolidConductivityData>,
     /// Convection coefficient W/(m^2·K).
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub hc_w_m2_k: f64,
     pub hc_fixed: bool,
     pub convection_regime: ConvectionRegime,
     pub convection_geometry: ConvectionGeometry,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub fluid_speed_m_s: f64,
+    #[serde(default, with = "soryntel_core::serde_nonfinite::option")]
     pub characteristic_length_override_m: Option<f64>,
     pub fluid_data: Option<FluidPropertyTable>,
     pub custom_hc_terms: Vec<ConvectionFunctionTerm>,
     /// Radiation coefficient W/(m^2·K).
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub hr_w_m2_k: f64,
     pub hr_fixed: bool,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub emissivity: f64,
     /// Optional second surface emissivity for Enclosure.
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub emissivity_opposite: f64,
     /// Thermal contact resistance in K/W (used when ColumnType::LayerContact).
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub contact_resistance_k_w: f64,
     /// Detailed row 61: Gas emissivity (Ch. 12.1 step 4 / Ch. 12.3.7).
-    #[serde(default)]
+    #[serde(default, with = "soryntel_core::serde_nonfinite::option")]
     pub gas_emissivity: Option<f64>,
     /// Detailed row 62: Gas absorptivity (Ch. 12.1 step 4 / Ch. 12.3.7).
-    #[serde(default)]
+    #[serde(default, with = "soryntel_core::serde_nonfinite::option")]
     pub gas_absorptivity: Option<f64>,
     /// Detailed row 69: Particle cloud emissivity (Ch. 12.1 step 4 / Ch. 12.3.8).
-    #[serde(default)]
+    #[serde(default, with = "soryntel_core::serde_nonfinite::option")]
     pub particle_cloud_emissivity: Option<f64>,
     /// Iterative 0..3000 °C (step 50 °C) gas emissivity table from `Select iterative`.
     #[serde(default)]
     pub iterative_gas_eps_table: Vec<(f64, f64)>,
     /// Detailed row 92: Min valid material temperature in K (Ch. 12.3.2 item 4).
-    #[serde(default)]
+    #[serde(default, with = "soryntel_core::serde_nonfinite::option")]
     pub t_min_k: Option<f64>,
     /// Detailed row 93: Max valid material temperature in K (Ch. 12.3.2 item 4).
-    #[serde(default)]
+    #[serde(default, with = "soryntel_core::serde_nonfinite::option")]
     pub t_max_k: Option<f64>,
 }
 
@@ -455,6 +476,7 @@ pub struct HeatLossSheet {
     pub geometry: Geometry,
     pub mode: CalculationMode,
     /// Used in `TemperatureProfile` mode as the fixed sheet heat flow in Watts.
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub fixed_heat_flow_w: f64,
     pub columns: Vec<HeatLossColumn>,
     pub convection_geometry_override: Option<ConvectionGeometry>,
@@ -490,15 +512,25 @@ impl Default for HeatLossWorkbook {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ColumnResult {
     pub column_index: usize,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub t_left_k: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub t_right_k: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub k_avg_w_m_k: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub hc_w_m2_k: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub hr_w_m2_k: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub thermal_resistance_k_w: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub heat_flow_w: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub heat_flux_w_m2: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub surface_area_m2: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub cumulative_thickness_m: f64,
     /// Discretized temperature profile points `(cumulative_x_m, T_K)` inside this column.
     pub profile_points: Vec<(f64, f64)>,
@@ -508,6 +540,7 @@ pub struct ColumnResult {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SheetResult {
     pub sheet_name: String,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub heat_flow_w: f64,
     pub iterations: usize,
     pub converged: bool,
@@ -518,6 +551,7 @@ pub struct SheetResult {
 /// Calculated output for the entire workbook.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WorkbookResult {
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub total_heat_flow_w: f64,
     pub sheet_results: Vec<SheetResult>,
 }

@@ -5,6 +5,7 @@ use thiserror::Error;
 
 pub mod catalog;
 pub mod ports;
+pub mod serde_nonfinite;
 pub mod species;
 
 pub use catalog::{

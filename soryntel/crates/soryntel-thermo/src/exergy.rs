@@ -27,20 +27,35 @@ pub enum ExergyStreamKind {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ExergySpeciesRow {
     pub formula: String,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub mass_kg: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub amount_mol: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub mol_fraction: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub temp_k: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub pressure_bar: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub s_j_molk: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub h_kj_mol: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub h_total_kj: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub ex_elemental_kj_mol: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub ex_che_kj_mol: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub ex_phy_kj_mol: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub ex_tot_kj_mol: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub ex_che_kj: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub ex_phy_kj: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub ex_tot_kj: f64,
     pub missing_in_db: bool,
     pub phase_warning: Option<String>,
@@ -76,28 +91,48 @@ pub struct ExergyStream {
     pub name: String,
     pub side: ExergySide,
     pub kind: ExergyStreamKind,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub temp_k: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub pressure_bar: f64,
     pub species: Vec<ExergySpeciesRow>,
     // Energy stream inputs
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub heat_kj: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub heat_temp_k: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub electricity_kj: f64,
     // Computed totals
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub mass_kg: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub amount_mol: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub mol_fraction: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub s_j_molk_sum: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub h_kj_mol_sum: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub h_total_kj: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub ex_elemental_kj_mol: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub ex_che_kj_mol_sum: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub ex_phy_kj_mol_sum: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub ex_tot_kj_mol_sum: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub ex_che_kj: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub ex_phy_kj: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub ex_tot_kj: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub ex_tot_stream_kj_mol: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub ex_tot_stream_kj: f64,
 }
 
@@ -170,8 +205,11 @@ impl ExergyStream {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ExergyWorkbook {
     pub streams: Vec<ExergyStream>,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub mass_balance_kg: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub heat_balance_kj: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub exergy_balance_kj: f64,
 }
 

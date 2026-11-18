@@ -180,16 +180,23 @@ impl SweepVariable {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EquilibriumSpeciesInput {
     pub formula: String,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub feed_temp_c: f64,
     /// Constant activity coefficient or formula string (e.g. "1.0" or "EXP(8495/T - 2.653)").
     pub activity_coeff_expr: String,
+    #[serde(default, with = "soryntel_core::serde_nonfinite::option")]
     pub fixed_activity: Option<f64>,
     /// Discharge coefficient in Cell Mode (e.g. -2.0 for Pb, -1.0 for e-(Pb)).
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub discharge_coeff: f64,
     pub amount_unit: EquilibriumAmountUnit,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub initial_amount: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub add_x_amount: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub add_z_amount: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub remove_percent: f64,
     /// If true, excluded via Warnings dialog.
     pub excluded: bool,
@@ -209,13 +216,16 @@ pub struct EquilibriumPhase {
     /// Electrode role in Cell Mode ("anode", "cathode", or empty).
     pub electrode_role: String,
     /// Capacitance in Farads (Cell Mode).
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub capacitance_farads: f64,
 }
 
 /// Range specification for a single state variable.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub struct AxisRange {
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub initial: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub final_val: f64,
     pub steps: usize,
     pub log_scale: bool,
@@ -237,6 +247,7 @@ impl Default for AxisRange {
 pub struct TargetSpec {
     pub enabled: bool,
     pub target_species: String,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub target_amount_kmol: f64,
 }
 
@@ -277,18 +288,19 @@ pub struct EquilibriumParams {
     pub ac_steps: usize,
     pub target: TargetSpec,
     /// Base unit multiplier: 1000.0 for kmol-scale (desktop), 1.0 for mol-scale (.IGI).
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub input_scale_to_mol: f64,
     /// Fig. 6 (`13.4.3`): Add initial ideal gas volume at `initial_pressure_bar` as base volume.
     #[serde(default)]
     pub use_as_base_volume: bool,
     /// Fig. 6 (`13.4.3`): Initial pressure (bar) used to compute base gas volume.
-    #[serde(default = "default_one")]
+    #[serde(default = "default_one", with = "soryntel_core::serde_nonfinite")]
     pub initial_pressure_bar: f64,
     /// Fig. 6 (`13.4.7`): Automatically include H2O from aqueous g/l or mol/l solutions.
     #[serde(default)]
     pub allow_titrations: bool,
     /// Solution density in kg/l for `Allow titrations` (default 1.0 kg/l).
-    #[serde(default = "default_one")]
+    #[serde(default = "default_one", with = "soryntel_core::serde_nonfinite")]
     pub titration_density_kg_l: f64,
     /// Fig. 6: Allow constrained / damped Gibbs minimization.
     #[serde(default)]
@@ -390,12 +402,19 @@ pub struct SpeciesEquilibriumResult {
     pub phase_idx: usize,
     pub phase_name: String,
     pub formula: String,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub input_amount_mol: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub equil_amount_mol: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub mole_fraction: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub activity_coeff: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub activity: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub enthalpy_kj: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub entropy_jk: f64,
     pub physical_phase: Phase,
 }
@@ -404,21 +423,35 @@ pub struct SpeciesEquilibriumResult {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EquilibriumPointResult {
     pub step_index: usize,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub x_value: f64,
+    #[serde(default, with = "soryntel_core::serde_nonfinite::option")]
     pub z_value: Option<f64>,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub temp_k: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub pressure_bar: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub volume_m3: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub g_min_rt: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub g_min_kj: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub reaction_enthalpy_kj: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub reaction_entropy_jk: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub total_enthalpy_kj: f64,
     pub iterations: usize,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub max_mass_balance_err: f64,
     pub converged: bool,
+    #[serde(default, with = "soryntel_core::serde_nonfinite::option")]
     pub ph: Option<f64>,
+    #[serde(default, with = "soryntel_core::serde_nonfinite::option")]
     pub cell_voltage_v: Option<f64>,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub discharge_kmol_e: f64,
     pub species: Vec<SpeciesEquilibriumResult>,
 }
@@ -427,9 +460,12 @@ pub struct EquilibriumPointResult {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TargetResultSummary {
     pub target_species: String,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub sought_value_kmol: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub achieved_value_kmol: f64,
     pub variable_name: String,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub solved_variable_value: f64,
     pub point: EquilibriumPointResult,
 }
@@ -447,11 +483,16 @@ pub struct ExtrapolationWarning {
     pub phase_idx: usize,
     pub species_idx: usize,
     pub formula: String,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub selected_t1_c: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub selected_t2_c: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub available_t_min_c: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub available_t_max_c: f64,
     pub reference: String,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub feed_temp_c: f64,
     pub out_of_range_low: bool,
     pub out_of_range_high: bool,

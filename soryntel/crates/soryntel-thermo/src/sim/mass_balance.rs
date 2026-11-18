@@ -280,6 +280,7 @@ pub struct MbStream {
     pub flows_enabled: bool,
     pub assays_enabled: bool,
     pub sampling_device: String,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub sampling_sd: f64,
     pub sample_quality: SampleQuality,
     pub source_unit: Option<usize>,
@@ -294,11 +295,15 @@ pub struct MbVariable {
     pub type_code: VarTypeCode,
     pub selected: bool,
     pub method: MeasurementMethod,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub param_a: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub param_b: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub param_c: f64,
     pub low_grade_weighted: bool,
     pub mineral_formula: Option<String>,
+    #[serde(default, with = "soryntel_core::serde_nonfinite::option")]
     pub mineral_sg: Option<f64>,
 }
 
@@ -306,6 +311,7 @@ pub struct MbVariable {
 pub struct StreamEquation {
     pub target_stream_id: usize,
     pub source_stream_id: usize,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub factor: f64,
 }
 
@@ -341,11 +347,15 @@ pub struct MbDataset {
     pub assay_sum_100: bool,
     pub scaling: bool,
     pub max_iter: usize,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub balance_tolerance: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub null_sd_estimate: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub low_grade_coeff: f64,
     pub show_data_bars: bool,
     pub feed_stream_id: Option<usize>,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub liquid_sg: f64,
     pub recovered_for_model_fit: BTreeMap<(usize, usize), f64>, // (stream_id, var_id) -> Rec%
 }
@@ -385,17 +395,29 @@ impl Default for MbDataset {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ReconciliationCell {
     pub key: CellKey,
+    #[serde(default, with = "soryntel_core::serde_nonfinite::option")]
     pub measured: Option<f64>,
+    #[serde(default, with = "soryntel_core::serde_nonfinite::option")]
     pub balanced: Option<f64>,
+    #[serde(default, with = "soryntel_core::serde_nonfinite::option")]
     pub ci: Option<f64>,
+    #[serde(default, with = "soryntel_core::serde_nonfinite::option")]
     pub diff: Option<f64>,
+    #[serde(default, with = "soryntel_core::serde_nonfinite::option")]
     pub rel_diff_pct: Option<f64>,
+    #[serde(default, with = "soryntel_core::serde_nonfinite::option")]
     pub min_bound: Option<f64>,
+    #[serde(default, with = "soryntel_core::serde_nonfinite::option")]
     pub max_bound: Option<f64>,
+    #[serde(default, with = "soryntel_core::serde_nonfinite::option")]
     pub rsd_pct: Option<f64>,
+    #[serde(default, with = "soryntel_core::serde_nonfinite::option")]
     pub sd_eff: Option<f64>,
+    #[serde(default, with = "soryntel_core::serde_nonfinite::option")]
     pub sd_meas: Option<f64>,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub sd_sampling: f64,
+    #[serde(default, with = "soryntel_core::serde_nonfinite::option")]
     pub recovery_pct: Option<f64>,
     pub pre_status: PreMeasStatus,
     pub bal_status: PostBalStatus,
@@ -408,11 +430,17 @@ pub struct GoodnessVarRow {
     pub var_id: usize,
     pub name: String,
     pub unit: String,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub wssq: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub diff_tot: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub rel_diff_pct: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub avg_sd: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub avg_rsd_pct: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub rmsd: f64,
 }
 
@@ -420,11 +448,17 @@ pub struct GoodnessVarRow {
 pub struct GoodnessStreamRow {
     pub stream_id: usize,
     pub name: String,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub sum_wssq: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub diff_sum: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub rel_diff_sum: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub rel_diff_avg: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub rmsd: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub relative_rmsd: f64,
 }
 
@@ -452,8 +486,11 @@ pub struct MbSolution {
     pub num_bal: usize,
     pub num_zeros: usize,
     pub num_negatives: usize,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub wssq: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub rmsd: f64,
+    #[serde(with = "soryntel_core::serde_nonfinite")]
     pub rel_rmsd: f64,
     pub equations_text: Vec<String>,
     pub goodness_vars: Vec<GoodnessVarRow>,
