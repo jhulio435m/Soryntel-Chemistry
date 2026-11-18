@@ -14,7 +14,30 @@ impl AddinsUseCases {
 
     /// Analiza una referencia A1 (admite `$`) como `(fila, columna)` con base 0.
     pub fn parse_a1(token: &str) -> Option<(usize, usize)> {
-        soryntel_thermo::excel_addins::parse_a1(token)
+        let (column, row) = token.trim().split_at(
+            token.trim().find(|c: char| c.is_ascii_digit())?,
+        );
+        let column = column.strip_prefix('$').unwrap_or(column);
+        let column = column.strip_suffix('$').unwrap_or(column);
+        if column.is_empty() || !row.bytes().all(|b| b.is_ascii_digit()) {
+            return None;
+        }
+        let column = column.bytes().try_fold(0usize, |value, byte| {
+            if !byte.is_ascii_alphabetic() {
+                return None;
+            }
+            value.checked_mul(26)?.checked_add(usize::from(byte.to_ascii_uppercase() - b'A') + 1)
+        })?;
+        let row = row.parse::<usize>().ok()?;
+        if row > 1_048_576 || column > 16_384 {
+            return None;
+        }
+        Some((row.checked_sub(1)?, column.checked_sub(1)?))
+    }
+
+    /// Analiza A1 dentro de los límites de la hoja activa.
+    pub fn parse_a1_in_sheet(token: &str, rows: usize, columns: usize) -> Option<(usize, usize)> {
+        Self::parse_a1(token).filter(|&(row, column)| row < rows && column < columns)
     }
 
     /// Letra(s) de columna A1 para el índice de columna con base 0.

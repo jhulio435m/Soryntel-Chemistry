@@ -10,6 +10,7 @@
 //!   `Gas Steam`, `Liquid Water`, `Solid Ice`, `Triple point`, `Critical point`,
 //!   drag-and-drop `[1]` (yellow active) and `[2]` (white inactive) markers, and red connector line.
 
+use crate::excel_grid::parse_decimal_input;
 use eframe::egui;
 use egui_plot::{Legend, Line, Plot, PlotPoints};
 use soryntel_application::use_cases::WaterUseCases;
@@ -578,11 +579,13 @@ impl WaterModuleState {
                                     .text_color(egui::Color32::from_rgb(190, 20, 20)),
                             );
                             if resp.changed() {
-                                if let Ok(v) = self.amount_buf.trim().parse::<f64>() {
+                                if let Some(v) = parse_decimal_input(&self.amount_buf) {
                                     if v > 0.0 {
                                         self.req.amount = v;
                                         needs_recalc = true;
                                     }
+                                } else {
+                                    self.input_error = Some("Número inválido. Se conserva el último resultado válido.".into());
                                 }
                             }
                             egui::ComboBox::from_id_salt("water_amt_unit")
@@ -708,9 +711,11 @@ impl WaterModuleState {
                 c1,
                 !self.result.point1.temp_is_auto,
             ) {
-                if let Ok(v) = self.t1_buf.trim().parse::<f64>() {
+                if let Some(v) = parse_decimal_input(&self.t1_buf) {
                     self.req.point1.temp = v;
                     needs_recalc = true;
+                } else {
+                    self.input_error = Some("Número inválido. Se conserva el último resultado válido.".into());
                 }
             }
             let c2 = if self.result.point2.temp_is_auto {
@@ -733,9 +738,11 @@ impl WaterModuleState {
                 c2,
                 !self.result.point2.temp_is_auto,
             ) {
-                if let Ok(v) = self.t2_buf.trim().parse::<f64>() {
+                if let Some(v) = parse_decimal_input(&self.t2_buf) {
                     self.req.point2.temp = v;
                     needs_recalc = true;
+                } else {
+                    self.input_error = Some("Número inválido. Se conserva el último resultado válido.".into());
                 }
             }
             draw_cell_text(
@@ -802,7 +809,7 @@ impl WaterModuleState {
                 p_c1,
                 true,
             ) {
-                if let Ok(v) = self.p1_buf.trim().parse::<f64>() {
+                if let Some(v) = parse_decimal_input(&self.p1_buf) {
                     if v > 0.0 {
                         if self.req.point1.phase == WaterPhaseMode::SatGasLiquid {
                             let p_bar = self.req.pressure_unit.to_bar(v);
@@ -812,6 +819,8 @@ impl WaterModuleState {
                         self.req.point1.pressure = v;
                         needs_recalc = true;
                     }
+                } else {
+                    self.input_error = Some("Número inválido. Se conserva el último resultado válido.".into());
                 }
             }
             let p_c2 = if self.result.point2.pressure_is_auto {
@@ -834,7 +843,7 @@ impl WaterModuleState {
                 p_c2,
                 true,
             ) {
-                if let Ok(v) = self.p2_buf.trim().parse::<f64>() {
+                if let Some(v) = parse_decimal_input(&self.p2_buf) {
                     if v > 0.0 {
                         if self.req.point2.phase == WaterPhaseMode::SatGasLiquid {
                             let p_bar = self.req.pressure_unit.to_bar(v);
@@ -844,6 +853,8 @@ impl WaterModuleState {
                         self.req.point2.pressure = v;
                         needs_recalc = true;
                     }
+                } else {
+                    self.input_error = Some("Número inválido. Se conserva el último resultado válido.".into());
                 }
             }
             draw_cell_text(
@@ -949,9 +960,11 @@ impl WaterModuleState {
                     red_txt,
                     true,
                 ) {
-                    if let Ok(v) = self.mix1_buf.trim().parse::<f64>() {
+                    if let Some(v) = parse_decimal_input(&self.mix1_buf) {
                         self.req.point1.mixture_pct = v.clamp(0.0, 100.0);
                         needs_recalc = true;
+                    } else {
+                        self.input_error = Some("Número inválido. Se conserva el último resultado válido.".into());
                     }
                 }
             } else {
@@ -968,9 +981,11 @@ impl WaterModuleState {
                     red_txt,
                     true,
                 ) {
-                    if let Ok(v) = self.mix2_buf.trim().parse::<f64>() {
+                    if let Some(v) = parse_decimal_input(&self.mix2_buf) {
                         self.req.point2.mixture_pct = v.clamp(0.0, 100.0);
                         needs_recalc = true;
+                    } else {
+                        self.input_error = Some("Número inválido. Se conserva el último resultado válido.".into());
                     }
                 }
             } else {
@@ -2003,5 +2018,22 @@ fn format_clean(v: f64, decimals: usize) -> String {
         s.trim_end_matches('0').trim_end_matches('.').to_string()
     } else {
         s
+    }
+}
+
+#[cfg(test)]
+mod area_d_checks {
+    use super::*;
+    use soryntel_db::ThermoDatabase;
+
+    #[test]
+    fn water_outside_numerical_limits_reports_error_and_keeps_result() {
+        let db = ThermoDatabase::with_open_defaults();
+        let mut state = WaterModuleState::new(&db);
+        let previous = state.result.point1.temp_display;
+        state.req.point1.temp = state.req.temp_unit.from_kelvin(2300.0);
+        state.recalculate(&db);
+        assert!(state.input_error.as_deref().is_some_and(|error| error.contains("2273")));
+        assert_eq!(state.result.point1.temp_display, previous);
     }
 }
