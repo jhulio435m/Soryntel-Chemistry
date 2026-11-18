@@ -39,6 +39,45 @@ pub fn parse_user_number(text: &str) -> Result<f64, String> {
     Ok(value)
 }
 
+/// Acumula los errores al leer varios campos numéricos de un formulario.
+///
+/// Cada lectura devuelve un valor provisional para poder seguir construyendo la petición,
+/// pero si algún campo no es válido [`NumberFields::check`] devuelve el error y quien llama
+/// no debe usar el resultado ni cambiar su estado.
+#[derive(Default)]
+pub struct NumberFields {
+    errors: std::cell::RefCell<Vec<String>>,
+}
+
+impl NumberFields {
+    /// Campo obligatorio.
+    pub fn req(&self, text: &str) -> f64 {
+        parse_user_number(text).unwrap_or_else(|e| {
+            self.errors.borrow_mut().push(e);
+            0.0
+        })
+    }
+
+    /// Campo opcional: vacío significa `default`; cualquier otro texto debe ser un número.
+    pub fn or(&self, text: &str, default: f64) -> f64 {
+        if text.trim().is_empty() {
+            default
+        } else {
+            self.req(text)
+        }
+    }
+
+    /// `Ok` si todos los campos leídos eran válidos; si no, los errores unidos.
+    pub fn check(&self) -> Result<(), String> {
+        let errors = self.errors.borrow();
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(errors.join(" "))
+        }
+    }
+}
+
 /// 4-column periodic-style element grid matching HSC6/HSC9 Tpp/Lpp (100 elements).
 pub const ELEMENT_GRID_4COL: &[&str] = &[
     "Ac", "Dy", "Mn", "Ru",

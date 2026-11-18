@@ -15,6 +15,7 @@
 //! 6. **DB Tools & Refs**: Active `.HSC`/`.REF` paths, `.CAT` refresh, `Sort`, `Merge HSC1 -> HSC2`
 //!    with duplicate inspection, legacy `HSC 2.0-5.0 -> 6.0`, CSV/JSON import/export, and `MainDB6.REF` explorer.
 
+use crate::ui_common::{parse_user_number, NumberFields};
 use eframe::egui;
 use egui_plot::{Line, Plot, PlotPoints, Points};
 use soryntel_application::use_cases::CatalogUseCases;
@@ -476,7 +477,8 @@ impl SpeciesModuleState {
             return;
         }
         let inv_scale = if self.use_calories { CAL_TO_JOULE } else { 1.0 };
-        let parse_f = |s: &str| s.trim().parse::<f64>().unwrap_or(0.0);
+        let fields = NumberFields::default();
+        let parse_f = |s: &str| fields.or(s, 0.0);
 
         let mut mw = parse_f(&self.editor.mw_str);
         let mut charge = 0;
@@ -495,6 +497,10 @@ impl SpeciesModuleState {
             if !self.use_kelvin {
                 t1 += 273.15;
                 t2 += 273.15;
+            }
+            if let Err(e) = fields.check() {
+                self.set_status(e, true);
+                return;
             }
             if t2 <= t1 {
                 self.set_status(
@@ -546,6 +552,10 @@ impl SpeciesModuleState {
             },
             reliability_class: self.editor.reliability_class.clamp(1, 10),
         };
+        if let Err(e) = fields.check() {
+            self.set_status(e, true);
+            return;
+        }
         let raw_ph = self.editor.raw_phase_code.clone();
         CatalogUseCases::save_own_species(db, sp, meta, raw_ph);
         self.selected_formula = Some(formula.clone());
@@ -1304,9 +1314,11 @@ impl SpeciesModuleState {
             if ui.button("Auto dS = dH / Ttr (Rows >= 1)").clicked() {
                 let is_cal = self.use_calories;
                 for row in self.editor.intervals.iter_mut().skip(1) {
-                    let t1 = row.t1.trim().parse::<f64>().unwrap_or(0.0);
+                    // Filas con texto no numérico se dejan sin tocar.
+                    let (Ok(t1), Ok(dh)) = (parse_user_number(&row.t1), parse_user_number(&row.h_disp)) else {
+                        continue;
+                    };
                     let t1_k = if self.use_kelvin { t1 } else { t1 + 273.15 };
-                    let dh = row.h_disp.trim().parse::<f64>().unwrap_or(0.0);
                     if t1_k > 0.0 {
                         let ds = (dh * 1000.0) / t1_k;
                         let _ = is_cal;
@@ -1382,7 +1394,8 @@ impl SpeciesModuleState {
             return;
         }
         let inv_scale = if self.use_calories { CAL_TO_JOULE } else { 1.0 };
-        let parse_f = |s: &str| s.trim().parse::<f64>().unwrap_or(0.0);
+        let fields = NumberFields::default();
+        let parse_f = |s: &str| fields.or(s, 0.0);
         let solids: Vec<SpeciesThermoInterval> = self.editor.intervals[..li]
             .iter()
             .map(|r| {
@@ -1420,6 +1433,10 @@ impl SpeciesModuleState {
             c: parse_f(&liq_row.c_disp) * inv_scale,
             d: parse_f(&liq_row.d_disp) * inv_scale,
         };
+        if let Err(e) = fields.check() {
+            self.set_status(e, true);
+            return;
+        }
         match CatalogUseCases::species_extrapolate_liquid_298(&solids, t_melt_k, dh_fus_j, liq_k) {
             Ok((h_l_298, s_l_298)) => {
                 let e_scale = self.energy_scale_to_display();
@@ -1547,9 +1564,9 @@ impl SpeciesModuleState {
                     .fit_points
                     .iter()
                     .filter_map(|p| {
-                        let t = p.t_str.trim().parse::<f64>().ok()?;
+                        let t = parse_user_number(&p.t_str).ok()?;
                         let t_k = if self.use_kelvin { t } else { t + 273.15 };
-                        let cp_j = p.cp_str.trim().parse::<f64>().ok()? * inv_scale;
+                        let cp_j = parse_user_number(&p.cp_str).ok()? * inv_scale;
                         Some([t_k, cp_j * s_scale])
                     })
                     .collect();
@@ -1576,22 +1593,31 @@ impl SpeciesModuleState {
 
     fn run_fit_cp(&mut self) {
         let inv_scale = if self.use_calories { CAL_TO_JOULE } else { 1.0 };
+        let fields = NumberFields::default();
         let pts: Vec<CpDataPoint> = self
             .fit_points
             .iter()
-            .filter_map(|p| {
-                let t = p.t_str.trim().parse::<f64>().ok()?;
+            // Una fila completamente vacía no es un dato; cualquier otra debe ser numérica.
+            .filter(|p| !(p.t_str.trim().is_empty() && p.cp_str.trim().is_empty()))
+            .map(|p| {
+                let t = fields.req(&p.t_str);
                 let t_k = if self.use_kelvin { t } else { t + 273.15 };
-                let cp_j = p.cp_str.trim().parse::<f64>().ok()? * inv_scale;
-                Some(CpDataPoint { t_k, cp_j })
+                let cp_j = fields.req(&p.cp_str) * inv_scale;
+                CpDataPoint { t_k, cp_j }
             })
             .collect();
+        // Solo se leen los coeficientes bloqueados (los que no se ajustan).
+        let lock = |fit: bool, text: &str| if fit { 0.0 } else { fields.or(text, 0.0) * inv_scale };
         let locked = KelleyCoefficients {
-            a: self.lock_a.trim().parse::<f64>().unwrap_or(0.0) * inv_scale,
-            b: self.lock_b.trim().parse::<f64>().unwrap_or(0.0) * inv_scale,
-            c: self.lock_c.trim().parse::<f64>().unwrap_or(0.0) * inv_scale,
-            d: self.lock_d.trim().parse::<f64>().unwrap_or(0.0) * inv_scale,
+            a: lock(self.fit_mask.fit_a, &self.lock_a),
+            b: lock(self.fit_mask.fit_b, &self.lock_b),
+            c: lock(self.fit_mask.fit_c, &self.lock_c),
+            d: lock(self.fit_mask.fit_d, &self.lock_d),
         };
+        if let Err(e) = fields.check() {
+            self.set_status(format!("Fit Cp: {e}"), true);
+            return;
+        }
         match CatalogUseCases::species_fit_cp(&pts, self.fit_mask, locked) {
             Ok(res) => {
                 self.set_status(
@@ -1709,11 +1735,16 @@ impl SpeciesModuleState {
     }
 
     fn run_convert_cp(&mut self) {
-        let t1 = self.ext_t1.trim().parse::<f64>().unwrap_or(298.15);
-        let t2 = self.ext_t2.trim().parse::<f64>().unwrap_or(1500.0);
+        let fields = NumberFields::default();
+        let t1 = fields.or(&self.ext_t1, 298.15);
+        let t2 = fields.or(&self.ext_t2, 1500.0);
         let mut params = [0.0_f64; 6];
         for (i, s) in self.ext_params.iter().enumerate() {
-            params[i] = s.trim().parse::<f64>().unwrap_or(0.0);
+            params[i] = fields.or(s, 0.0);
+        }
+        if let Err(e) = fields.check() {
+            self.set_status(format!("Convert Cp: {e}"), true);
+            return;
         }
         match CatalogUseCases::species_convert_cp_function(
             &self.ext_expr,
@@ -1864,7 +1895,8 @@ impl SpeciesModuleState {
     }
 
     fn run_convert_gibbs(&mut self) {
-        let parse = |s: &str| s.trim().parse::<f64>().unwrap_or(0.0);
+        let fields = NumberFields::default();
+        let parse = |s: &str| fields.or(s, 0.0);
         let inp = GibbsCoeffsInput {
             h: parse(&self.gibbs_h),
             s: parse(&self.gibbs_s),
@@ -1875,6 +1907,10 @@ impl SpeciesModuleState {
             is_calories: self.use_calories,
             t_ref_k: T_REF_K,
         };
+        if let Err(e) = fields.check() {
+            self.set_status(format!("Convert G(T): {e}"), true);
+            return;
+        }
         match CatalogUseCases::species_convert_gibbs(&inp) {
             Ok(out) => {
                 self.gibbs_delta_out = Some(out);
@@ -2099,23 +2135,25 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "BUG-C04: Fit Cp descarta en silencio los puntos con coma decimal y ajusta con menos datos"]
     fn fit_cp_reports_points_it_cannot_parse() {
         let db = ThermoDatabase::with_open_defaults();
         let mut st = SpeciesModuleState::new(&db);
-        // El usuario corrige un punto con formato regional: 400,0 / 13,05
+        // Formato regional: la coma decimal se acepta y el punto se usa (no se descarta).
+        let exact = st.fit_points[1].cp_str.clone();
         st.fit_points[1].t_str = "400,0".into();
-        st.fit_points[1].cp_str = "13,05".into();
+        st.fit_points[1].cp_str = exact.replace('.', ",");
         st.run_fit_cp();
-        assert!(
-            st.status_is_err,
-            "el ajuste se informó como correcto ignorando un punto: {}",
-            st.status_msg
-        );
+        assert!(!st.status_is_err, "{}", st.status_msg);
+        assert!(st.fit_result.as_ref().unwrap().max_abs_error_pct < 0.01);
+        // Un texto no numérico detiene el ajuste con un error, sin resultado nuevo.
+        st.fit_result = None;
+        st.fit_points[2].cp_str = "abc".into();
+        st.run_fit_cp();
+        assert!(st.status_is_err, "el ajuste se informó como correcto ignorando un punto: {}", st.status_msg);
+        assert!(st.fit_result.is_none());
     }
 
     #[test]
-    #[ignore = "BUG-C05: un coeficiente bloqueado con coma decimal (\"11,166\") se bloquea en silencio a 0"]
     fn fit_cp_locked_coefficient_with_comma_is_not_zeroed() {
         let db = ThermoDatabase::with_open_defaults();
         let mut st = SpeciesModuleState::new(&db);
