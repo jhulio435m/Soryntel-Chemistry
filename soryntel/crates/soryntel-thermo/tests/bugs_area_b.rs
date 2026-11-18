@@ -1,9 +1,5 @@
-//! Tests de reproducción del área B (descubrimiento de bugs).
-//!
-//! Cada test describe el comportamiento esperado y hoy FALLA. Se marcan con
-//! `#[ignore = "BUG-Bxx: ..."]` para que CI siga en verde. Detalle en
-//! `docs/bugs/area-b.md`. Para ejecutarlos: `cargo test -p soryntel-thermo
-//! --test bugs_area_b -- --ignored`.
+//! Tests de regresión del área B: cada test reproducía un bug (Bxx) y ahora
+//! comprueba la corrección. Detalle en `docs/bugs/area-b.md`.
 
 use soryntel_core::{
     BalanceEnergyUnit, CAL_TO_JOULE, EnergyUnit, HeatFlowUnit, ResultFormat, TemperatureUnit,
@@ -232,7 +228,7 @@ fn b02_physical_exergy_of_ideal_gas_counts_pressure_once() {
         )
         .unwrap();
         let expected = R_JOULE * 298.15 * (p_bar / 1.01325_f64).ln() / 1000.0;
-        // Hoy: 5 bar -> 7,947 MJ/kmol (esperado 3,957); 1,01325 bar -> 0,0326 (esperado 0).
+        // Antes del fix: 5 bar -> 7,947 MJ/kmol (esperado 3,957); 1,01325 bar -> 0,0326 (esperado 0).
         assert!(
             (pt.ex_phys_mj_kmol - expected).abs() < 1e-3,
             "P={p_bar}: Ex_phys={} MJ/kmol, esperado {expected}",
@@ -351,7 +347,7 @@ fn b04_rea8_with_infinite_k_roundtrips() {
         active_sheet_idx: 0,
     };
     let json = soryntel_thermo::serialize_rea8_workbook(&wb).unwrap();
-    // Hoy: "invalid type: null, expected f64".
+    // Antes del fix: "invalid type: null, expected f64".
     soryntel_thermo::deserialize_rea8_workbook(&json).expect("el .rea8 guardado debe poder abrirse");
 }
 
@@ -404,7 +400,7 @@ fn b04_htr8_and_gem9_with_non_finite_inputs_roundtrip() {
 #[test]
 fn b05_mass_balance_workbook_serializes_to_json() {
     let wb = soryntel_thermo::sim::mass_balance::preset_rougher_flotation_mb();
-    // Hoy: Err("key must be a string"); el escritorio muestra "Serialize error".
+    // Antes del fix: Err("key must be a string"); el escritorio muestra "Serialize error".
     let json = serde_json::to_string_pretty(&wb).expect("la copia .HSCMas JSON debe generarse");
     let back: soryntel_thermo::sim::mass_balance::MassBalanceWorkbook =
         serde_json::from_str(&json).unwrap();
@@ -491,7 +487,7 @@ fn b08_set_cell_value_rejects_unknown_sheet() {
     let before = wb.areas[0].in_streams[0].species[0].amount_kmol;
     let r = set_cell_value(&mut wb, "FEED!D3", 5.0);
     let after = wb.areas[0].in_streams[0].species[0].amount_kmol;
-    // Hoy: Ok(()) y IN1!D3 pasa de 0,06 a 5 kmol.
+    // Antes del fix: Ok(()) y IN1!D3 pasa de 0,06 a 5 kmol.
     assert!(r.is_err(), "una hoja inexistente debe dar InvalidCellReference");
     assert_eq!(before, after, "no debe modificar IN1");
 }
@@ -547,7 +543,7 @@ fn o2_balance(out_formulas: &[&str]) -> BalanceWorkbook {
 fn b09_adiabatic_temperature_fails_on_missing_output_species() {
     let repo = Repo(BTreeMap::from([("O2(g)".to_string(), o2())]));
     let wb = o2_balance(&["O2(g)", "Xx2(g)"]);
-    // Hoy: Ok(≈1000 °C), calculado como si "Xx2(g)" (1 kmol) no existiera.
+    // Antes del fix: Ok(≈1000 °C), calculado como si "Xx2(g)" (1 kmol) no existiera.
     let r = solve_adiabatic_temperature(&wb, 0, &repo);
     assert!(r.is_err(), "esperado SpeciesNotFound, obtenido {r:?}");
 }
@@ -563,7 +559,7 @@ fn b10_evaluate_workbook_clears_stale_values_of_missing_species() {
     evaluate_workbook(&mut wb, &repo).unwrap();
     let sp = &wb.areas[0].in_streams[0].species[0];
     assert!(sp.missing_in_db);
-    // Hoy: heat_content, total_h y kg siguen con los valores de O2(g).
+    // Antes del fix: heat_content, total_h y kg siguen con los valores de O2(g).
     assert_eq!(sp.heat_content, 0.0, "heat_content obsoleto = {}", sp.heat_content);
     assert_eq!(wb.summaries[0].in_totals.kg, 0.0, "kg obsoletos en el total");
 }

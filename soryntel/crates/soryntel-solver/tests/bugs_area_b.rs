@@ -1,5 +1,5 @@
-//! Tests de reproducción del área B para el balanceador estequiométrico.
-//! Hoy FALLAN; se ignoran para mantener CI en verde (ver `docs/bugs/area-b.md`).
+//! Tests de regresión del área B para el balanceador estequiométrico
+//! (ver `docs/bugs/area-b.md`).
 
 use soryntel_solver::balance_reaction;
 use std::panic::catch_unwind;

@@ -1,6 +1,5 @@
-//! Tests de reproducción del área B que necesitan el catálogo integrado
-//! (OpenDefault) o los casos de uso. Hoy FALLAN; se ignoran para mantener CI
-//! en verde (ver `docs/bugs/area-b.md`).
+//! Tests de regresión del área B que necesitan el catálogo integrado
+//! (OpenDefault) o los casos de uso (ver `docs/bugs/area-b.md`).
 
 use soryntel_application::testing::InMemorySpeciesCatalog;
 use soryntel_db::ThermoDatabase;
