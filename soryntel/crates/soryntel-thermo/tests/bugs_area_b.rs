@@ -473,10 +473,12 @@ fn b06_heat_flux_in_btu_per_h_ft2_uses_area_factor() {
 /// usa ε1000, así que ε(25 °C) = 81,8 en lugar de 78,4 y A_phi baja un 6 %.
 /// Valor de referencia (Pitzer 1991; el propio comentario del código): 0,3915.
 #[test]
-#[ignore = "BUG-B07: pitzer_a_phi(298,15) = 0,367; falta el término de presión de Bradley-Pitzer (ε = 81,8)"]
 fn b07_pitzer_a_phi_at_25c() {
     let a = soryntel_thermo::aqua::pitzer_a_phi(298.15);
-    assert!((a - 0.3915).abs() < 0.001, "A_phi(298,15 K) = {a}, esperado 0,3915");
+    assert!((a - 0.3915).abs() < 0.0005, "A_phi(298,15 K) = {a}, esperado 0,3915");
+    // 50 °C: A_phi ≈ 0,410 (Bradley y Pitzer 1979; Pitzer 1991, «Activity Coefficients in Electrolyte Solutions», cap. 3).
+    let a50 = soryntel_thermo::aqua::pitzer_a_phi(323.15);
+    assert!((a50 - 0.4100).abs() < 0.001, "A_phi(323,15 K) = {a50}, esperado 0,4100");
 }
 
 // ---------------------------------------------------------------------------

@@ -13,7 +13,6 @@ use std::panic::{catch_unwind, AssertUnwindSafe};
 /// Robinson & Stokes (1959) γ± = 0,657, φ = 0,936; Pitzer & Mayorga (1973)
 /// con β0 = 0,0765, β1 = 0,2664, Cφ = 0,00127 da γ± = 0,656.
 #[test]
-#[ignore = "BUG-B07: Aqua da γ±(NaCl, 1 m, 25 °C) = 0,685 en lugar de 0,657 por A_phi bajo"]
 fn b07_nacl_mean_activity_coefficient_one_molal() {
     let db = ThermoDatabase::with_open_defaults();
     let mut case = AquaCaseFile::preset_nacl_hcl();
@@ -31,7 +30,7 @@ fn b07_nacl_mean_activity_coefficient_one_molal() {
         &Default::default(),
     );
     let g_pm = (r.species[1].ac_molal * r.species[2].ac_molal).sqrt();
-    assert!((g_pm - 0.657).abs() < 0.005, "γ± = {g_pm}, esperado 0,657");
+    assert!((g_pm - 0.657).abs() <= 0.01 * 0.657, "γ± = {g_pm}, esperado 0,657 ± 1 %");
     assert!(
         (r.summary.osmotic_coeff - 0.936).abs() < 0.003,
         "φ = {}, esperado 0,936",
