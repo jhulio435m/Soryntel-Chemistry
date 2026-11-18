@@ -96,7 +96,7 @@ En T7 la composición de escritorio posee un `Arc<RwLock<ThermoDatabase>>`. La U
 
 La política común a escritorio, bridge y CLI es **OwnDB > MainDB > OpenDefault**. Primero se crea el catálogo con los datos incluidos, luego se carga MainDB con prioridad sobre esos datos y por último se aplica OwnDB, que tiene prioridad sobre ambas capas. El bridge toma el catálogo cargado por el escritorio. El CLI usa explícitamente `MainDbPrecedence::OverrideOpenDefault` y conserva la política anterior como referencia en su prueba de regresión. [ADR 0003](adr/0003-precedencia-unificada.md)
 
-`SORYNTEL_MAIN_DB` y `SORYNTEL_OWN_DB` configuran las rutas. Para MainDB, si no hay variable de entorno, se considera `--hsc-db`. Las rutas por defecto del escritorio y del CLI buscan primero en `Databases/` junto al ejecutable y después en la ruta heredada.
+`SORYNTEL_MAIN_DB` y `SORYNTEL_OWN_DB` configuran las rutas. Para MainDB, `--hsc-db` tiene prioridad sobre `SORYNTEL_MAIN_DB`, como fija el [ADR 0003](adr/0003-precedencia-unificada.md). Si una ruta configurada no se puede cargar, no se recurre a la ruta por defecto: el escritorio muestra el error en un aviso. Las rutas por defecto del escritorio y del CLI buscan primero en `Databases/` junto al ejecutable y después en la ruta heredada.
 
 ## Auditoría de arquitectura
 
