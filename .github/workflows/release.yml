@@ -169,15 +169,19 @@ jobs:
             [[ -s "$f" ]] || { echo "::error::Falta $f"; exit 1; }
           done
           sha256sum "${expected[@]}" > SHA256SUMS.txt
-          ls -lh
+          # Solo se publican los paquetes de esta versión: nada de carpetas ni
+          # restos de otras versiones que pudieran llegar en los artefactos.
+          mkdir -p ../release
+          mv "${expected[@]}" SHA256SUMS.txt ../release/
+          ls -lh ../release
       - name: Crear o actualizar la versión
         if: github.ref_type == 'tag'
         run: |
           tag="${GITHUB_REF_NAME}"
           if gh release view "$tag" >/dev/null 2>&1; then
-            gh release upload "$tag" dist/* --clobber
+            gh release upload "$tag" release/* --clobber
           else
-            gh release create "$tag" dist/* --title "Soryntel Chemistry ${VERSION}" --generate-notes --verify-tag
+            gh release create "$tag" release/* --title "Soryntel Chemistry ${VERSION}" --generate-notes --verify-tag
           fi
       - uses: actions/setup-node@v5
         if: github.ref_type == 'tag'

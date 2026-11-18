@@ -38,7 +38,7 @@ jobs:
         run: |
           python3 scripts/audit-repository.py
           python3 scripts/audit-architecture.py
-          python3 scripts/audit-ui-texts.py
+          python3 scripts/audit-ui-texts.py --output "$RUNNER_TEMP/ui-texts.md"
       - name: Auditoría de límites entre crates
         working-directory: .
         run: bash soryntel/scripts/check_architecture.sh --strict
