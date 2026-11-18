@@ -18,6 +18,7 @@ concurrency:
 
 env:
   CARGO_TERM_COLOR: always
+  SORYNTEL_SDB_RELEASE: sdb-v1
 
 jobs:
   version:
@@ -70,35 +71,40 @@ jobs:
         name: Descargar y verificar SoryntelDB
         shell: bash
         env:
-          SORYNTEL_SDB_S3_URI: ${{ secrets.SORYNTEL_SDB_S3_URI }}
+          GH_TOKEN: ${{ secrets.SORYNTEL_SDB_TOKEN }}
           SORYNTEL_SDB_SHA256: ${{ secrets.SORYNTEL_SDB_SHA256 }}
-          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          AWS_REGION: ${{ secrets.AWS_REGION }}
         run: |
-          db_dir="$(mktemp -d "$RUNNER_TEMP/soryntel-db.XXXXXX")/Databases"
+          workdir="$(mktemp -d "$RUNNER_TEMP/soryntel-db.XXXXXX")"
+          db_dir="$workdir/Databases"
           mkdir -p "$db_dir"
           echo "SORYNTEL_SDB_DIR=$db_dir" >> "$GITHUB_ENV"
-          if [[ -z "$SORYNTEL_SDB_S3_URI" || -z "$SORYNTEL_SDB_SHA256" ||
-                -z "$AWS_ACCESS_KEY_ID" || -z "$AWS_SECRET_ACCESS_KEY" || -z "$AWS_REGION" ]]; then
+
+          unavailable() {
             if [[ "$GITHUB_REF_TYPE" == tag ]]; then
-              echo "::error::Faltan secretos de SoryntelDB para empaquetar la versión."
+              echo "::error::$1"
               exit 1
             fi
-            echo "::warning::Faltan secretos de SoryntelDB. Se empaquetará sin la base."
+            echo "::warning::$1 Se empaquetará sin la base."
             exit 0
+          }
+
+          if [[ -z "$GH_TOKEN" || -z "$SORYNTEL_SDB_SHA256" ]]; then
+            unavailable "Faltan secretos de SoryntelDB."
           fi
-          if [[ "$SORYNTEL_SDB_S3_URI" != s3://*/* || ! "$SORYNTEL_SDB_SHA256" =~ ^[[:xdigit:]]{64}$ ]]; then
-            echo "::error::La URI de S3 o el SHA-256 de SoryntelDB no son válidos."
-            exit 1
+          if [[ ! "$SORYNTEL_SDB_SHA256" =~ ^[[:xdigit:]]{64}$ ]]; then
+            unavailable "El SHA-256 configurado para SoryntelDB no es válido."
           fi
-          tmp=$(mktemp "$db_dir/.soryntel.XXXXXX")
-          trap 'rm -f "$tmp"' EXIT
-          aws s3 cp "$SORYNTEL_SDB_S3_URI" "$tmp" --region "$AWS_REGION" --only-show-errors
+
+          tmpdir="$(mktemp -d "$workdir/download.XXXXXX")"
+          trap 'rm -rf -- "$tmpdir"' EXIT
+          if ! gh release download "$SORYNTEL_SDB_RELEASE" -R jhulio435m/soryntel-data -p soryntel.sdb -D "$tmpdir" >/dev/null 2>&1; then
+            unavailable "No se pudo descargar SoryntelDB desde el release privado."
+          fi
+
+          tmp="$tmpdir/soryntel.sdb"
           if ! [[ -s "$tmp" ]] ||
              ! printf '%s  %s\n' "${SORYNTEL_SDB_SHA256,,}" "$tmp" | sha256sum --check --status; then
-            echo "::error::La base descargada está vacía o no coincide con el SHA-256 esperado."
-            exit 1
+            unavailable "La base descargada está vacía o no coincide con el SHA-256 esperado."
           fi
           mv "$tmp" "$db_dir/soryntel.sdb"
       - name: Compilar y empaquetar
