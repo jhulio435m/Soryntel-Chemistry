@@ -223,7 +223,6 @@ fn b01_gem_adiabatic_mode_is_consistent_with_analytic_k() {
 /// Gas ideal a T0 = 298,15 K: Ex_phys = R·T0·ln(P/P0) con P0 = 1,01325 bar
 /// (Szargut, Morris & Steward 1988). Debe ser 0 en el estado muerto.
 #[test]
-#[ignore = "BUG-B02: evaluate_balance_point_si suma dos veces -R·ln(P) en Ex_phys de gases"]
 fn b02_physical_exergy_of_ideal_gas_counts_pressure_once() {
     let repo = Repo(BTreeMap::from([("O2(g)".to_string(), o2())]));
     let sp = o2();

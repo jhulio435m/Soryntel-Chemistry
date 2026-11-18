@@ -219,6 +219,9 @@ pub fn evaluate_balance_point_si(
     let mut effective_species = species.clone();
     let mut pressure_dh_j = 0.0;
     let mut pressure_ds_j = 0.0;
+    // Entropy pressure term of the same species at the dead state (T0, P0), on the same
+    // basis as `pressure_ds_j`, so that Ex_phys(T0, P0) = 0.
+    let mut dead_state_ds_j = 0.0;
 
     if (h2o_pressure_corr || (p_bar - 1.0).abs() > 1e-4)
         && (species.formula == "H2O"
@@ -232,7 +235,7 @@ pub fn evaluate_balance_point_si(
             if let Some(steam) = repo.get_species("H2O(g)") {
                 effective_species = steam;
             }
-            // Real-gas / pressure entropy shift -R*ln(P/P_ref)
+            // Real-gas / pressure entropy shift -R*ln(P/P_ref); the dead state sits at P_ref.
             pressure_ds_j = -R_JOULE * (p_bar / P_REF_BAR).ln();
         } else {
             if let Some(liq) = repo.get_species("H2O").or_else(|| repo.get_species("H2O(l)")) {
@@ -242,8 +245,10 @@ pub fn evaluate_balance_point_si(
             let v_molar_m3 = 18.015e-6; // m3/mol
             pressure_dh_j = v_molar_m3 * (p_bar - P_REF_BAR) * 1.0e5;
         }
-    } else if effective_species.phase == Phase::Gas && p_bar > 0.0 && (p_bar - 1.0).abs() > 1e-4 {
+    } else if effective_species.phase == Phase::Gas && p_bar > 0.0 {
+        // Ideal gas, standard state 1 bar: S(T, P) = S°(T) - R ln(P / 1 bar).
         pressure_ds_j = -R_JOULE * (p_bar / 1.0).ln();
+        dead_state_ds_j = -R_JOULE * (P_REF_BAR / 1.0).ln();
     }
 
     let (pt_t, _) = evaluate_species_si(&effective_species, t_k, false, upper_side_on_boundary)?;
@@ -258,14 +263,11 @@ pub fn evaluate_balance_point_si(
     let ts = t_k * s_t;
     let g = h_t - ts;
 
-    // Physical exergy: (H(T,P) - H(T0,P0)) - T0 * (S(T,P) - S(T0,P0))
-    let ds_pressure_gas = if effective_species.phase == Phase::Gas && p_bar > 0.0 && !h2o_pressure_corr
-    {
-        -R_JOULE * (p_bar / P_REF_BAR).ln()
-    } else {
-        0.0
-    };
-    let ex_phys = (h_t - pt_ref.h) - T_REF_K * ((s_t + ds_pressure_gas) - pt_ref.s);
+    // Physical exergy: (H(T,P) - H(T0,P0)) - T0 * (S(T,P) - S(T0,P0)), with T0 = 298.15 K and
+    // P0 = 1.01325 bar (Szargut, Morris & Steward 1988). For an ideal gas at T0 this is
+    // R T0 ln(P/P0). The pressure term is counted once (BUG-B02).
+    let s_dead = pt_ref.s + dead_state_ds_j;
+    let ex_phys = (h_t - pt_ref.h) - T_REF_K * (s_t - s_dead);
     let ex_chem_kj = species_chemical_exergy_kj_mol(repo, &effective_species);
 
     Ok(BalancePointSI {
