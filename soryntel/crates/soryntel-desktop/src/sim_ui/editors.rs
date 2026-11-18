@@ -1,3 +1,4 @@
+use crate::excel_grid::parse_decimal_input;
 use eframe::egui::{self, Color32, RichText};
 use egui_plot::{HLine, Legend, Line, Plot, PlotPoints, Points, VLine};
 use soryntel_application::use_cases::SimulationUseCases;
@@ -934,12 +935,14 @@ fn render_scenario_editor(ctx: &egui::Context, state: &mut SimModuleState) {
                 let col_letter = char::from(b'C' + (state.scenario_selected_col as u8).min(20));
                 ui.label(RichText::new(format!("{}{}", col_letter, 18 + state.scenario_selected_run)).strong());
                 if ui.text_edit_singleline(&mut state.scenario_formula_bar).lost_focus() {
-                    if let Ok(parsed) = state.scenario_formula_bar.trim().parse::<f64>() {
+                    if let Some(parsed) = parse_decimal_input(&state.scenario_formula_bar) {
                         if let Some(row) = state.project.scenarios[s_idx].values.get_mut(state.scenario_selected_run) {
                             if let Some(cell) = row.get_mut(state.scenario_selected_col) {
                                 *cell = parsed;
                             }
                         }
+                    } else {
+                        ui.colored_label(egui::Color32::RED, "Número inválido");
                     }
                 }
             });

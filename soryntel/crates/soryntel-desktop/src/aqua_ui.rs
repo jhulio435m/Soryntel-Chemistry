@@ -2,6 +2,7 @@
 //! Matching Figs. 2–10 (`Water Phase` spreadsheet, Office Ribbon, `Main Pitzer Database`,
 //! `Active Pitzer Parameters`, `OwnDB` editor, `Density Calculator`, and `Ionic AC vs T` Plot).
 
+use crate::excel_grid::parse_decimal_input;
 use eframe::egui;
 use egui_plot::{Legend, Line, Plot, PlotPoints};
 use soryntel_application::use_cases::AquaUseCases;
@@ -173,7 +174,7 @@ impl AquaModuleState {
             ("ZnSO4".to_string(), "0.149".to_string()),
             ("H2SO4".to_string(), "0.048".to_string()),
         ];
-        let density_result = recompute_density(&density_rows, 25.0);
+        let density_result = recompute_density(&density_rows, 25.0).expect("valid built-in density inputs");
 
         let mut st = Self {
             case_file,
@@ -225,21 +226,30 @@ impl AquaModuleState {
         st
     }
 
-    fn sync_case_from_rows(&mut self) {
-        self.case_file.species = self
-            .rows
-            .iter()
-            .filter(|r| !r.formula.trim().is_empty())
-            .map(|r| AquaSpeciesInput {
-                formula: r.formula.trim().to_string(),
-                temp: r.temp_buf.trim().parse::<f64>().unwrap_or(25.0),
-                amount_kmol: r.amount_buf.trim().parse::<f64>().unwrap_or(0.0),
-            })
-            .collect();
+    fn sync_case_from_rows(&mut self) -> bool {
+        let mut species = Vec::new();
+        for (index, row) in self.rows.iter().enumerate() {
+            let formula = row.formula.trim();
+            if formula.is_empty() {
+                continue;
+            }
+            let (Some(temp), Some(amount_kmol)) = (
+                parse_decimal_input(&row.temp_buf),
+                parse_decimal_input(&row.amount_buf),
+            ) else {
+                self.status_msg = format!("Fila {}: temperatura o cantidad inválida.", index + 7);
+                return false;
+            };
+            species.push(AquaSpeciesInput { formula: formula.into(), temp, amount_kmol });
+        }
+        self.case_file.species = species;
+        true
     }
 
     fn recalculate(&mut self, db: &dyn SpeciesCatalogPort) {
-        self.sync_case_from_rows();
+        if !self.sync_case_from_rows() {
+            return;
+        }
         self.calc_result = AquaUseCases::aqua_calculate(
             db,
             &self.case_file,
@@ -288,16 +298,20 @@ impl AquaModuleState {
         if old == new_unit {
             return;
         }
+        let Some(phase_temp) = parse_decimal_input(&self.phase_temp_buf) else {
+            self.status_msg = "Temperatura de fase inválida.".into();
+            return;
+        };
+        if !self.sync_case_from_rows() {
+            return;
+        }
         for r in &mut self.rows {
-            if let Ok(v) = r.temp_buf.trim().parse::<f64>() {
+            if let Some(v) = parse_decimal_input(&r.temp_buf) {
                 let tc = old.to_c(v);
                 r.temp_buf = format_temp_display(new_unit.from_c(tc));
             }
         }
-        if let Ok(v) = self.phase_temp_buf.trim().parse::<f64>() {
-            let tc = old.to_c(v);
-            self.phase_temp_buf = format_temp_display(new_unit.from_c(tc));
-        }
+        self.phase_temp_buf = format_temp_display(new_unit.from_c(old.to_c(phase_temp)));
         self.case_file.temp_unit = new_unit;
         self.recalculate(db);
     }
@@ -418,7 +432,9 @@ impl AquaModuleState {
     }
 
     fn save_case_quick(&mut self) {
-        self.sync_case_from_rows();
+        if !self.sync_case_from_rows() {
+            return;
+        }
         let p = std::env::temp_dir().join("soryntel_aqua_case.aqu8.json");
         if let Ok(json) = serde_json::to_string_pretty(&self.case_file) {
             if crate::storage::write_atomic(&p, json).is_ok() {
@@ -2476,8 +2492,12 @@ impl AquaModuleState {
             });
         self.show_density = open;
         if recalc_density {
-            let t_c = self.density_temp_buf.trim().parse::<f64>().unwrap_or(25.0);
-            self.density_result = recompute_density(&self.density_rows, t_c);
+            match parse_decimal_input(&self.density_temp_buf)
+                .and_then(|temp| recompute_density(&self.density_rows, temp))
+            {
+                Some(result) => self.density_result = result,
+                None => self.status_msg = "Temperatura o fracción másica inválida.".into(),
+            }
         }
     }
 
@@ -2725,16 +2745,16 @@ fn default_sample_own_db() -> OwnPitzerDb {
     }
 }
 
-fn recompute_density(rows: &[(String, String)], t_c: f64) -> DensityCalcResult {
+fn recompute_density(rows: &[(String, String)], t_c: f64) -> Option<DensityCalcResult> {
     let inputs: Vec<DensityInputRow> = rows
         .iter()
         .filter(|(c, _)| !c.trim().is_empty())
-        .map(|(c, w)| DensityInputRow {
+        .map(|(c, w)| Some(DensityInputRow {
             component: c.trim().to_string(),
-            mass_fraction: w.trim().parse::<f64>().unwrap_or(0.0),
-        })
-        .collect();
-    AquaUseCases::aqua_density(&inputs, t_c)
+            mass_fraction: parse_decimal_input(w)?,
+        }))
+        .collect::<Option<_>>()?;
+    Some(AquaUseCases::aqua_density(&inputs, t_c))
 }
 
 fn format_temp_display(v: f64) -> String {
@@ -3418,14 +3438,19 @@ fn opt_f64_cell(ui: &mut egui::Ui, id: &str, opt: &mut Option<f64>, w: f32, enab
     let Some((s, ch)) = numeric_buf_cell(ui, id, initial, w, enabled) else {
         return false;
     };
-    if ch {
-        *opt = if s.trim().is_empty() {
-            None
-        } else {
-            s.trim().parse::<f64>().ok()
-        };
+    if !ch {
+        return false;
     }
-    ch
+    if s.trim().is_empty() {
+        *opt = None;
+        return true;
+    }
+    if let Some(value) = parse_decimal_input(&s) {
+        *opt = Some(value);
+        return true;
+    }
+    ui.colored_label(egui::Color32::RED, "Número inválido");
+    false
 }
 
 fn f64_cell(ui: &mut egui::Ui, id: &str, val: &mut f64, w: f32, enabled: bool) -> bool {
@@ -3437,14 +3462,15 @@ fn f64_cell(ui: &mut egui::Ui, id: &str, val: &mut f64, w: f32, enabled: bool) -
     let Some((s, ch)) = numeric_buf_cell(ui, id, initial, w, enabled) else {
         return false;
     };
-    if ch {
-        if let Ok(v) = s.trim().parse::<f64>() {
-            *val = v;
-        } else if s.trim().is_empty() {
-            *val = 0.0;
-        }
+    if !ch {
+        return false;
     }
-    ch
+    if let Some(value) = parse_decimal_input(&s) {
+        *val = value;
+        return true;
+    }
+    ui.colored_label(egui::Color32::RED, "Número inválido");
+    false
 }
 
 fn ribbon_group(ui: &mut egui::Ui, title: &str, add_contents: impl FnOnce(&mut egui::Ui)) {
@@ -3617,7 +3643,6 @@ mod area_d_regressions {
     use soryntel_db::ThermoDatabase;
 
     #[test]
-    #[ignore = "BUG-D02: Aqua sustituye decimales con coma por valores predeterminados"]
     fn aqua_preserves_decimal_comma_inputs() {
         let db = ThermoDatabase::with_open_defaults();
         let mut state = AquaModuleState::new(&db);
@@ -3626,8 +3651,14 @@ mod area_d_regressions {
             temp_buf: "40,5".into(),
             amount_buf: "1,5".into(),
         }];
-        state.sync_case_from_rows();
+        assert!(state.sync_case_from_rows());
         let input = &state.case_file.species[0];
         assert_eq!((input.temp, input.amount_kmol), (40.5, 1.5));
+        state.rows[0].temp_buf = "42".into();
+        state.rows[0].amount_buf = "1,5.0".into();
+        assert!(!state.sync_case_from_rows());
+        let input = &state.case_file.species[0];
+        assert_eq!((input.temp, input.amount_kmol), (40.5, 1.5));
+        assert!(state.status_msg.contains("inválida"));
     }
 }

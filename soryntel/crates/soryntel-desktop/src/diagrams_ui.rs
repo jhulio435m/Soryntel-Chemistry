@@ -1,3 +1,4 @@
+use crate::excel_grid::parse_decimal_input;
 use eframe::egui;
 use serde::{Deserialize, Serialize};
 use soryntel_application::use_cases::{CatalogUseCases, MiscUseCases};
@@ -141,7 +142,7 @@ impl DiagramRow {
     }
 
     fn coeff(&self) -> f64 {
-        self.coeff_str.trim().parse::<f64>().unwrap_or(1.0).max(1e-6)
+        parse_decimal_input(&self.coeff_str).unwrap_or(1.0).max(1e-6)
     }
 
     fn db_badge(&self) -> &'static str {
@@ -240,9 +241,18 @@ impl DiagramsModuleState {
     }
 
     fn recalculate(&mut self, db: &dyn SpeciesWorkspacePort) {
-        let t_min_val: f64 = self.t_min_str.trim().parse().unwrap_or(0.0);
-        let t_max_val: f64 = self.t_max_str.trim().parse().unwrap_or(2000.0);
-        let step_val: f64 = self.t_step_str.trim().parse().unwrap_or(50.0);
+        let (Some(t_min_val), Some(t_max_val), Some(step_val)) = (
+            parse_decimal_input(&self.t_min_str),
+            parse_decimal_input(&self.t_max_str),
+            parse_decimal_input(&self.t_step_str),
+        ) else {
+            self.status_error = Some("Invalid temperature or step.".into());
+            return;
+        };
+        if self.rows.iter().any(|row| !row.formula.trim().is_empty() && parse_decimal_input(&row.coeff_str).is_none()) {
+            self.status_error = Some("Invalid species coefficient.".into());
+            return;
+        }
         let off = if self.temp_in_kelvin { 0.0 } else { 273.15 };
 
         let species: Vec<DiagramSpeciesInput> = self
@@ -318,7 +328,10 @@ impl DiagramsModuleState {
     }
 
     fn balance_element_amounts(&mut self) {
-        let target: f64 = self.balance_amount_str.trim().parse().unwrap_or(2.0);
+        let Some(target) = parse_decimal_input(&self.balance_amount_str) else {
+            self.status_error = Some("Invalid balance amount.".into());
+            return;
+        };
         if target <= 0.0 || self.balance_element.is_empty() {
             return;
         }
@@ -420,7 +433,7 @@ impl DiagramsModuleState {
                         .map(|r| {
                             let mut row = DiagramRow::new(
                                 &r.formula,
-                                r.coeff_str.trim().parse().unwrap_or(1.0),
+                                parse_decimal_input(&r.coeff_str).unwrap_or(1.0),
                                 r.db_no,
                                 db,
                                 sf.temp_in_kelvin,
@@ -497,15 +510,23 @@ impl DiagramsModuleState {
         }
     }
 
+    fn plot_limits(&self) -> Option<(f64, f64, f64, f64)> {
+        let t_min = parse_decimal_input(&self.t_min_str)?;
+        let t_max = parse_decimal_input(&self.t_max_str)?.max(t_min + 1.0);
+        let y_min = parse_decimal_input(&self.y_min_str)?;
+        let y_max = parse_decimal_input(&self.y_max_str)?.max(y_min + 1.0);
+        Some((t_min, t_max, y_min, y_max))
+    }
+
     fn export_chart_svg(&mut self, path: &str) {
         let Some(res) = &self.result else {
             self.status_error = Some("No diagram chart to export.".to_string());
             return;
         };
-        let t_min: f64 = self.t_min_str.trim().parse().unwrap_or(0.0);
-        let t_max: f64 = self.t_max_str.trim().parse::<f64>().unwrap_or(2000.0).max(t_min + 1.0);
-        let y_min: f64 = self.y_min_str.trim().parse().unwrap_or(-1200.0);
-        let y_max: f64 = self.y_max_str.trim().parse::<f64>().unwrap_or(0.0).max(y_min + 1.0);
+        let Some((t_min, t_max, y_min, y_max)) = self.plot_limits() else {
+            self.status_error = Some("Invalid plot limits.".into());
+            return;
+        };
         let off = if self.temp_in_kelvin { 0.0 } else { 273.15 };
         let (w, h, ml, mr, mt, mb) = (900.0_f64, 620.0_f64, 82.0, 32.0, 48.0, 62.0);
         let (pw, ph) = (w - ml - mr, h - mt - mb);
@@ -800,10 +821,10 @@ impl DiagramsModuleState {
                         ui.horizontal(|ui| {
                             if ui.radio(!self.temp_in_kelvin, "°C").clicked() && self.temp_in_kelvin {
                                 self.temp_in_kelvin = false;
-                                if let Ok(v) = self.t_min_str.trim().parse::<f64>() {
+                                if let Some(v) = parse_decimal_input(&self.t_min_str) {
                                     self.t_min_str = format!("{:.2}", v - 273.15);
                                 }
-                                if let Ok(v) = self.t_max_str.trim().parse::<f64>() {
+                                if let Some(v) = parse_decimal_input(&self.t_max_str) {
                                     self.t_max_str = format!("{:.2}", v - 273.15);
                                 }
                                 for r in &mut self.rows {
@@ -813,10 +834,10 @@ impl DiagramsModuleState {
                             }
                             if ui.radio(self.temp_in_kelvin, "K").clicked() && !self.temp_in_kelvin {
                                 self.temp_in_kelvin = true;
-                                if let Ok(v) = self.t_min_str.trim().parse::<f64>() {
+                                if let Some(v) = parse_decimal_input(&self.t_min_str) {
                                     self.t_min_str = format!("{:.2}", v + 273.15);
                                 }
-                                if let Ok(v) = self.t_max_str.trim().parse::<f64>() {
+                                if let Some(v) = parse_decimal_input(&self.t_max_str) {
                                     self.t_max_str = format!("{:.2}", v + 273.15);
                                 }
                                 for r in &mut self.rows {
@@ -1160,20 +1181,10 @@ impl DiagramsModuleState {
             outer_rect.max - egui::vec2(margin_r, margin_b),
         );
 
-        let t_min: f64 = self.t_min_str.trim().parse().unwrap_or(0.0);
-        let t_max: f64 = self
-            .t_max_str
-            .trim()
-            .parse::<f64>()
-            .unwrap_or(2000.0)
-            .max(t_min + 1.0);
-        let y_min: f64 = self.y_min_str.trim().parse().unwrap_or(-1200.0);
-        let y_max: f64 = self
-            .y_max_str
-            .trim()
-            .parse::<f64>()
-            .unwrap_or(0.0)
-            .max(y_min + 1.0);
+        let Some((t_min, t_max, y_min, y_max)) = self.plot_limits() else {
+            ui.colored_label(egui::Color32::RED, "Invalid plot limits.");
+            return;
+        };
         let off = if self.temp_in_kelvin { 0.0 } else { 273.15 };
 
         let x_to_px = |t_disp: f64| -> f32 {
@@ -1234,8 +1245,10 @@ impl DiagramsModuleState {
         let clipped = painter.with_clip_rect(plot_rect);
 
         // Constant pO2 iso-lines on Ellingham diagrams (§19 Appendix 1 Eq. 11)
-        let bal_atoms: f64 = self.balance_amount_str.trim().parse().unwrap_or(2.0);
-        if res.diagram_type == DiagramType::DeltaGEllingham && self.show_po2_lines && !self.per_kg {
+        let bal_atoms = parse_decimal_input(&self.balance_amount_str);
+        if let Some(bal_atoms) = bal_atoms.filter(|_| {
+            res.diagram_type == DiagramType::DeltaGEllingham && self.show_po2_lines && !self.per_kg
+        }) {
             let iso_col = egui::Color32::from_rgba_unmultiplied(120, 130, 150, 125);
             let iso_stroke = egui::Stroke::new(0.85, iso_col);
             for &log_po2 in &[-40.0, -30.0, -20.0, -15.0, -10.0, -5.0, 0.0] {
@@ -1327,7 +1340,9 @@ impl DiagramsModuleState {
                 let t_hov = t_min + fx as f64 * (t_max - t_min);
                 let y_hov = y_min + fy as f64 * (y_max - y_min);
                 let mut tip = format!("T: {t_hov:.1}\nY: {y_hov:.2} {}", res.y_unit);
-                if res.diagram_type == DiagramType::DeltaGEllingham && !self.per_kg {
+                if let Some(bal_atoms) = bal_atoms.filter(|_| {
+                    res.diagram_type == DiagramType::DeltaGEllingham && !self.per_kg
+                }) {
                     let sc = MiscUseCases::ellingham_scales_at(
                         (t_hov + off).max(1.0),
                         y_hov,

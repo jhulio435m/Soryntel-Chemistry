@@ -10,6 +10,7 @@
 //!   `Gas Steam`, `Liquid Water`, `Solid Ice`, `Triple point`, `Critical point`,
 //!   drag-and-drop `[1]` (yellow active) and `[2]` (white inactive) markers, and red connector line.
 
+use crate::excel_grid::parse_decimal_input;
 use eframe::egui;
 use egui_plot::{Legend, Line, Plot, PlotPoints};
 use soryntel_application::use_cases::WaterUseCases;
@@ -578,11 +579,13 @@ impl WaterModuleState {
                                     .text_color(egui::Color32::from_rgb(190, 20, 20)),
                             );
                             if resp.changed() {
-                                if let Ok(v) = self.amount_buf.trim().parse::<f64>() {
+                                if let Some(v) = parse_decimal_input(&self.amount_buf) {
                                     if v > 0.0 {
                                         self.req.amount = v;
                                         needs_recalc = true;
                                     }
+                                } else {
+                                    ui.colored_label(egui::Color32::RED, "Número inválido");
                                 }
                             }
                             egui::ComboBox::from_id_salt("water_amt_unit")
@@ -708,9 +711,11 @@ impl WaterModuleState {
                 c1,
                 !self.result.point1.temp_is_auto,
             ) {
-                if let Ok(v) = self.t1_buf.trim().parse::<f64>() {
+                if let Some(v) = parse_decimal_input(&self.t1_buf) {
                     self.req.point1.temp = v;
                     needs_recalc = true;
+                } else {
+                    ui.colored_label(egui::Color32::RED, "Número inválido");
                 }
             }
             let c2 = if self.result.point2.temp_is_auto {
@@ -733,9 +738,11 @@ impl WaterModuleState {
                 c2,
                 !self.result.point2.temp_is_auto,
             ) {
-                if let Ok(v) = self.t2_buf.trim().parse::<f64>() {
+                if let Some(v) = parse_decimal_input(&self.t2_buf) {
                     self.req.point2.temp = v;
                     needs_recalc = true;
+                } else {
+                    ui.colored_label(egui::Color32::RED, "Número inválido");
                 }
             }
             draw_cell_text(
@@ -802,7 +809,7 @@ impl WaterModuleState {
                 p_c1,
                 true,
             ) {
-                if let Ok(v) = self.p1_buf.trim().parse::<f64>() {
+                if let Some(v) = parse_decimal_input(&self.p1_buf) {
                     if v > 0.0 {
                         if self.req.point1.phase == WaterPhaseMode::SatGasLiquid {
                             let p_bar = self.req.pressure_unit.to_bar(v);
@@ -812,6 +819,8 @@ impl WaterModuleState {
                         self.req.point1.pressure = v;
                         needs_recalc = true;
                     }
+                } else {
+                    ui.colored_label(egui::Color32::RED, "Número inválido");
                 }
             }
             let p_c2 = if self.result.point2.pressure_is_auto {
@@ -834,7 +843,7 @@ impl WaterModuleState {
                 p_c2,
                 true,
             ) {
-                if let Ok(v) = self.p2_buf.trim().parse::<f64>() {
+                if let Some(v) = parse_decimal_input(&self.p2_buf) {
                     if v > 0.0 {
                         if self.req.point2.phase == WaterPhaseMode::SatGasLiquid {
                             let p_bar = self.req.pressure_unit.to_bar(v);
@@ -844,6 +853,8 @@ impl WaterModuleState {
                         self.req.point2.pressure = v;
                         needs_recalc = true;
                     }
+                } else {
+                    ui.colored_label(egui::Color32::RED, "Número inválido");
                 }
             }
             draw_cell_text(
@@ -949,9 +960,11 @@ impl WaterModuleState {
                     red_txt,
                     true,
                 ) {
-                    if let Ok(v) = self.mix1_buf.trim().parse::<f64>() {
+                    if let Some(v) = parse_decimal_input(&self.mix1_buf) {
                         self.req.point1.mixture_pct = v.clamp(0.0, 100.0);
                         needs_recalc = true;
+                    } else {
+                        ui.colored_label(egui::Color32::RED, "Número inválido");
                     }
                 }
             } else {
@@ -968,9 +981,11 @@ impl WaterModuleState {
                     red_txt,
                     true,
                 ) {
-                    if let Ok(v) = self.mix2_buf.trim().parse::<f64>() {
+                    if let Some(v) = parse_decimal_input(&self.mix2_buf) {
                         self.req.point2.mixture_pct = v.clamp(0.0, 100.0);
                         needs_recalc = true;
+                    } else {
+                        ui.colored_label(egui::Color32::RED, "Número inválido");
                     }
                 }
             } else {
