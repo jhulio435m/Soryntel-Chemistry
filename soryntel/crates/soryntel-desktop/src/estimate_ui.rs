@@ -154,8 +154,9 @@ impl EstimateModuleState {
         }
         let own_db_path = CatalogUseCases::status(db)
             .own_path
+            .or_else(crate::composition::default_own_db_path)
             .map(|p| p.to_string_lossy().into_owned())
-            .unwrap_or_else(|| temp_file_path("soryntel_owndb6.HSC"));
+            .unwrap_or_default();
 
         let mut selected_rows = BTreeSet::new();
         selected_rows.insert(0);
@@ -548,6 +549,10 @@ impl EstimateModuleState {
         if self.db_review.intervals.is_empty() {
             return Err("Debe existir al menos un rango de temperatura".into());
         }
+        // Se prepara el archivo OwnDB antes de tocar la capa en memoria: si hay que abrirlo o
+        // crearlo, eso no debe descartar la especie que se va a guardar.
+        let save_path = crate::composition::prepare_own_db_target(db, &self.own_db_path)?;
+        self.own_db_path = save_path.to_string_lossy().into_owned();
         let mut intervals = self.db_review.intervals.clone();
         for (i, iv) in intervals.iter_mut().enumerate() {
             iv.phase = self.db_review.phase;
@@ -578,8 +583,8 @@ impl EstimateModuleState {
         };
         let raw_ph = self.db_review.raw_phase_code.clone();
         CatalogUseCases::save_own_species(db, sp, meta, raw_ph);
-        let save_path = self.own_db_path.trim().to_string();
-        CatalogUseCases::save_own_db_creating_dirs(db, &save_path)?;
+        crate::composition::persist_own_db(db, &save_path)?;
+        let save_path = save_path.display();
         self.cached_db_scope = None;
         self.recalc_all(db);
         self.status_msg = format!("Especie '{formula}' guardada en OwnDB ({save_path})");
@@ -2970,7 +2975,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "BUG-C12: sin OwnDB cargada, «Guardar en OwnDB» escribe en el directorio temporal y la especie no se carga en el siguiente arranque"]
     fn owndb_default_path_is_not_in_temp_dir() {
         let db = ThermoDatabase::with_open_defaults();
         let state = EstimateModuleState::new(&db);

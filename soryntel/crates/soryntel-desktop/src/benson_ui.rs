@@ -1,5 +1,6 @@
 use eframe::egui;
 use soryntel_application::ports::SpeciesCatalogPort;
+use soryntel_core::SpeciesWorkspacePort;
 use soryntel_application::use_cases::{CatalogUseCases, MiscUseCases};
 use soryntel_core::CAL_TO_JOULE;
 use soryntel_application::models::benson::{
@@ -225,7 +226,7 @@ impl BensonModuleState {
         }
     }
 
-    pub fn ui(&mut self, ctx: &egui::Context, db: &mut dyn SpeciesCatalogPort) {
+    pub fn ui(&mut self, ctx: &egui::Context, db: &mut dyn SpeciesWorkspacePort) {
         // Gentle idle spin on the small Selected group preview viewport
         self.preview_yaw += ctx.input(|i| i.stable_dt).min(0.05) * 0.45;
         ctx.request_repaint_after(std::time::Duration::from_millis(60));
@@ -320,7 +321,7 @@ impl BensonModuleState {
         }
     }
 
-    fn render_top_ribbon(&mut self, ui: &mut egui::Ui, db: &mut dyn SpeciesCatalogPort) {
+    fn render_top_ribbon(&mut self, ui: &mut egui::Ui, db: &mut dyn SpeciesWorkspacePort) {
         egui::ScrollArea::horizontal().show(ui, |ui| {
             ui.horizontal(|ui| {
                 // --- Group 1: Menu ---
@@ -557,7 +558,7 @@ impl BensonModuleState {
         });
     }
 
-    fn render_right_palette(&mut self, ui: &mut egui::Ui, db: &mut dyn SpeciesCatalogPort) {
+    fn render_right_palette(&mut self, ui: &mut egui::Ui, db: &mut dyn SpeciesWorkspacePort) {
         egui::ScrollArea::vertical().show(ui, |ui| {
             let panel_w = ui.available_width();
             ui.add_sized(
@@ -740,7 +741,7 @@ impl BensonModuleState {
         });
     }
 
-    fn render_3d_workspace(&mut self, ui: &mut egui::Ui, db: &mut dyn SpeciesCatalogPort) {
+    fn render_3d_workspace(&mut self, ui: &mut egui::Ui, db: &mut dyn SpeciesWorkspacePort) {
         let avail = ui.available_rect_before_wrap();
         let response = ui.allocate_rect(avail, egui::Sense::click_and_drag());
 
@@ -836,7 +837,7 @@ impl BensonModuleState {
         }
     }
 
-    fn render_results_window(&mut self, ctx: &egui::Context, db: &mut dyn SpeciesCatalogPort) {
+    fn render_results_window(&mut self, ctx: &egui::Context, db: &mut dyn SpeciesWorkspacePort) {
         let mut open = self.show_results_window;
         let title = self.results_unit.title();
         let Some(est) = self.estimation.clone() else {
@@ -1015,18 +1016,7 @@ impl BensonModuleState {
                 // Bottom toolbar matching Fig. 10 & Fig. 11
                 ui.horizontal_wrapped(|ui| {
                     if ui.button("Save to own database").clicked() {
-                        let sp = MiscUseCases::save_benson_species(
-                            db,
-                            &est,
-                            self.selected_save_phase,
-                            &self.edit_formula,
-                        );
-                        self.status_text = format!(
-                            "Saved '{}' ({:?}) to database ({} species total).",
-                            sp.formula,
-                            sp.phase,
-                            CatalogUseCases::species_count(db)
-                        );
+                        self.save_estimation_to_own_db(db, &est);
                     }
 
                     egui::ComboBox::from_id_salt("benson_base_ref_combo")
@@ -1075,7 +1065,7 @@ impl BensonModuleState {
         }
     }
 
-    fn render_smiles_modal(&mut self, ctx: &egui::Context, db: &mut dyn SpeciesCatalogPort) {
+    fn render_smiles_modal(&mut self, ctx: &egui::Context, db: &mut dyn SpeciesWorkspacePort) {
         let mut open = self.show_smiles_modal;
         egui::Window::new("Enter / Edit SMILES Structure")
             .open(&mut open)
@@ -1158,6 +1148,30 @@ impl BensonModuleState {
             )
         } else {
             format!("Formula: {}\nMW: {:.3}", self.molecule.molecular_formula(), self.molecule.molecular_weight())
+        }
+    }
+
+    /// Guarda la estimación en OwnDB y la persiste en el archivo OwnDB (no solo en memoria).
+    fn save_estimation_to_own_db(&mut self, db: &mut dyn SpeciesWorkspacePort, est: &BensonEstimationResult) {
+        let result = crate::composition::prepare_own_db_target(db, "").and_then(|path| {
+            let sp = MiscUseCases::save_benson_species(db, est, self.selected_save_phase, &self.edit_formula);
+            crate::composition::persist_own_db(db, &path).map(|_| (sp, path))
+        });
+        match result {
+            Ok((sp, path)) => {
+                self.last_error = None;
+                self.status_text = format!(
+                    "Saved '{}' ({:?}) to OwnDB {} ({} species total).",
+                    sp.formula,
+                    sp.phase,
+                    path.display(),
+                    CatalogUseCases::species_count(db)
+                );
+            }
+            Err(e) => {
+                self.last_error = Some(e.clone());
+                self.status_text = format!("OwnDB save failed: {e}");
+            }
         }
     }
 
@@ -1557,4 +1571,32 @@ fn paint_glossy_sphere(
         radius * 0.17,
         blend(base, 1.82),
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use soryntel_core::SpeciesRepository;
+    use soryntel_db::ThermoDatabase;
+
+    #[test]
+    fn save_to_own_database_persists_the_own_db_file() {
+        let dir = std::env::temp_dir().join(format!("soryntel-c20-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("OWNDB6.HSC");
+        let mut db = ThermoDatabase::with_open_defaults();
+        CatalogUseCases::create_empty_own_db(&mut db, &path).unwrap();
+        let mut st = BensonModuleState::new(&db);
+        let est = st.estimation.clone().expect("estimación inicial");
+        st.edit_formula = "C16H14O2".into();
+        st.save_estimation_to_own_db(&mut db, &est);
+        assert!(st.last_error.is_none(), "{:?}", st.last_error);
+
+        // Otra ventana (otro proceso) ve la especie al abrir la misma OwnDB.
+        let mut reread = ThermoDatabase::with_open_defaults();
+        CatalogUseCases::open_own_db(&mut reread, &path).unwrap();
+        assert!(reread.get_species("C16H14O2(BEst)").is_some(), "la especie no llegó al archivo OwnDB: {}", st.status_text);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }
