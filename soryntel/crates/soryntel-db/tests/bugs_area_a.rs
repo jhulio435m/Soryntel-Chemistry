@@ -1,7 +1,6 @@
 //! Reproducciones de los hallazgos del área A (ver `docs/bugs/area-a.md`).
 //!
-//! Cada test afirma el comportamiento esperado y hoy falla; por eso está marcado
-//! `#[ignore = "BUG-Axx: ..."]`. Ejecutar con `cargo test -p soryntel-db --test bugs_area_a -- --ignored`.
+//! Ejecutar con `cargo test -p soryntel-db --test bugs_area_a`.
 
 use soryntel_core::{
     ChemicalSpecies, DbSource, KeywordSearchField, MergeConflictDecision, Phase,
@@ -497,7 +496,9 @@ fn a26_cat_distingue_carbono_de_calcio() {
 fn a28_hsc_rechaza_limites_de_dataset_ambiguos() {
     let first = ds(one_interval("Al2O3", "primario", 298.15, 500.0), 0);
     let second = ds(one_interval("Al2O3", "alternativo", 500.0, 900.0), 1);
-    let error = soryntel_db::hsc_binary::serialize_datasets_checked(&[first, second])
+    let datasets = [first, second];
+    assert_eq!(roundtrip(&datasets).len(), 1, "el lector HSC clásico fusiona estos intervalos");
+    let error = soryntel_db::hsc_binary::serialize_datasets_checked(&datasets)
         .unwrap_err().to_string();
     assert!(error.contains("dataset boundaries"), "{error}");
 }
