@@ -217,7 +217,7 @@ fn apply_aqua_debye_huckel(
     }
     let sqrt_i = ionic_strength.clamp(0.0, 20.0).sqrt();
     // Temperature-adjusted Debye-Huckel A_gamma (~0.509 at 298.15 K)
-    let a_dh = 0.509 * (298.15 / t_k.max(250.0)).powf(1.5) * 2.302585;
+    let a_dh = 0.509 * (298.15 / t_k.max(250.0)).powf(1.5) * std::f64::consts::LN_10;
     for (i, &z) in charges.iter().enumerate() {
         if z != 0 {
             let z2 = (z as f64) * (z as f64);

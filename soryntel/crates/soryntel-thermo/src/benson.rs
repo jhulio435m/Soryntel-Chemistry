@@ -1211,6 +1211,8 @@ pub struct BensonGroupParams {
     pub joback_cpa: f64,
 }
 
+// Tabulated Benson Cp values (e.g. 3.14 cal/(mol·K)) are data, not approximations of π.
+#[allow(clippy::approx_constant)]
 pub const BENSON_TABLE: &[BensonGroupParams] = &[
     // sp3 Carbon centers
     BensonGroupParams { name: "C-(H)4", dh_kcal: -17.89, s_cal: 44.49, cp_cal: [8.55, 9.73, 11.13, 12.55, 15.00, 17.16, 20.63], joback_tb: 23.58, joback_tm: -5.10, joback_cpa: 19.50 },
