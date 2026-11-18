@@ -643,7 +643,15 @@ impl ExergyWorkbook {
                                 row.s_j_molk = pt_t.s;
                                 row.h_kj_mol = pt_t.h / 1000.0;
                                 row.h_total_kj = n * row.h_kj_mol;
-                                let ex_el = species_chemical_exergy_kj_mol(repo, &sp);
+                                // Missing reference data: NaN (visible) plus a row warning, never a partial sum.
+                                let ex_el = match species_chemical_exergy_kj_mol(repo, &sp) {
+                                    Ok(v) => v,
+                                    Err(e) => {
+                                        row.phase_warning =
+                                            Some(format!("Exergía química no calculable: {e}"));
+                                        f64::NAN
+                                    }
+                                };
                                 row.ex_elemental_kj_mol = ex_el;
                                 row.ex_che_kj_mol = ex_el;
                                 row.ex_che_kj = n * ex_el;

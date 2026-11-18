@@ -249,7 +249,6 @@ fn b02_physical_exergy_of_ideal_gas_counts_pressure_once() {
 /// función debe señalarlo (convención propia: 0.0 = "no disponible") en lugar
 /// de devolver G(Al2O3) - 1,5·G(O2) + Σν·ex_e como si fuera ΔfG.
 #[test]
-#[ignore = "BUG-B03: species_chemical_exergy_kj_mol omite en silencio la referencia del elemento ausente"]
 fn b03_chemical_exergy_does_not_silently_skip_missing_reference_element() {
     let al2o3 = ChemicalSpecies {
         formula: "Al2O3".into(),
@@ -275,12 +274,28 @@ fn b03_chemical_exergy_does_not_silently_skip_missing_reference_element() {
     };
     // Catálogo con O2(g) pero sin Al (igual que OpenDefault).
     let repo = Repo(BTreeMap::from([("O2(g)".to_string(), o2())]));
-    let ex = soryntel_thermo::balance::species_chemical_exergy_kj_mol(&repo, &al2o3);
-    // Szargut (1988): ex_ch(Al2O3, corindón) = 200,4 kJ/mol. Hoy devuelve 183,6.
-    assert!(
-        ex == 0.0 || (ex - 200.4).abs() < 1.0,
-        "ex_ch(Al2O3) = {ex} kJ/mol: valor finito incorrecto sin la referencia de Al"
-    );
+    let err = soryntel_thermo::balance::species_chemical_exergy_kj_mol(&repo, &al2o3)
+        .expect_err("sin Al no debe devolver un valor parcial (antes 183,6 kJ/mol)");
+    assert!(err.to_string().contains("Al"), "el error debe nombrar el elemento: {err}");
+
+    // Con la referencia de Al (JANAF: S° = 28,3 J/(mol·K)) se obtiene el valor de
+    // Szargut, Morris y Steward (1988): ex_ch(Al2O3, corindón) = 200,4 kJ/mol.
+    let al = species_cal("Al", Phase::Solid, 0.0, 6.77, [4.94, 2.96, 0.0, 0.0], 26.98);
+    let repo = Repo(BTreeMap::from([("O2(g)".to_string(), o2()), ("Al".to_string(), al)]));
+    let ex = soryntel_thermo::balance::species_chemical_exergy_kj_mol(&repo, &al2o3).unwrap();
+    assert!((ex - 200.4).abs() < 1.0, "ex_ch(Al2O3) = {ex} kJ/mol, esperado 200,4");
+
+    // En Balance el fallo es visible: Ex químico NaN y aviso en la fila.
+    let pt = soryntel_thermo::balance::evaluate_balance_point_si(
+        &Repo(BTreeMap::from([("O2(g)".to_string(), o2())])),
+        &al2o3,
+        298.15,
+        1.01325,
+        false,
+        false,
+    )
+    .unwrap();
+    assert!(pt.ex_chem_mj_kmol.is_nan() && pt.ex_chem_error.is_some());
 }
 
 // ---------------------------------------------------------------------------

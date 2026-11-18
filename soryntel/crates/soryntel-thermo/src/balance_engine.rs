@@ -42,6 +42,9 @@ pub struct SpeciesRow {
     #[serde(with = "soryntel_core::serde_nonfinite")]
     pub ex_tot: f64,
     pub missing_in_db: bool,
+    /// Visible warning for this row (e.g. chemical exergy not computable: missing reference element).
+    #[serde(default)]
+    pub warning: Option<String>,
 }
 
 impl SpeciesRow {
@@ -65,6 +68,7 @@ impl SpeciesRow {
             ex_phys: 0.0,
             ex_tot: 0.0,
             missing_in_db: false,
+            warning: None,
         }
     }
 
@@ -388,6 +392,7 @@ pub fn evaluate_workbook(
                                 sp.g = sp.amount_kmol * pt.g_mj_kmol * e_factor;
                                 sp.ex_phys = sp.amount_kmol * pt.ex_phys_mj_kmol * e_factor;
                                 sp.ex_tot = sp.amount_kmol * pt.ex_tot_mj_kmol * e_factor;
+                                sp.warning = pt.ex_chem_error.clone();
                             }
                         } else {
                             sp.missing_in_db = true;

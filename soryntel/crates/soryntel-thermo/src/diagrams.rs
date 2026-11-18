@@ -232,7 +232,13 @@ pub fn calculate_diagram(
         let h_298_j = pt_298.as_ref().map(|p| p.h).unwrap_or(0.0);
         let s_298_j_k = pt_298.as_ref().map(|p| p.s).unwrap_or(0.0);
         let ex_chem_j = if req.diagram_type == DiagramType::ExExergy {
-            species_chemical_exergy_kj_mol(repo, &sp) * 1000.0
+            match species_chemical_exergy_kj_mol(repo, &sp) {
+                Ok(v) => v * 1000.0,
+                Err(e) => {
+                    warnings.push(format!("{f_trim}: exergía química no calculable: {e}"));
+                    continue;
+                }
+            }
         } else {
             0.0
         };
