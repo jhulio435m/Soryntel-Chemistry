@@ -806,6 +806,15 @@ impl BalanceModuleState {
                 }
             });
 
+        // Aviso visible si alguna especie no está en las bases cargadas (C27).
+        if let Some(notice) = crate::ui_common::incomplete_calculation_notice(&unresolved_balance_species(&self.wb, db)) {
+            egui::TopBottomPanel::top("bal_incomplete_notice")
+                .frame(egui::Frame::none().fill(egui::Color32::from_rgb(254, 226, 226)).inner_margin(egui::Margin::symmetric(10.0, 5.0)))
+                .show(ctx, |ui| {
+                    ui.label(egui::RichText::new(notice).color(egui::Color32::from_rgb(153, 27, 27)));
+                });
+        }
+
         // 5. Central Panel: Active Sheet Grid + Excel Bottom Sheet Tabs (Figs. 1, 3-6, 10-14)
         egui::CentralPanel::default().show(ctx, |ui| {
             let tab_bar_h = 30.0;
@@ -1652,23 +1661,35 @@ impl BalanceModuleState {
                     for (r_idx, sp) in st.species.iter_mut().enumerate() {
                         let is_sel = self.selected_stream_idx == Some(s_idx)
                             && self.selected_row_idx == Some(r_idx);
-                        let sp_color = if sp.missing_in_db {
+                        let status = crate::ui_common::species_row_status(
+                            &sp.formula,
+                            sp.missing_in_db,
+                            db.get_species(&sp.formula).is_some(),
+                        );
+                        let missing = status == crate::ui_common::SpeciesRowStatus::NotFound;
+                        let sp_color = if missing {
                             egui::Color32::RED
                         } else {
                             dark
                         };
                         row_num_cell(ui, row_num, 32.0);
-                        if text_cell(
+                        let shown = if missing { format!("⚠ {}", sp.formula) } else { sp.formula.clone() };
+                        let name_resp = text_cell(
                             ui,
-                            &sp.formula,
+                            &shown,
                             w[0],
                             egui::Color32::WHITE,
                             sp_color,
                             false,
                             false,
                             is_sel,
-                        )
-                        .clicked()
+                        );
+                        let name_resp = if missing {
+                            name_resp.on_hover_text(crate::ui_common::SPECIES_NOT_FOUND_TOOLTIP)
+                        } else {
+                            name_resp
+                        };
+                        if name_resp.clicked()
                         {
                             let fx = sp
                                 .amount_formula
@@ -1752,6 +1773,13 @@ impl BalanceModuleState {
 
                         // Amount kg (Col E — interactive per Ch. 11.1 Steps 1–2 & Ch. 11.3)
                         let mut kg_val = sp.amount_kg;
+                        if missing {
+                            // Sin masa molar no hay kg ni Nm³: «—», no 0.000.
+                            for col in [4, 5] {
+                                text_cell(ui, crate::ui_common::MISSING_VALUE, w[col], EXCEL_READONLY_BG, sp_color, true, false, false)
+                                    .on_hover_text(crate::ui_common::SPECIES_NOT_FOUND_TOOLTIP);
+                            }
+                        } else {
                         widget_cell(ui, w[4], egui::Color32::WHITE, false, |ui| {
                             if ui
                                 .add(
@@ -1783,10 +1811,11 @@ impl BalanceModuleState {
                                 need_recalc = true;
                             }
                         });
+                        }
 
                         text_cell(
                             ui,
-                            &format!("{:.2}", sp.heat_content),
+                            &crate::ui_common::calculated_cell(status, sp.heat_content, 2),
                             w[6],
                             EXCEL_READONLY_BG,
                             dark,
@@ -1796,7 +1825,7 @@ impl BalanceModuleState {
                         );
                         text_cell(
                             ui,
-                            &format!("{:.2}", sp.total_h),
+                            &crate::ui_common::calculated_cell(status, sp.total_h, 2),
                             w[7],
                             EXCEL_READONLY_BG,
                             dark,
@@ -1806,7 +1835,7 @@ impl BalanceModuleState {
                         );
                         text_cell(
                             ui,
-                            &format!("{:.3}", sp.hc_per_kmol),
+                            &crate::ui_common::calculated_cell(status, sp.hc_per_kmol, 3),
                             w[8],
                             egui::Color32::WHITE,
                             dark,
@@ -1816,7 +1845,7 @@ impl BalanceModuleState {
                         );
                         text_cell(
                             ui,
-                            &format!("{:.3}", sp.tot_h_per_kmol),
+                            &crate::ui_common::calculated_cell(status, sp.tot_h_per_kmol, 3),
                             w[9],
                             egui::Color32::WHITE,
                             dark,
@@ -1826,7 +1855,7 @@ impl BalanceModuleState {
                         );
                         text_cell(
                             ui,
-                            &format!("{:.3}", sp.mw),
+                            &crate::ui_common::calculated_cell(status, sp.mw, 3),
                             w[10],
                             egui::Color32::WHITE,
                             dark,
@@ -2997,6 +3026,20 @@ impl BalanceModuleState {
     }
 }
 
+/// Fórmulas de las filas de especie de todas las áreas que no están en las bases cargadas.
+pub(crate) fn unresolved_balance_species(wb: &BalanceWorkbook, db: &dyn SpeciesCatalogPort) -> Vec<String> {
+    wb.areas
+        .iter()
+        .flat_map(|a| a.in_streams.iter().chain(a.out_streams.iter()))
+        .flat_map(|st| st.species.iter())
+        .filter(|sp| {
+            crate::ui_common::species_row_status(&sp.formula, sp.missing_in_db, db.get_species(&sp.formula).is_some())
+                == crate::ui_common::SpeciesRowStatus::NotFound
+        })
+        .map(|sp| sp.formula.clone())
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3077,6 +3120,22 @@ mod tests {
         let _ = std::fs::remove_file(&path);
         assert!(!state.status_ok);
         assert_eq!(state.wb.areas.len(), areas_before);
+    }
+
+    #[test]
+    fn species_missing_from_catalog_is_listed_for_the_incomplete_notice() {
+        let db = ThermoDatabase::with_open_defaults();
+        let mut state = BalanceModuleState::new(&db);
+        let before = unresolved_balance_species(&state.wb, &db).len();
+        state.wb.areas[0].in_streams[0]
+            .species
+            .push(SpeciesRow::new("ZzUnknown9".to_string(), 25.0, 1.0));
+        state.recalculate(&db);
+        let missing = unresolved_balance_species(&state.wb, &db);
+        assert_eq!(missing.len(), before + 1);
+        assert!(missing.contains(&"ZzUnknown9".to_string()));
+        let ctx = egui::Context::default();
+        let _ = ctx.run(egui::RawInput::default(), |ctx| state.ui(ctx, &db));
     }
 
     #[test]

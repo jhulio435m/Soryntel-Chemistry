@@ -2173,6 +2173,16 @@ mod tests {
     }
 
     #[test]
+    fn species_missing_from_catalog_shows_an_error_not_zeros() {
+        let db = ThermoDatabase::with_open_defaults(); // sin MainDB: no trae H2O
+        let mut state = ReactionModuleState::new(&db);
+        state.formula_input = "H2O".into();
+        state.run_calculate(&db);
+        assert!(!state.status_ok, "{}", state.status_msg);
+        assert!(state.active_response().is_none(), "se muestran resultados de otra especie o ceros");
+    }
+
+    #[test]
     fn loading_rea8_without_sheets_does_not_keep_previous_results() {
         let db = ThermoDatabase::with_open_defaults();
         let mut state = ReactionModuleState::new(&db); // hoja S1 con Al2O3

@@ -78,6 +78,57 @@ impl NumberFields {
     }
 }
 
+/// Estado de una fila de especie en una hoja de cálculo (Exergy, Balance…).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SpeciesRowStatus {
+    /// La especie está en las bases cargadas: sus valores calculados son resultados.
+    Resolved,
+    /// La especie no está en ninguna base cargada: sus valores calculados no existen.
+    NotFound,
+}
+
+/// Texto del tooltip de una especie que no está en el catálogo.
+pub const SPECIES_NOT_FOUND_TOOLTIP: &str = "Especie no encontrada en las bases cargadas";
+
+/// Texto que sustituye a un valor que no se pudo calcular (nunca `0.00`).
+pub const MISSING_VALUE: &str = "—";
+
+/// Decide el estado de una fila. Una fila es `NotFound` si el cálculo la marcó como ausente
+/// o si el catálogo no contiene su fórmula; una fila vacía (sin fórmula) no cuenta.
+pub fn species_row_status(formula: &str, flagged_missing: bool, in_catalog: bool) -> SpeciesRowStatus {
+    if formula.trim().is_empty() || (!flagged_missing && in_catalog) {
+        SpeciesRowStatus::Resolved
+    } else {
+        SpeciesRowStatus::NotFound
+    }
+}
+
+/// Formatea un valor calculado, o «—» si la fila no está resuelta.
+pub fn calculated_cell(status: SpeciesRowStatus, value: f64, decimals: usize) -> String {
+    match status {
+        SpeciesRowStatus::Resolved if value.is_finite() => format!("{value:.decimals$}"),
+        _ => MISSING_VALUE.to_string(),
+    }
+}
+
+/// Aviso de cálculo incompleto para una lista de fórmulas no resueltas (sin duplicados).
+pub fn incomplete_calculation_notice(unresolved: &[String]) -> Option<String> {
+    let mut unique: Vec<&str> = Vec::new();
+    for formula in unresolved {
+        if !unique.contains(&formula.as_str()) {
+            unique.push(formula);
+        }
+    }
+    (!unique.is_empty()).then(|| {
+        format!(
+            "⚠ Cálculo incompleto: {} especie(s) no encontradas en las bases cargadas ({}). \
+             Los totales solo incluyen las especies resueltas.",
+            unique.len(),
+            unique.join(", ")
+        )
+    })
+}
+
 /// 4-column periodic-style element grid matching HSC6/HSC9 Tpp/Lpp (100 elements).
 pub const ELEMENT_GRID_4COL: &[&str] = &[
     "Ac", "Dy", "Mn", "Ru",
@@ -272,6 +323,20 @@ mod tests {
         for bad in ["", "  ", "abc", "inf", "-inf", "NaN", "infinity", "1e400", "1,000.5", "1,5,6"] {
             assert!(parse_user_number(bad).is_err(), "{bad:?} debería rechazarse");
         }
+    }
+
+    #[test]
+    fn species_row_status_marks_unresolved_rows_and_dashes_their_values() {
+        assert_eq!(species_row_status("H2O", false, true), SpeciesRowStatus::Resolved);
+        assert_eq!(species_row_status("H2O", false, false), SpeciesRowStatus::NotFound);
+        assert_eq!(species_row_status("H2O", true, true), SpeciesRowStatus::NotFound);
+        assert_eq!(species_row_status("  ", true, false), SpeciesRowStatus::Resolved);
+        assert_eq!(calculated_cell(SpeciesRowStatus::Resolved, 0.0, 2), "0.00");
+        assert_eq!(calculated_cell(SpeciesRowStatus::NotFound, 0.0, 2), MISSING_VALUE);
+        assert_eq!(calculated_cell(SpeciesRowStatus::Resolved, f64::NAN, 2), MISSING_VALUE);
+        assert_eq!(incomplete_calculation_notice(&[]), None);
+        let notice = incomplete_calculation_notice(&["H2O".into(), "H2O".into(), "CO2".into()]).unwrap();
+        assert!(notice.contains("2 especie(s)") && notice.contains("H2O, CO2"), "{notice}");
     }
 
     #[test]
